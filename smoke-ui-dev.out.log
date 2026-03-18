@@ -1,0 +1,56 @@
+
+> raven@0.1.0 dev
+> next dev --hostname 127.0.0.1 --port 3000
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+
+✓ Starting...
+Creating turbopack project { dir: 'C:\\Users\\mk0\\raven', testMode: true }
+✓ Ready in 1735ms
+ GET /api/health 200 in 312ms (compile: 203ms, proxy.ts: 92ms, render: 17ms)
+ POST /api/tasks 200 in 156ms (compile: 60ms, proxy.ts: 9ms, render: 87ms)
+ GET /session 200 in 868ms (compile: 596ms, render: 272ms)
+ GET /api/tasks 200 in 65ms (compile: 26ms, proxy.ts: 20ms, render: 18ms)
+ GET /api/relationship 200 in 113ms (compile: 80ms, proxy.ts: 22ms, render: 11ms)
+ GET /api/profile 200 in 151ms (compile: 125ms, proxy.ts: 21ms, render: 5ms)
+ GET /api/memory 200 in 186ms (compile: 158ms, proxy.ts: 22ms, render: 7ms)
+ GET /api/emergency-stop 200 in 230ms (compile: 201ms, proxy.ts: 23ms, render: 5ms)
+ GET /api/devices/status 200 in 271ms (compile: 245ms, proxy.ts: 21ms, render: 4ms)
+ GET /api/tasks 200 in 73ms (compile: 6ms, proxy.ts: 51ms, render: 15ms)
+ GET /api/devices/list 200 in 112ms (compile: 55ms, proxy.ts: 51ms, render: 6ms)
+ POST /api/tasks 200 in 35ms (compile: 3ms, proxy.ts: 5ms, render: 28ms)
+ POST /api/tasks 200 in 40ms (compile: 3ms, proxy.ts: 5ms, render: 31ms)
+ POST /api/tasks 200 in 66ms (compile: 3ms, proxy.ts: 5ms, render: 59ms)
+ POST /api/tasks 200 in 26ms (compile: 4ms, proxy.ts: 4ms, render: 18ms)
+ POST /api/tasks 200 in 26ms (compile: 3ms, proxy.ts: 4ms, render: 18ms)
+ GET /session 200 in 72ms (compile: 6ms, render: 65ms)
+ GET /api/tasks 200 in 43ms (compile: 20ms, proxy.ts: 14ms, render: 9ms)
+ GET /api/profile 200 in 48ms (compile: 30ms, proxy.ts: 14ms, render: 3ms)
+ GET /api/relationship 200 in 56ms (compile: 34ms, proxy.ts: 18ms, render: 4ms)
+ GET /api/emergency-stop 200 in 70ms (compile: 45ms, proxy.ts: 18ms, render: 6ms)
+ GET /api/memory 200 in 81ms (compile: 57ms, proxy.ts: 20ms, render: 4ms)
+ GET /api/devices/status 200 in 87ms (compile: 64ms, proxy.ts: 20ms, render: 3ms)
+ GET /api/devices/list 200 in 35ms (compile: 9ms, proxy.ts: 21ms, render: 4ms)
+ GET /api/tasks 200 in 18ms (compile: 5ms, proxy.ts: 3ms, render: 10ms)
+ POST /api/tasks 200 in 31ms (compile: 3ms, proxy.ts: 5ms, render: 22ms)
+ POST /api/tasks 200 in 27ms (compile: 3ms, proxy.ts: 4ms, render: 21ms)
+ POST /api/tasks 200 in 61ms (compile: 4ms, proxy.ts: 8ms, render: 49ms)
+ POST /api/tasks 200 in 22ms (compile: 3ms, proxy.ts: 3ms, render: 16ms)
+ GET /session 200 in 102ms (compile: 5ms, render: 97ms)
+ GET /api/tasks 200 in 74ms (compile: 31ms, proxy.ts: 29ms, render: 15ms)
+ GET /api/profile 200 in 80ms (compile: 47ms, proxy.ts: 29ms, render: 4ms)
+ GET /api/relationship 200 in 88ms (compile: 54ms, proxy.ts: 28ms, render: 6ms)
+ GET /api/emergency-stop 200 in 96ms (compile: 63ms, proxy.ts: 28ms, render: 6ms)
+ GET /api/memory 200 in 102ms (compile: 64ms, proxy.ts: 33ms, render: 5ms)
+ GET /api/devices/status 200 in 111ms (compile: 72ms, proxy.ts: 34ms, render: 5ms)
+ GET /api/devices/list 200 in 24ms (compile: 7ms, proxy.ts: 8ms, render: 9ms)
+ GET /api/memory 200 in 13ms (compile: 3ms, proxy.ts: 4ms, render: 6ms)
+ GET /api/tasks 200 in 22ms (compile: 5ms, proxy.ts: 5ms, render: 11ms)
+ GET /api/memory 200 in 12ms (compile: 3ms, proxy.ts: 4ms, render: 5ms)
+ GET /api/tasks 200 in 19ms (compile: 2ms, proxy.ts: 6ms, render: 11ms)
+ GET /api/memory 200 in 13ms (compile: 4ms, proxy.ts: 5ms, render: 4ms)
+ GET /api/tasks 200 in 18ms (compile: 4ms, proxy.ts: 4ms, render: 10ms)
+ GET /api/memory 200 in 12ms (compile: 3ms, proxy.ts: 4ms, render: 5ms)
+ GET /session 200 in 89ms (compile: 3ms, render: 86ms)

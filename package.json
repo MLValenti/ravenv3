@@ -1,0 +1,45 @@
+{
+  "name": "raven",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 3000",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 3000",
+    "test": "node --test \"tests/*.test.ts\"",
+    "smoke:live": "node --experimental-strip-types tools/live-api-smoke.ts",
+    "smoke:ui": "node --experimental-strip-types tools/session-ui-smoke.ts",
+    "persona:build": "node --experimental-strip-types tools/persona/build-style-pack.ts",
+    "eval:dialogue": "node --experimental-strip-types tools/eval/dialogue-ab.ts",
+    "eval:continuity": "node --experimental-strip-types tools/eval/conversation-continuity-report.ts",
+    "eval:regression": "node --experimental-strip-types tools/eval/conversation-regression.ts",
+    "eval:replay": "node --experimental-strip-types tools/eval/conversation-replay-report.ts",
+    "eval:session": "node --experimental-strip-types tools/eval/session-llm-harness.ts",
+    "eval:session:local": "node --experimental-strip-types tools/eval/run-session-eval-local.ts",
+    "test:conversation": "node --test tests/conversation-regression.test.ts tests/conversation-continuity-harness.test.ts",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "format:write": "prettier --write ."
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^0.10.32",
+    "@pixiv/three-vrm": "^3.4.5",
+    "buttplug": "^4.0.0",
+    "next": "16.1.6",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "sql.js": "^1.13.0",
+    "three": "^0.183.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.6",
+    "playwright": "^1.58.2",
+    "prettier": "^3.6.2",
+    "typescript": "^5"
+  }
+}

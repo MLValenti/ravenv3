@@ -1,0 +1,15 @@
+
+> raven@0.1.0 dev
+> next dev --hostname 127.0.0.1 --port 3000
+
+▲ Next.js 16.1.6 (Turbopack)
+- Local:         http://127.0.0.1:3000
+- Network:       http://127.0.0.1:3000
+
+✓ Starting...
+Creating turbopack project { dir: 'C:\\Users\\mk0\\raven', testMode: true }
+✓ Ready in 1009ms
+ GET /api/health 200 in 265ms (compile: 120ms, proxy.ts: 124ms, render: 21ms)
+ GET /api/health 200 in 14ms (compile: 4ms, proxy.ts: 5ms, render: 5ms)
+
+C:\Users\mk0\raven>

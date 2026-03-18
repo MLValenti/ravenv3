@@ -1,0 +1,1223 @@
+{
+  "generated_at": "2026-03-13T20:38:13.950Z",
+  "executor": "browser_live",
+  "scenario_count": 3,
+  "summary": {
+    "scenarioCount": 3,
+    "turnCount": 21,
+    "violationCount": 0,
+    "styles": {
+      "personaConsistency": 0.744,
+      "confidence": 1,
+      "directness": 1,
+      "naturalness": 0.944,
+      "cannedRepetition": 1
+    }
+  },
+  "scenarios": [
+    {
+      "id": "training_follow_up_thread_stays_grounded",
+      "title": "Training follow-up thread stays grounded",
+      "description": "A realistic training conversation should answer on-the-fly follow-up questions from the active training thread instead of falling into generic fallback or weak anchors.",
+      "executor": "browser_live",
+      "violation_count": 0,
+      "style": {
+        "mode": "relational_chat",
+        "personaConsistency": 0.9,
+        "confidence": 1,
+        "directness": 1,
+        "naturalness": 1,
+        "cannedRepetition": 1,
+        "notes": [
+          "some turns were too neutral or carried disallowed conversational drift"
+        ]
+      },
+      "transcript_metrics": {
+        "continuity": 0.5,
+        "topical_relevance": 0.133,
+        "repetition_rate": 0.4,
+        "memory_recall_accuracy": 0.75,
+        "coherence": 0.527,
+        "humanlike_flow": 0.327
+      },
+      "traces": [
+        {
+          "turnNumber": 1,
+          "userInput": "what training do you think i need?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what training do you think i need?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            },
+            {
+              "key": "session_intent",
+              "value": "relational_chat"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "session_intent",
+              "value": "relational_chat"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what training do you think i need?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Given what you are asking for, I would start you with anal control with your silicone dildo: a slow anal hold with your silicone dildo first, not rushing for depth. That gives me patience, control, and something real to read instead of bravado. If you want the other angle, I could also make it paced anal intervals with your silicone dildo."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": true,
+          "fallbackReason": "dialogue_act_misaligned",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Given what you are asking for, I would start you with anal control with your silicone dildo: a slow anal hold with your silicone dildo first, not rushing for depth. That gives me patience, control, and something real to read instead of bravado. If you want the other angle, I could also make it paced anal intervals with your silicone dildo."
+        },
+        {
+          "turnNumber": 2,
+          "userInput": "how deep?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "how deep?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "how deep?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Deep enough that you can keep the pace deliberate and the control clean. I want control first, not maximum depth for its own sake. That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Deep enough that you can keep the pace deliberate and the control clean. I want control first, not maximum depth for its own sake. That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+        },
+        {
+          "turnNumber": 3,
+          "userInput": "what would that prove?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what would that prove?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "what would that prove?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+        },
+        {
+          "turnNumber": 4,
+          "userInput": "do i need proof?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "do i need proof?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "do i need proof?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through."
+        },
+        {
+          "turnNumber": 5,
+          "userInput": "what else?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what else?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "what else?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Fine. Then I would switch you to paced anal intervals with your silicone dildo. That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Fine. Then I would switch you to paced anal intervals with your silicone dildo. That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+        },
+        {
+          "turnNumber": 6,
+          "userInput": "make it stricter",
+          "detectedIntent": "user_answer",
+          "dialogueAct": "other",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_answer",
+              "value": "make it stricter"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            },
+            {
+              "key": "temporary_reply_directives",
+              "value": "make it stricter"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_answer",
+              "value": "make it stricter"
+            },
+            {
+              "key": "temporary_reply_directives",
+              "value": "make it stricter"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Fine. Then I keep a slow anal hold with your silicone dildo, but make it stricter: tighter pacing, cleaner check-ins, and no softening once the pressure starts to bite. Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Fine. Then I keep a slow anal hold with your silicone dildo, but make it stricter: tighter pacing, cleaner check-ins, and no softening once the pressure starts to bite. Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through."
+        },
+        {
+          "turnNumber": 7,
+          "userInput": "what do you mean?",
+          "detectedIntent": "user_short_follow_up",
+          "dialogueAct": "short_follow_up",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what do you mean?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "what do you mean?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "I mean pressure tolerance, patience, and control under repetition."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": true,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": true,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "I mean pressure tolerance, patience, and control under repetition."
+        },
+        {
+          "turnNumber": 8,
+          "userInput": "what if i want it softer",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what if i want it softer"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "what if i want it softer"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Fine. Then I keep a slow anal hold with your silicone dildo, but make it softer: cleaner pacing, shorter holds, and less pressure without losing the point of it. Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Fine. Then I keep a slow anal hold with your silicone dildo, but make it softer: cleaner pacing, shorter holds, and less pressure without losing the point of it. Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through."
+        },
+        {
+          "turnNumber": 9,
+          "userInput": "where should it go?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "where should it go?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "where should it go?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "If you mean an insertable toy, the grounded options are oral use or anal use. If you want direction from me, tell me which one you are actually offering."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "If you mean an insertable toy, the grounded options are oral use or anal use. If you want direction from me, tell me which one you are actually offering."
+        },
+        {
+          "turnNumber": 10,
+          "userInput": "that makes sense",
+          "detectedIntent": "user_answer",
+          "dialogueAct": "other",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_answer",
+              "value": "that makes sense"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_answer",
+              "value": "that makes sense"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Exactly. That line only means something if you keep the pace controlled once the pressure stops flattering you."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Exactly. That line only means something if you keep the pace controlled once the pressure stops flattering you."
+        }
+      ],
+      "violations": []
+    },
+    {
+      "id": "training_follow_up_handles_mixed_item_questions",
+      "title": "Training follow-up handles mixed-item questions",
+      "description": "A training thread should stay coherent when the user asks on-the-fly whether a second inventory item fits the current drill.",
+      "executor": "browser_live",
+      "violation_count": 0,
+      "style": {
+        "mode": "relational_chat",
+        "personaConsistency": 1,
+        "confidence": 1,
+        "directness": 1,
+        "naturalness": 1,
+        "cannedRepetition": 1,
+        "notes": []
+      },
+      "transcript_metrics": {
+        "continuity": 0.5,
+        "topical_relevance": 0.297,
+        "repetition_rate": 0.2,
+        "memory_recall_accuracy": 0.75,
+        "coherence": 0.559,
+        "humanlike_flow": 0.459
+      },
+      "traces": [
+        {
+          "turnNumber": 1,
+          "userInput": "what training do you think i need?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what training do you think i need?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            },
+            {
+              "key": "session_intent",
+              "value": "relational_chat"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "session_intent",
+              "value": "relational_chat"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what training do you think i need?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Given what you are asking for, I would start you with anal control with your silicone dildo: a slow anal hold with your silicone dildo first, not rushing for depth. That gives me patience, control, and something real to read instead of bravado. If you want the other angle, I could also make it paced anal intervals with your silicone dildo."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": true,
+          "fallbackReason": "dialogue_act_misaligned",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Given what you are asking for, I would start you with anal control with your silicone dildo: a slow anal hold with your silicone dildo first, not rushing for depth. That gives me patience, control, and something real to read instead of bravado. If you want the other angle, I could also make it paced anal intervals with your silicone dildo."
+        },
+        {
+          "turnNumber": 2,
+          "userInput": "should i wear my cage while doing it?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "should i wear my cage while doing it?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "should i wear my cage while doing it?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Yes. You can keep your Cage on while you do it if you want the control layered. The silicone dildo line stays the main focus, and the Cage just adds denial and another rule to live inside. If you want the cleanest read on the training, do the first round without it, then add the Cage on the next pass."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Yes. You can keep your Cage on while you do it if you want the control layered. The silicone dildo line stays the main focus, and the Cage just adds denial and another rule to live inside. If you want the cleanest read on the training, do the first round without it, then add the Cage on the next pass."
+        },
+        {
+          "turnNumber": 3,
+          "userInput": "what would that change?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what would that change?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "what would that change?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy."
+        },
+        {
+          "turnNumber": 4,
+          "userInput": "what if i used the cuffs instead?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what if i used the cuffs instead?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "what if i used the cuffs instead?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Yes, if the Cuffs keeps the line cleaner instead of clumsier. Use it to add obedience or stillness around the drill, but if it starts compromising your handling, keep the toy work clean and add the Cuffs on the next round instead."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Yes, if the Cuffs keeps the line cleaner instead of clumsier. Use it to add obedience or stillness around the drill, but if it starts compromising your handling, keep the toy work clean and add the Cuffs on the next round instead."
+        },
+        {
+          "turnNumber": 5,
+          "userInput": "that makes sense",
+          "detectedIntent": "user_answer",
+          "dialogueAct": "other",
+          "conversationMode": "relational_chat",
+          "interactionMode": "relational_chat",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_answer",
+              "value": "that makes sense"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_answer",
+              "value": "that makes sense"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Exactly. That line only means something if you keep the pace controlled once the pressure stops flattering you."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Exactly. That line only means something if you keep the pace controlled once the pressure stops flattering you."
+        }
+      ],
+      "violations": []
+    },
+    {
+      "id": "task_follow_up_questions_stay_grounded",
+      "title": "Task follow-up questions stay grounded",
+      "description": "Task follow-up questions should answer from the active task instead of resetting or using generic fallback.",
+      "executor": "browser_live",
+      "violation_count": 0,
+      "style": {
+        "mode": "task_planning",
+        "personaConsistency": 0.333,
+        "confidence": 1,
+        "directness": 1,
+        "naturalness": 0.833,
+        "cannedRepetition": 1,
+        "notes": [
+          "some turns were too neutral or carried disallowed conversational drift"
+        ]
+      },
+      "transcript_metrics": {
+        "continuity": 0.5,
+        "topical_relevance": 0.2,
+        "repetition_rate": 0,
+        "memory_recall_accuracy": 0.75,
+        "coherence": 0.54,
+        "humanlike_flow": 0.54
+      },
+      "traces": [
+        {
+          "turnNumber": 1,
+          "userInput": "give me a 20 minute task with my dildo",
+          "detectedIntent": "user_answer",
+          "dialogueAct": "task_request",
+          "conversationMode": "task_planning",
+          "interactionMode": "task_planning",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_answer",
+              "value": "give me a 20 minute task with my dildo"
+            },
+            {
+              "key": "session_intent",
+              "value": "task_request"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "task_planning"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "session_intent",
+              "value": "task_request"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "task_planning"
+            },
+            {
+              "key": "last_user_answer",
+              "value": "give me a 20 minute task with my dildo"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Be specific, pet. Tell me whether \"Toy\" is meant for oral, anal, or prop for this task."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Be specific, pet. Tell me whether \"Toy\" is meant for oral, anal, or prop for this task."
+        },
+        {
+          "turnNumber": 2,
+          "userInput": "anal",
+          "detectedIntent": "user_answer",
+          "dialogueAct": "other",
+          "conversationMode": "task_planning",
+          "interactionMode": "task_planning",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_answer",
+              "value": "anal"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "task_planning"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_answer",
+              "value": "anal"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Listen carefully, pet. Fine. This one keeps your mouth and body under the same rule. Here is your task: Keep your silicone dildo in a controlled anal hold for 20 minutes while you stay quiet and deliberate. Check in once halfway through, and report back when it is done. Start now. Get your silicone dildo ready for anal use, settle it into place, go quiet, and reply done once you are set, pet."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Listen carefully, pet. Fine. This one keeps your mouth and body under the same rule. Here is your task: Keep your silicone dildo in a controlled anal hold for 20 minutes while you stay quiet and deliberate. Check in once halfway through, and report back when it is done. Start now. Get your silicone dildo ready for anal use, settle it into place, go quiet, and reply done once you are set, pet."
+        },
+        {
+          "turnNumber": 3,
+          "userInput": "what would that prove?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "question_answering",
+          "interactionMode": "task_planning",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "what would that prove?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what would that prove?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "It proves whether you can keep control over depth, breathing, and resets once the line stops feeling flattering."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "It proves whether you can keep control over depth, breathing, and resets once the line stops feeling flattering."
+        },
+        {
+          "turnNumber": 4,
+          "userInput": "do i need proof?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "question_answering",
+          "interactionMode": "task_planning",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "do i need proof?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "do i need proof?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Yes. For this to count, I want one clean midpoint check-in at 10 minutes and one final report when the full 20 minutes is done."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Yes. For this to count, I want one clean midpoint check-in at 10 minutes and one final report when the full 20 minutes is done."
+        },
+        {
+          "turnNumber": 5,
+          "userInput": "how deep?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "question_answering",
+          "interactionMode": "task_planning",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "how deep?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "how deep?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Only as deep as you can keep your breathing and control cleanly. I want control first, not depth for show."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Only as deep as you can keep your breathing and control cleanly. I want control first, not depth for show."
+        },
+        {
+          "turnNumber": 6,
+          "userInput": "should i wear my cage while doing it?",
+          "detectedIntent": "user_question",
+          "dialogueAct": "user_question",
+          "conversationMode": "question_answering",
+          "interactionMode": "task_planning",
+          "memoryWritesAttempted": [
+            {
+              "key": "last_user_question",
+              "value": "should i wear my cage while doing it?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memoryWritesCommitted": [
+            {
+              "key": "last_user_question",
+              "value": "should i wear my cage while doing it?"
+            }
+          ],
+          "candidateResponseFamilies": [
+            {
+              "family": "deterministic_scene",
+              "sourceFunction": "browserLiveTrace",
+              "text": "Yes, if your Cage sharpens the same rule instead of muddying it. Keep the current task as the main line, and let the Cage add accountability, not chaos."
+            }
+          ],
+          "winningResponseFamily": "deterministic_scene",
+          "finalOutputSource": "deterministic_scene",
+          "moreThanOneGeneratorFired": false,
+          "postProcessingModifiedOutput": false,
+          "fallbackUsed": false,
+          "fallbackReason": "accepted",
+          "taskStatePaused": false,
+          "taskStateResumed": false,
+          "lockActive": false,
+          "summaryRouteSelected": false,
+          "profileQuestionRouteSelected": false,
+          "chatSwitchRouteSelected": false,
+          "shortFollowUpRouteSelected": false,
+          "oneOutputCommitted": true,
+          "duplicateReplayBlocked": false,
+          "turnGateDecision": {
+            "allow": true,
+            "reason": "committed"
+          },
+          "finalText": "Yes, if your Cage sharpens the same rule instead of muddying it. Keep the current task as the main line, and let the Cage add accountability, not chaos."
+        }
+      ],
+      "violations": []
+    }
+  ]
+}
