@@ -17,6 +17,7 @@ type AssemblePromptInput = {
   auxiliarySystemMessages: HistoryMessage[];
   incomingMessages: HistoryMessage[];
   conversationState: ConversationStateSnapshot;
+  stateBlockOverride?: string;
   contextPolicy?: {
     suppressPriorDialogue?: boolean;
   };
@@ -285,7 +286,10 @@ export function assemblePrompt(input: AssemblePromptInput): {
     });
   }
 
-  const stateBlock = buildConversationStateBlock(input.conversationState);
+  const stateBlock =
+    typeof input.stateBlockOverride === "string" && input.stateBlockOverride.trim().length > 0
+      ? input.stateBlockOverride.trim()
+      : buildConversationStateBlock(input.conversationState);
   const messages = [
     ...input.baseSystemMessages,
     { role: "system", content: stateBlock } satisfies HistoryMessage,
@@ -303,7 +307,7 @@ export function assemblePrompt(input: AssemblePromptInput): {
       excludedTurns,
       includedContext: [
         "system_instructions",
-        "conversation_state",
+        /^Voice continuity:/i.test(stateBlock) ? "voice_continuity" : "conversation_state",
         "auxiliary_context",
         "incoming_system_messages",
         "selected_recent_turns",

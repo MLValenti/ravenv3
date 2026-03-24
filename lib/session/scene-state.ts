@@ -32,6 +32,7 @@ import {
   detectDeterministicGameTemplateId,
   deriveGameProgressFromUserText,
   isTerminalDeterministicGameProgress,
+  isValidDeterministicGameAnswer,
   parseChosenNumber,
   isDeterministicGameChoiceText,
   isDeterministicGameCompletionText,
@@ -102,6 +103,7 @@ import {
   buildShortClarificationReply,
   isShortClarificationTurn,
 } from "./short-follow-up.ts";
+import { inspectGameStartContract } from "./game-start-contract.ts";
 import { planDynamicWagerTerms } from "./task-wager-planner.ts";
 import { resolveSessionTopic, type SessionTopicType } from "./session-director.ts";
 import {
@@ -271,7 +273,7 @@ function normalize(text: string): string {
 function buildGameRulesFallback(templateId: DeterministicGameTemplateId): string {
   const template = resolveDeterministicGameTemplateById(templateId);
   if (template.id === "rps_streak") {
-    return "Listen carefully. We stay with rock paper scissors streak. I throw first, and you answer with one word. Beat both throws to win.";
+    return "Listen carefully. We stay with rock paper scissors streak. Two throws. You answer each one with rock, paper, or scissors. Beat both throws to win.";
   }
   if (template.id === "number_hunt") {
     return "Listen carefully. We stay with number hunt. You guess one number from 1 to 10. I give a hint, then you make one final guess.";
@@ -404,12 +406,15 @@ function isTaskNextStepQuestion(text: string): boolean {
   );
 }
 
-function looksLikeDeterministicGameAnswer(
+function shouldTreatQuestionAsGameAnswer(
   templateId: SceneState["game_template_id"],
   progress: SceneState["game_progress"],
   text: string,
 ): boolean {
-  return deriveGameProgressFromUserText(templateId, progress, text) !== progress;
+  if (isGameRulesQuestion(text) || isGameNextPromptQuestion(text)) {
+    return false;
+  }
+  return isValidDeterministicGameAnswer(templateId, progress, text);
 }
 
 function isGameProgressQuestion(text: string): boolean {
@@ -1140,7 +1145,7 @@ export function noteSceneStateUserTurn(
     state.topic_type === "game_execution" &&
     input.act !== "confusion" &&
     (input.act !== "user_question" ||
-      looksLikeDeterministicGameAnswer(state.game_template_id, state.game_progress, input.text))
+      shouldTreatQuestionAsGameAnswer(state.game_template_id, state.game_progress, input.text))
       ? deriveGameProgressFromUserText(state.game_template_id, state.game_progress, input.text)
       : state.game_progress;
   const nextTaskProgress =
@@ -1760,6 +1765,7 @@ export function noteSceneStateAssistantTurn(
   const rawText = input.text.trim();
   const text = truncate(rawText, 180);
   const resolved = input.topicResolved === true || shouldResolveTopicFromText(state, rawText);
+  const gameStartInspection = inspectGameStartContract(rawText, state.game_template_id);
   const textIndicatesUserWin = /\bYou win this round\b|\bYou won this round\b/i.test(rawText);
   const textIndicatesRavenWin = /\bI win this round\b|\bI win this one\b|\bI won this round\b/i.test(rawText);
   const completedGameOutcome =
@@ -1773,9 +1779,18 @@ export function noteSceneStateAssistantTurn(
           : deriveDeterministicGameOutcome(state.game_template_id, "completed")
       : "none";
   const shouldEnterGameExecution =
-    state.topic_type === "game_setup" &&
-    resolved &&
-    isDeterministicGameChoiceText(rawText);
+    (
+      state.topic_type === "game_setup" &&
+      resolved &&
+      isDeterministicGameChoiceText(rawText)
+    ) ||
+    (
+      gameStartInspection.detected &&
+      gameStartInspection.hasPlayablePrompt &&
+      state.topic_type !== "game_execution" &&
+      state.topic_type !== "task_execution" &&
+      state.topic_type !== "verification_in_progress"
+    );
   const shouldEnterRewardWindow =
     state.topic_type === "game_execution" &&
     resolved &&
@@ -1819,8 +1834,10 @@ export function noteSceneStateAssistantTurn(
   const shouldKeepRestoredGameExecutionOpen =
     shouldRestoreVerificationContext && state.resume_topic_type === "game_execution";
   const resolvedGameTemplateId =
-    state.topic_type === "game_setup" && resolved
-      ? detectDeterministicGameTemplateId(rawText, state.game_template_id)
+    shouldEnterGameExecution || (state.topic_type === "game_setup" && resolved)
+      ? gameStartInspection.detected
+        ? gameStartInspection.templateId
+        : detectDeterministicGameTemplateId(rawText, state.game_template_id)
       : state.game_template_id;
   const assignedTaskDuration =
     extractTaskDurationMinutes(rawText) ?? state.task_duration_minutes;
@@ -1944,7 +1961,7 @@ export function noteSceneStateAssistantTurn(
       : state.task_progress,
     game_template_id: resolvedGameTemplateId,
     game_rotation_index:
-      state.topic_type === "game_setup" && resolved
+      shouldEnterGameExecution && state.topic_type !== "game_execution"
         ? state.game_rotation_index + 1
         : state.game_rotation_index,
     task_template_id: assignedTaskTemplateId,
@@ -2272,6 +2289,10 @@ export function buildSceneFallback(
       interactionMode: state.interaction_mode,
       topicType: state.topic_type,
       lastAssistantText: state.last_assistant_text || state.last_profile_prompt || null,
+      lastUserText:
+        sessionMemory?.last_user_answer?.value ??
+        sessionMemory?.last_user_question?.value ??
+        null,
       lastQuestion: sessionMemory?.last_user_question?.value ?? null,
       lastUserAnswer: sessionMemory?.last_user_answer?.value ?? null,
       currentTopic: state.agreed_goal || null,

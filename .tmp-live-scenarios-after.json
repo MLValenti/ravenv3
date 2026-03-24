@@ -1,0 +1,119 @@
+[
+  {
+    "scenario": "A_hi",
+    "turns": [
+      {
+        "input": "hi",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:22 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949882331-644360\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949882358}[3:51:22 PM] user.response - hi[3:51:22 PM] turn.accepted - {\"request_id\":\"turn-1773949882331-644360\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"other\",\"user_intent\":\"user_smalltalk\",\"at_ms\":1773949882331}[3:51:22 PM] session.scene.user - topic:none->general_request[3:51:21 PM] camera.error - NotSupportedError: Not supported[3:51:21 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- none",
+        "responseHeaders": null
+      }
+    ]
+  },
+  {
+    "scenario": "B_know_about_me",
+    "turns": [
+      {
+        "input": "what do you want to know about me?",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:24 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949884496-410075\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949884522}[3:51:24 PM] user.response - what do you want to know about me?[3:51:24 PM] session.mood.event - user_question delta=1 score=61 user asked a question[3:51:24 PM] turn.accepted - {\"request_id\":\"turn-1773949884496-410075\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"user_question\",\"user_intent\":\"user_question\",\"at_ms\":1773949884496}[3:51:24 PM] session.scene.user - topic:none->general_request[3:51:23 PM] camera.error - NotSupportedError: Not supported[3:51:23 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: relational_chat\n- last_user_question: what do you want to know about me?\n- conversation_mode: relational_chat",
+        "responseHeaders": null
+      }
+    ]
+  },
+  {
+    "scenario": "C_want_to_talk",
+    "turns": [
+      {
+        "input": "i want to talk",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:26 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949886816-871653\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949886841}[3:51:26 PM] user.response - i want to talk[3:51:26 PM] session.mood.event - user_answered delta=2 score=62 user answered[3:51:26 PM] turn.accepted - {\"request_id\":\"turn-1773949886816-871653\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"other\",\"user_intent\":\"user_answer\",\"at_ms\":1773949886816}[3:51:25 PM] camera.error - NotSupportedError: Not supported[3:51:25 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: talk\n- last_user_answer: i want to talk\n- conversation_mode: normal_chat",
+        "responseHeaders": null
+      }
+    ]
+  },
+  {
+    "scenario": "D_repair_after_talk",
+    "turns": [
+      {
+        "input": "i want to talk",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:29 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949889221-357166\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949889248}[3:51:29 PM] user.response - i want to talk[3:51:29 PM] session.mood.event - user_answered delta=2 score=62 user answered[3:51:29 PM] turn.accepted - {\"request_id\":\"turn-1773949889221-357166\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"other\",\"user_intent\":\"user_answer\",\"at_ms\":1773949889221}[3:51:28 PM] camera.error - NotSupportedError: Not supported[3:51:28 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: talk\n- last_user_answer: i want to talk\n- conversation_mode: normal_chat",
+        "responseHeaders": null
+      },
+      {
+        "input": "what do you mean?",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:29 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949889788-276284\",\"session_id\":\"default-session\",\"user_message_id\":2,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949889812}[3:51:29 PM] user.response - what do you mean?[3:51:29 PM] session.mood.event - user_question delta=1 score=63 user asked a question[3:51:29 PM] turn.accepted - {\"request_id\":\"turn-1773949889788-276284\",\"session_id\":\"default-session\",\"user_message_id\":2,\"route_act\":\"short_follow_up\",\"user_intent\":\"user_short_follow_up\",\"at_ms\":1773949889788}[3:51:29 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949889221-357166\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949889248}[3:51:29 PM] user.response - i want to talk[3:51:29 PM] session.mood.event - user_answered delta=2 score=62 user answered[3:51:29 PM] turn.accepted - {\"request_id\":\"turn-1773949889221-357166\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"other\",\"user_intent\":\"user_answer\",\"at_ms\":1773949889221}[3:51:28 PM] camera.error - NotSupportedError: Not supported[3:51:28 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: talk\n- last_user_question: what do you mean?\n- last_user_answer: i want to talk\n- conversation_mode: normal_chat",
+        "responseHeaders": null
+      }
+    ]
+  },
+  {
+    "scenario": "E_tell_me_more",
+    "turns": [
+      {
+        "input": "what do you want to know about me?",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:32 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949892035-332081\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949892062}[3:51:32 PM] user.response - what do you want to know about me?[3:51:32 PM] session.mood.event - user_question delta=1 score=61 user asked a question[3:51:32 PM] turn.accepted - {\"request_id\":\"turn-1773949892035-332081\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"user_question\",\"user_intent\":\"user_question\",\"at_ms\":1773949892035}[3:51:32 PM] session.scene.user - topic:none->general_request[3:51:30 PM] camera.error - NotSupportedError: Not supported[3:51:30 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: relational_chat\n- last_user_question: what do you want to know about me?\n- conversation_mode: relational_chat",
+        "responseHeaders": null
+      },
+      {
+        "input": "tell me more",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:32 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949892625-521754\",\"session_id\":\"default-session\",\"user_message_id\":2,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949892650}[3:51:32 PM] user.response - tell me more[3:51:32 PM] session.mood.event - user_question delta=1 score=62 user asked a question[3:51:32 PM] turn.accepted - {\"request_id\":\"turn-1773949892625-521754\",\"session_id\":\"default-session\",\"user_message_id\":2,\"route_act\":\"short_follow_up\",\"user_intent\":\"user_short_follow_up\",\"at_ms\":1773949892625}[3:51:32 PM] session.scene.user - topic:general_request->none[3:51:32 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949892035-332081\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949892062}[3:51:32 PM] user.response - what do you want to know about me?[3:51:32 PM] session.mood.event - user_question delta=1 score=61 user asked a question[3:51:32 PM] turn.accepted - {\"request_id\":\"turn-1773949892035-332081\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"user_question\",\"user_intent\":\"user_question\",\"at_ms\":1773949892035}[3:51:32 PM] session.scene.user - topic:none->general_request[3:51:30 PM] camera.error - NotSupportedError: Not supported[3:51:30 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: relational_chat\n- last_user_question: tell me more\n- conversation_mode: relational_chat",
+        "responseHeaders": null
+      }
+    ]
+  },
+  {
+    "scenario": "F_what_do_you_want_me_to_do",
+    "turns": [
+      {
+        "input": "what do you want me to do",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:34 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949894931-454432\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949894959}[3:51:34 PM] user.response - what do you want me to do[3:51:34 PM] session.mood.event - user_question delta=1 score=61 user asked a question[3:51:34 PM] turn.accepted - {\"request_id\":\"turn-1773949894931-454432\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"user_question\",\"user_intent\":\"user_question\",\"at_ms\":1773949894931}[3:51:34 PM] session.scene.user - topic:none->general_request[3:51:33 PM] camera.error - NotSupportedError: Not supported[3:51:33 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: relational_chat\n- last_user_question: what do you want me to do\n- conversation_mode: relational_chat",
+        "responseHeaders": null
+      }
+    ]
+  },
+  {
+    "scenario": "G_what_can_i_do_for_you",
+    "turns": [
+      {
+        "input": "what can i do for you",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:37 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949897135-396226\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949897162}[3:51:37 PM] user.response - what can i do for you[3:51:37 PM] session.mood.event - user_question delta=1 score=61 user asked a question[3:51:37 PM] turn.accepted - {\"request_id\":\"turn-1773949897135-396226\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"user_question\",\"user_intent\":\"user_question\",\"at_ms\":1773949897135}[3:51:37 PM] session.scene.user - topic:none->general_request[3:51:36 PM] camera.error - NotSupportedError: Not supported[3:51:36 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: relational_chat\n- last_user_question: what can i do for you\n- conversation_mode: relational_chat",
+        "responseHeaders": null
+      }
+    ]
+  },
+  {
+    "scenario": "H_better_sub",
+    "turns": [
+      {
+        "input": "what can i do to be a better sub to you",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:39 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949899363-615818\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949899390}[3:51:39 PM] user.response - what can i do to be a better sub to you[3:51:39 PM] session.mood.event - user_question delta=1 score=61 user asked a question[3:51:39 PM] turn.accepted - {\"request_id\":\"turn-1773949899363-615818\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"user_question\",\"user_intent\":\"user_question\",\"at_ms\":1773949899363}[3:51:39 PM] session.scene.user - topic:none->general_request[3:51:38 PM] camera.error - NotSupportedError: Not supported[3:51:38 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: relational_chat\n- last_user_question: what can i do to be a better sub to you\n- conversation_mode: relational_chat",
+        "responseHeaders": null
+      },
+      {
+        "input": "tell me more",
+        "latestRavenLine": "",
+        "eventFeed": "[3:51:39 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949899946-561073\",\"session_id\":\"default-session\",\"user_message_id\":2,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949899973}[3:51:39 PM] user.response - tell me more[3:51:39 PM] session.mood.event - user_question delta=1 score=62 user asked a question[3:51:39 PM] turn.accepted - {\"request_id\":\"turn-1773949899946-561073\",\"session_id\":\"default-session\",\"user_message_id\":2,\"route_act\":\"short_follow_up\",\"user_intent\":\"user_short_follow_up\",\"at_ms\":1773949899946}[3:51:39 PM] session.scene.user - topic:general_request->none[3:51:39 PM] turn.local_processing_started - {\"request_id\":\"turn-1773949899363-615818\",\"session_id\":\"default-session\",\"user_message_id\":1,\"source\":\"standalone\",\"step_index\":1,\"at_ms\":1773949899390}[3:51:39 PM] user.response - what can i do to be a better sub to you[3:51:39 PM] session.mood.event - user_question delta=1 score=61 user asked a question[3:51:39 PM] turn.accepted - {\"request_id\":\"turn-1773949899363-615818\",\"session_id\":\"default-session\",\"user_message_id\":1,\"route_act\":\"user_question\",\"user_intent\":\"user_question\",\"at_ms\":1773949899363}[3:51:39 PM] session.scene.user - topic:none->general_request[3:51:38 PM] camera.error - NotSupportedError: Not supported[3:51:38 PM] diagnostics.update - faces=0 infer=0.0ms",
+        "sessionMemory": "- session_intent: relational_chat\n- last_user_question: tell me more\n- conversation_mode: relational_chat",
+        "responseHeaders": null
+      }
+    ]
+  }
+]

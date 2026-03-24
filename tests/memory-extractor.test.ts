@@ -8,6 +8,8 @@ import {
 import {
   buildProfileMemorySummaryReply,
   createSessionMemory,
+  ensureSessionMemory,
+  getLatestSessionMemoryUserText,
   inferSlotFromAnswer,
   listMissingAskSlots,
   summarizeSessionMemory,
@@ -74,6 +76,13 @@ test("mutual get-to-know request sets session intent without storing a user fact
   assert.equal(memory.conversation_mode?.value, "relational_chat");
   assert.equal(memory.user_profile_facts.length, 0);
   assert.doesNotMatch(summarizeSessionMemory(memory), /user_profile_facts:/i);
+});
+
+test("session memory helpers normalize missing replay memory safely", () => {
+  const memory = ensureSessionMemory(undefined);
+
+  assert.deepEqual(memory, createSessionMemory());
+  assert.equal(getLatestSessionMemoryUserText(undefined), null);
 });
 
 test("generic intent statement writes session_intent and not user_profile_facts", () => {

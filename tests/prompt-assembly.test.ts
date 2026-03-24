@@ -154,3 +154,62 @@ test("prompt assembly keeps prior turns that support the active thread and pendi
     assembled.messages.some((message) => /locking the lights-out time/i.test(message.content)),
   );
 });
+
+test("prompt assembly can inject a compact voice continuity block", () => {
+  const state = {
+    ...createConversationStateSnapshot("prompt-assembly-voice"),
+    active_topic: "open_chat",
+    active_thread: "open_chat",
+    last_assistant_claim: "I want the part you keep skipping.",
+    last_conversation_topic: "open_chat",
+  };
+
+  const assembled = assemblePrompt({
+    baseSystemMessages: [{ role: "system", content: "Base system." }],
+    auxiliarySystemMessages: [{ role: "system", content: "Aux context." }],
+    incomingMessages: [{ role: "user", content: "what do you want?" }],
+    conversationState: state,
+    stateBlockOverride: [
+      "Voice continuity:",
+      `Active thread: ${state.active_thread}`,
+      `Last assistant claim: ${state.last_assistant_claim}`,
+    ].join("\n"),
+  });
+
+  assert.ok(
+    assembled.messages.some((message) => /^Voice continuity:/i.test(message.content)),
+  );
+  assert.ok(
+    assembled.debug.includedContext.includes("voice_continuity"),
+  );
+  assert.equal(
+    assembled.messages.some((message) => /^Conversation state:/i.test(message.content)),
+    false,
+  );
+});
+
+test("prompt assembly remains coherent without a response-strategy block", () => {
+  const state = {
+    ...createConversationStateSnapshot("prompt-assembly-no-strategy"),
+    active_topic: "open_chat",
+    active_thread: "open_chat",
+  };
+
+  const assembled = assemblePrompt({
+    baseSystemMessages: [{ role: "system", content: "Base system." }],
+    auxiliarySystemMessages: [
+      { role: "system", content: "Turn plan:\nRequired move: answer_user_question" },
+    ],
+    incomingMessages: [{ role: "user", content: "what should our session be about?" }],
+    conversationState: state,
+  });
+
+  assert.equal(
+    assembled.messages.some((message) => /^Response strategy:/i.test(message.content)),
+    false,
+  );
+  assert.ok(
+    assembled.messages.some((message) => /^Turn plan:/i.test(message.content)),
+  );
+  assert.equal(assembled.messages[assembled.messages.length - 1]?.role, "user");
+});

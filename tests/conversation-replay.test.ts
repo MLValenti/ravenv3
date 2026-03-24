@@ -52,7 +52,7 @@ test("conversation replay traces the known greeting fallback failure as blocked"
   const result = await replayConversationScenario(scenario!);
   assert.equal(result.violations.length, 0);
   assert.equal(result.traces[0]?.finalOutputSource, "scene_fallback");
-  assert.match(result.traces[0]?.finalText ?? "", /talk to me|what is on your mind/i);
+  assert.match(result.traces[0]?.finalText ?? "", /enough hovering|what you actually want/i);
   assert.doesNotMatch(
     result.traces[0]?.finalText ?? "",
     /ask the exact question you want answered|keep it specific|listen carefully/i,

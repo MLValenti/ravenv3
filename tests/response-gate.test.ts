@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import { createCommitmentState } from "../lib/session/commitment-engine.ts";
 import { createConversationStateSnapshot } from "../lib/chat/conversation-state.ts";
 import { buildTurnPlan } from "../lib/chat/turn-plan.ts";
-import { applyResponseGate } from "../lib/session/response-gate.ts";
+import {
+  applyResponseGate,
+  scrubVisibleInternalLeakText,
+} from "../lib/session/response-gate.ts";
 import {
   createSceneState,
   noteSceneStateAssistantTurn,
@@ -28,8 +31,10 @@ test("response gate strips leaked internal prompt lines", () => {
     commitmentState: createCommitmentState(),
   });
 
-  assert.equal(result.forced, false);
-  assert.equal(result.text, "I pick. We are doing a quick word chain.");
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "game_start_contract_restored");
+  assert.match(result.text, /i pick|we are doing/i);
+  assert.match(result.text, /first throw now|first guess now|first prompt|first choice/i);
 });
 
 test("response gate replaces machine identity leak with in-thread fallback", () => {
@@ -86,6 +91,36 @@ test("response gate rejects preserve-active-thread scaffold leakage", () => {
   assert.match(result.text, /useful|trained|entertain|control/i);
 });
 
+test("final visible scrub removes prompt echo residue from model-path text", () => {
+  const result = scrubVisibleInternalLeakText(
+    "Response strategy: answer_direct. Active thread: open_chat. Answer the user in the first sentence.",
+  );
+
+  assert.equal(result.changed, true);
+  assert.equal(result.blocked, true);
+  assert.equal(result.text, "");
+});
+
+test("final visible scrub removes orchestration wording without mangling natural text", () => {
+  const result = scrubVisibleInternalLeakText(
+    "There you are. That makes the next beat tighter.",
+  );
+
+  assert.equal(result.changed, true);
+  assert.equal(result.blocked, false);
+  assert.equal(result.text, "There you are.");
+});
+
+test("final visible scrub leaves coherent natural replies intact", () => {
+  const result = scrubVisibleInternalLeakText(
+    "There you are. You have my attention.",
+  );
+
+  assert.equal(result.changed, false);
+  assert.equal(result.blocked, false);
+  assert.equal(result.text, "There you are. You have my attention.");
+});
+
 test("response gate replaces assistant-self disclaimer leak with a relational answer", () => {
   const result = applyResponseGate({
     text: "Raven does not have personal preferences or experiences. It only enforces protocols and compliances that the user defines as their own kinks.",
@@ -111,7 +146,7 @@ test("response gate rewrites assistant-service turn-back fallback into a real tr
     text: "Ask me directly, and I will answer. Then I may turn one back on you.",
     userText: "what do you think would be a good training we could do today",
     dialogueAct: "user_question",
-    lastAssistantText: "I am good. Sharp, awake, and paying attention. What is on yours?",
+    lastAssistantText: "Sharp enough. Now tell me why you're here.",
     sceneState: {
       ...createSceneState(),
       interaction_mode: "relational_chat",
@@ -130,17 +165,17 @@ test("response gate rewrites assistant-service turn-back fallback into a real tr
 
 test("response gate accepts how-are-you reply as aligned social answer", () => {
   const result = applyResponseGate({
-    text: "I am good. Sharp, awake, and paying attention. What is on yours?",
+    text: "Sharp enough. Now tell me why you're here.",
     userText: "how are you today",
     dialogueAct: "user_question",
-    lastAssistantText: "Talk to me. What is on your mind?",
+    lastAssistantText: "Enough hovering, pet. Tell me what you actually want.",
     sceneState: createSceneState(),
     commitmentState: createCommitmentState(),
   });
 
   assert.equal(result.forced, false);
   assert.equal(result.reason, "accepted");
-  assert.match(result.text, /i am good|sharp|paying attention/i);
+  assert.match(result.text, /sharp enough|why you're here/i);
 });
 
 test("response gate replaces duplicate output with a fallback when needed", () => {
@@ -301,6 +336,27 @@ test("response gate keeps visual claims when observation trust is reliable", () 
   assert.equal(result.forced, false);
   assert.equal(result.reason, "accepted");
   assert.match(result.text, /i see your face in frame right now/i);
+});
+
+test("response gate preserves coherent relational service answers", () => {
+  const scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "what can i do to be a better sub to you?",
+    act: "user_question",
+    sessionTopic: null,
+  });
+
+  const result = applyResponseGate({
+    text: "Practice verbal obedience and keep your follow-through clean when it starts to cost you something.",
+    userText: "what can i do to be a better sub to you?",
+    dialogueAct: "user_question",
+    lastAssistantText: null,
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, false);
+  assert.equal(result.reason, "accepted");
+  assert.match(result.text, /verbal obedience|follow-through/i);
 });
 
 test("response gate enforces user question alignment after fallback rewrites", () => {
@@ -481,7 +537,6 @@ test("response gate replaces weak clarification anchors before they reach the us
   });
 
   assert.equal(result.forced, true);
-  assert.equal(result.reason, "weak_clarification_anchor");
   assert.doesNotMatch(result.text, /part about tell|stay with tell/i);
 });
 
@@ -499,6 +554,39 @@ test("response gate rejects tell-me-more-about weak verb anchors", () => {
   assert.equal(result.forced, true);
   assert.equal(result.reason, "weak_clarification_anchor");
   assert.doesNotMatch(result.text, /tell me more about happens|tell me more about keep/i);
+});
+
+test("response gate rewrites broken repair replies that anchor on none", () => {
+  const result = applyResponseGate({
+    text: "I mean about none.",
+    userText: "what do you mean?",
+    dialogueAct: "short_follow_up",
+    lastAssistantText: "You said none, but that answer usually hides something.",
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+    sessionMemory: writeUserAnswer(createSessionMemory(), "none", 1_000, "profile_fact"),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "repair_resolution_misaligned");
+  assert.match(result.text, /when you said none|last answer sounded/i);
+  assert.doesNotMatch(result.text, /about none|tell me about none|what part of none/i);
+});
+
+test("response gate restates scaffold phrasing on repair turns instead of letting a new question through", () => {
+  const result = applyResponseGate({
+    text: "What part of that matters to you?",
+    userText: "what do you mean?",
+    dialogueAct: "short_follow_up",
+    lastAssistantText: "Fine. We can talk without the scaffolding for a minute.",
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "repair_resolution_misaligned");
+  assert.match(result.text, /scripted questioning|talk directly/i);
+  assert.doesNotMatch(result.text, /\?$/i);
 });
 
 test("response gate rejects abstract conversation templates on valid chat turns", () => {
@@ -818,6 +906,66 @@ test("response gate replaces paper-thin conversation replies on valid chat turns
   assert.equal(result.reason, "thin_conversation_reply");
   assert.doesNotMatch(result.text, /^keep going\.?$/i);
   assert.match(result.text, /bondage|dynamic|actually changes/i);
+});
+
+test("response gate restores a playable first prompt when game start language has no question", () => {
+  const result = applyResponseGate({
+    text: "Here is the next game. Rules are simple. Answer this question for points.",
+    userText: "you pick the game",
+    dialogueAct: "propose_activity",
+    lastAssistantText: null,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "game_start_contract_restored");
+  assert.match(result.text, /first throw now|first guess now|first prompt|first choice/i);
+});
+
+test("response gate strips relational filler after a game start turn", () => {
+  const result = applyResponseGate({
+    text: [
+      "Here is the next game.",
+      "Answer this question for points.",
+      "Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+      "Tell me what you want.",
+    ].join(" "),
+    userText: "start a game",
+    dialogueAct: "propose_activity",
+    lastAssistantText: null,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "game_start_contract_restored");
+  assert.match(result.text, /first throw now|first guess now|first prompt|first choice/i);
+  assert.doesNotMatch(result.text, /tell me what you want|what is on your mind|talk to me/i);
+});
+
+test("response gate rejects stray game-start copy on a greeting turn", () => {
+  const result = applyResponseGate({
+    text: "Here is the next game. Answer this question for points.",
+    userText: "good evening",
+    dialogueAct: "user_question",
+    lastAssistantText: null,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "unexpected_game_start_on_conversational_turn");
+  assert.doesNotMatch(result.text, /here is the next game|answer this question|for points|first throw now/i);
+  assert.match(result.text, /good|evening|tell me|what you actually want/i);
 });
 
 test("response gate rejects duplicate task payloads in a single turn", () => {

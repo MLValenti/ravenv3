@@ -48,6 +48,51 @@ test("bypass model when a deterministic candidate exists in an explicit determin
   assert.equal(bypass, true);
 });
 
+test("fresh direct question escapes stale locked task negotiation replay", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "task_negotiation",
+      topic_locked: true,
+      interaction_mode: "task_planning",
+    }),
+    dialogueAct: "user_question",
+    hasDeterministicCandidate: true,
+    latestUserText: "what should our session be about?",
+  });
+
+  assert.equal(bypass, false);
+});
+
+test("fresh greeting escapes stale locked task negotiation replay", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "task_negotiation",
+      topic_locked: true,
+      interaction_mode: "task_planning",
+    }),
+    dialogueAct: "other",
+    hasDeterministicCandidate: true,
+    latestUserText: "hi",
+  });
+
+  assert.equal(bypass, false);
+});
+
+test("genuine task continuation still bypasses in locked task negotiation", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "task_negotiation",
+      topic_locked: true,
+      interaction_mode: "task_planning",
+    }),
+    dialogueAct: "duration_request",
+    hasDeterministicCandidate: true,
+    latestUserText: "make it 10 minutes",
+  });
+
+  assert.equal(bypass, true);
+});
+
 test("bypass model on locked deterministic game topic even without candidate", () => {
   const bypass = shouldBypassModelForSceneTurn({
     sceneState: sceneStatePatch({
@@ -94,7 +139,7 @@ test("non deterministic conversation can still use model", () => {
   assert.equal(bypass, false);
 });
 
-test("profile building can use a deterministic conversational question", () => {
+test("profile building keeps conversational turns on the model path", () => {
   const bypass = shouldBypassModelForSceneTurn({
     sceneState: sceneStatePatch({
       topic_type: "general_request",
@@ -105,10 +150,10 @@ test("profile building can use a deterministic conversational question", () => {
     hasDeterministicCandidate: true,
   });
 
-  assert.equal(bypass, true);
+  assert.equal(bypass, false);
 });
 
-test("relational chat can use a deterministic direct answer", () => {
+test("relational chat keeps conversational turns on the model path", () => {
   const bypass = shouldBypassModelForSceneTurn({
     sceneState: sceneStatePatch({
       topic_type: "general_request",
@@ -119,7 +164,7 @@ test("relational chat can use a deterministic direct answer", () => {
     hasDeterministicCandidate: true,
   });
 
-  assert.equal(bypass, true);
+  assert.equal(bypass, false);
 });
 
 test("non-hard-locked task execution does not bypass the model without a scaffold", () => {

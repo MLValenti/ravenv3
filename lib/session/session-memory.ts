@@ -697,6 +697,33 @@ export function createSessionMemory(): SessionMemory {
   };
 }
 
+export function ensureSessionMemory(value: SessionMemory | null | undefined): SessionMemory {
+  return value ?? createSessionMemory();
+}
+
+export function getLatestSessionMemoryUserText(
+  value: SessionMemory | null | undefined,
+): string | null {
+  const memory = ensureSessionMemory(value);
+  return memory.last_user_answer?.value ?? memory.last_user_question?.value ?? null;
+}
+
+export function writeConversationMode(
+  memory: SessionMemory,
+  mode: InteractionMode,
+  nowMs: number,
+  confidence = 0.94,
+): SessionMemory {
+  return {
+    ...memory,
+    conversation_mode: {
+      value: mode,
+      updatedAt: nowMs,
+      confidence,
+    },
+  };
+}
+
 export function inferSlotFromAnswer(text: string): SessionMemorySlotKey {
   const normalized = text.toLowerCase();
   if (isMetaConversationIntent(text)) {

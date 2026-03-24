@@ -1,0 +1,141 @@
+[
+  {
+    "scenario": "A_hi",
+    "traces": [
+      {
+        "user": "hi",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  },
+  {
+    "scenario": "B_know",
+    "traces": [
+      {
+        "user": "what do you want to know about me?",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  },
+  {
+    "scenario": "C_talk",
+    "traces": [
+      {
+        "user": "i want to talk",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  },
+  {
+    "scenario": "D_mean",
+    "traces": [
+      {
+        "user": "i want to talk",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      },
+      {
+        "user": "what do you mean?",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  },
+  {
+    "scenario": "E_more",
+    "traces": [
+      {
+        "user": "what do you want to know about me?",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      },
+      {
+        "user": "tell me more",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  },
+  {
+    "scenario": "F_do",
+    "traces": [
+      {
+        "user": "what do you want me to do",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  },
+  {
+    "scenario": "G_for_you",
+    "traces": [
+      {
+        "user": "what can i do for you",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  },
+  {
+    "scenario": "H_better_sub",
+    "traces": [
+      {
+        "user": "what can i do to be a better sub to you",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      },
+      {
+        "user": "tell me more",
+        "labels": [],
+        "selected": null,
+        "final": "",
+        "raw": null,
+        "finalServer": null,
+        "candidates": []
+      }
+    ]
+  }
+]

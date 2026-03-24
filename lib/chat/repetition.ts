@@ -58,3 +58,23 @@ export function detectStaleResponseReuse(
   }
   return { repeated: false, reason: "fresh" };
 }
+
+export function shouldPreserveAnsweredQuestionAgainstRepetitionFallback(input: {
+  repetitionCheck: { repeated: boolean; reason: string };
+  turnPlanRequiredMove: string;
+  turnPlanCheck: { ok: boolean; reason: string };
+}): boolean {
+  if (!input.repetitionCheck.repeated) {
+    return false;
+  }
+
+  if (input.turnPlanRequiredMove !== "answer_user_question" || !input.turnPlanCheck.ok) {
+    return false;
+  }
+
+  if (!input.turnPlanCheck.reason.endsWith("question_answered")) {
+    return false;
+  }
+
+  return input.repetitionCheck.reason !== "exact_match";
+}

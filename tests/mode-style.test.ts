@@ -20,7 +20,7 @@ test("mode style polish strengthens open-chat phrasing without reintroducing can
     "normal_chat",
   );
 
-  assert.equal(polished, "Talk to me. What is on your mind?");
+  assert.equal(polished, "Enough hovering, pet. Tell me what you actually want.");
   assert.doesNotMatch(polished, /listen carefully|keep it specific/i);
 });
 

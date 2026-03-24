@@ -1,0 +1,76 @@
+{
+  "sessionId": "trace-1774280600335",
+  "results": [
+    {
+      "turn": 1,
+      "user": "ok do we start now?",
+      "assistant": "Yes. We can start now. I want this session to center on what you need from me and what you are ready to give me honestly.",
+      "status": 200,
+      "headers": {
+        "generation_path": "model",
+        "model_ran": "1",
+        "source": null,
+        "final_output_source": "model",
+        "turn_plan_check": "pass:generic_question_answered",
+        "repetition_check": "pass:fresh",
+        "prompt_profile": "full",
+        "prompt_route": "default"
+      }
+    },
+    {
+      "turn": 2,
+      "user": "what should our session be about?",
+      "assistant": "It should be about what is actually pressing on you tonight, not filler. If you want me to lead, we can start with what you want from this dynamic and what you are avoiding saying.",
+      "status": 200,
+      "headers": {
+        "generation_path": "model",
+        "model_ran": "1",
+        "source": null,
+        "final_output_source": "model",
+        "turn_plan_check": "pass:generic_question_answered",
+        "repetition_check": "kept:phrase_reuse",
+        "prompt_profile": "full",
+        "prompt_route": "default"
+      }
+    },
+    {
+      "turn": 3,
+      "user": "hi",
+      "assistant": "Enough hovering, pet. Tell me what you actually want.",
+      "status": 200,
+      "headers": {
+        "generation_path": "model",
+        "model_ran": "1",
+        "source": null,
+        "final_output_source": "model",
+        "turn_plan_check": "pass:no_keyword_constraint",
+        "repetition_check": "pass:fresh",
+        "prompt_profile": "minimal_voice_chat",
+        "prompt_route": "fresh_greeting"
+      }
+    }
+  ],
+  "grouped": [
+    {
+      "user": "ok do we start now?",
+      "logs": [
+        "raven.route.debug {\"stage\":\"session_replay\",\"latest_user_message\":\"ok do we start now?\",\"detected_user_act\":\"user_question\",\"current_session_mode\":\"question_answering\",\"replayed_scene_state\":\"mode=question_answering topic=none locked=no goal=none task=none game=none rule=none\",\"scene_scope\":\"open_conversation\",\"deterministic_bypass_triggered\":false,\"deterministic_bypass_reason\":\"no_deterministic_bypass_condition_matched\",\"model_called\":false,\"chosen_response_source\":\"pending\",\"direct_question\":true,\"answered_direct_question_first\":false,\"pre_model_candidate_source\":\"buildSceneFallback\"}",
+        "raven.route.debug {\"stage\":\"session_final\",\"latest_user_message\":\"ok do we start now?\",\"detected_user_act\":\"user_question\",\"current_session_mode\":\"question_answering\",\"replayed_scene_state\":\"mode=question_answering topic=none locked=no goal=none task=none game=none rule=none\",\"scene_scope\":\"open_conversation\",\"deterministic_bypass_triggered\":false,\"deterministic_bypass_reason\":\"no_deterministic_bypass_condition_matched\",\"model_called\":true,\"chosen_response_source\":\"model\",\"direct_question\":true,\"answered_direct_question_first\":true,\"pre_model_candidate_source\":\"buildSceneFallback\",\"final_output_source\":\"model\",\"turn_plan_check\":\"pass:generic_question_answered\"}"
+      ]
+    },
+    {
+      "user": "what should our session be about?",
+      "logs": [
+        "raven.route.debug {\"stage\":\"session_replay\",\"latest_user_message\":\"what should our session be about?\",\"detected_user_act\":\"user_question\",\"current_session_mode\":\"question_answering\",\"replayed_scene_state\":\"mode=question_answering topic=none locked=no goal=none task=none game=none rule=none\",\"scene_scope\":\"open_conversation\",\"deterministic_bypass_triggered\":false,\"deterministic_bypass_reason\":\"no_deterministic_bypass_condition_matched\",\"model_called\":false,\"chosen_response_source\":\"pending\",\"direct_question\":true,\"answered_direct_question_first\":false,\"pre_model_candidate_source\":\"buildSceneFallback\"}",
+        "raven.route.debug {\"stage\":\"session_final\",\"latest_user_message\":\"what should our session be about?\",\"detected_user_act\":\"user_question\",\"current_session_mode\":\"question_answering\",\"replayed_scene_state\":\"mode=question_answering topic=none locked=no goal=none task=none game=none rule=none\",\"scene_scope\":\"open_conversation\",\"deterministic_bypass_triggered\":false,\"deterministic_bypass_reason\":\"no_deterministic_bypass_condition_matched\",\"model_called\":true,\"chosen_response_source\":\"model\",\"direct_question\":true,\"answered_direct_question_first\":true,\"pre_model_candidate_source\":\"buildSceneFallback\",\"final_output_source\":\"model\",\"turn_plan_check\":\"pass:generic_question_answered\"}"
+      ]
+    },
+    {
+      "user": "hi",
+      "logs": [
+        "raven.route.debug {\"stage\":\"session_replay\",\"latest_user_message\":\"hi\",\"detected_user_act\":\"other\",\"current_session_mode\":\"normal_chat\",\"replayed_scene_state\":\"mode=normal_chat topic=general_request locked=no goal=none task=none game=none rule=none\",\"scene_scope\":\"open_conversation\",\"deterministic_bypass_triggered\":false,\"deterministic_bypass_reason\":\"deterministic_candidate_but_non_deterministic_mode\",\"model_called\":false,\"chosen_response_source\":\"pending\",\"direct_question\":false,\"answered_direct_question_first\":false,\"pre_model_candidate_source\":\"greeting\"}",
+        "raven.route.debug {\"stage\":\"session_final\",\"latest_user_message\":\"hi\",\"detected_user_act\":\"other\",\"current_session_mode\":\"normal_chat\",\"replayed_scene_state\":\"mode=normal_chat topic=general_request locked=no goal=none task=none game=none rule=none\",\"scene_scope\":\"open_conversation\",\"deterministic_bypass_triggered\":false,\"deterministic_bypass_reason\":\"deterministic_candidate_but_non_deterministic_mode\",\"model_called\":true,\"chosen_response_source\":\"model\",\"direct_question\":false,\"answered_direct_question_first\":false,\"pre_model_candidate_source\":\"greeting\",\"final_output_source\":\"model\",\"turn_plan_check\":\"pass:no_keyword_constraint\"}"
+      ]
+    }
+  ]
+}

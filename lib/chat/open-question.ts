@@ -253,9 +253,9 @@ export function buildAssistantServiceReply(
     return "Today I would start with an obedience drill, not a performance piece. Keep every answer to one clean sentence, ask permission before you shift the subject, and do not pad or soften anything. If you want the pressure to sit in the body too, add cuffs, a collar, or a plug and hold the same rule inside it. If you want, I can make that softer or stricter.";
   }
   if (/\b(serve|service|useful|usefulness)\b/.test(normalized)) {
-    return "Be useful in a real way. Attention, follow-through, honesty, and enough steadiness that I do not have to drag clarity out of you. Which part of that do you actually want to give me?";
+    return "Usefulness is simple. Be clear, follow through, and stop making me drag the truth out of you. If you want to offer me something, start there.";
   }
-  return "Be useful. Be honest. Be trainable enough that I can work with something real instead of a performance. If you want to do something for me, start there. Which part of that actually pulls at you?";
+  return "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.";
 }
 
 export function buildPriorBeatOpinionReply(previousAssistantText?: string | null): string {
@@ -273,7 +273,7 @@ export function buildPriorBeatOpinionReply(previousAssistantText?: string | null
 }
 
 function buildAssistantServiceStartReply(): string {
-  return "Start with consistency. If you want to be useful to me, do what you say, answer cleanly, and follow through long enough for it to mean something. That is the first part people usually fake.";
+  return "Start with consistency. Say it cleanly, do what you promised, and keep your nerve long enough for it to mean something. That is where people usually fail first.";
 }
 
 function buildAssistantServiceFollowUpReply(question: string): string {

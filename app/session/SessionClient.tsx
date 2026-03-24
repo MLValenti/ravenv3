@@ -34,6 +34,7 @@ import {
   type CoreConversationMove,
 } from "@/lib/chat/core-turn-move";
 import { buildClientChatMessages } from "@/lib/chat/request-messages";
+import { buildTurnPlan } from "@/lib/chat/turn-plan";
 import {
   buildConversationStateBlock,
   createConversationStateSnapshot,
@@ -131,6 +132,14 @@ import {
 } from "@/lib/session/session-review";
 import { classifyUserIntent, type UserIntent } from "@/lib/session/intent-router";
 import { buildShortClarificationReply } from "@/lib/session/short-follow-up";
+import { inspectGameStartContract } from "@/lib/session/game-start-contract";
+import {
+  chooseDeliveredAssistantText,
+  sanitizeSessionVisibleAssistantText,
+  shouldAllowVisibleAssistantCommit,
+  shouldPreserveQueuedUserTurnOnSessionStart,
+  shouldRecoverSkippedAssistantRender,
+} from "@/lib/session/live-turn-integrity";
 import {
   chooseNextAskSlot,
   createSessionMemory,
@@ -141,6 +150,7 @@ import {
   traceWriteUserQuestion,
   type SessionMemory,
   type SessionMemorySlotKey,
+  writeConversationMode,
   writeVerifiedResult,
 } from "@/lib/session/session-memory";
 import {
@@ -212,9 +222,11 @@ import {
   isChatSwitchRequest,
   isProfileSummaryRequest,
   isMutualGettingToKnowRequest,
+  isAssistantServiceQuestion,
   isAssistantSelfQuestion,
   isRelationalOfferStatement,
 } from "@/lib/session/interaction-mode";
+import { isCoherentRelationalQuestionAnswer } from "@/lib/chat/relational-answer-alignment";
 import { buildOpenChatGreeting } from "@/lib/session/mode-style";
 import {
   buildVerificationManualConfirmationPrompt,
@@ -411,6 +423,9 @@ type AssistantTraceMeta = {
   serverTurnId: string | null;
   finalOutputSource: TurnResponseFamily;
   outputGeneratorCount: number;
+  rawGameStartDetected?: boolean;
+  rawGameStartQuestionPresent?: boolean;
+  finalGameStartQuestionPresent?: boolean;
 };
 
 function mapAssistantReplySourceToTurnResponseFamily(
@@ -1388,6 +1403,10 @@ function isQuestionResponseAligned(userText: string, responseText: string): bool
     return false;
   }
 
+  if (isCoherentRelationalQuestionAnswer(userText, responseText)) {
+    return true;
+  }
+
   if (
     /\b(what would that prove|what does that prove|what is that meant to prove|what would that change|what is that meant to change)\b/.test(
       userNormalized,
@@ -1446,6 +1465,30 @@ function isQuestionResponseAligned(userText: string, responseText: string): bool
   if (/\b(game|rules?|play|rock paper scissors|rps|number hunt)\b/.test(userNormalized)) {
     return /\b(game|rules?|play|rock paper scissors|rps|number hunt|first throw|first guess|second and final guess)\b/.test(
       responseNormalized,
+    );
+  }
+
+  if (isMutualGettingToKnowRequest(userText)) {
+    return (
+      /\b(both ways|what do you want to know|question on me first|give me something real back|tell me something real back)\b/i.test(
+        responseNormalized,
+      ) || hasDialogueKeywordOverlap(userText, responseText)
+    );
+  }
+
+  if (isAssistantServiceQuestion(userText)) {
+    return (
+      /\b(clarity|honesty|follow[- ]through|steady|consisten|useful|usefulness|prove|precision|start with)\b/i.test(
+        responseNormalized,
+      ) || hasDialogueKeywordOverlap(userText, responseText)
+    );
+  }
+
+  if (isAssistantSelfQuestion(userText)) {
+    return (
+      /\b(i like|i enjoy|i pay attention|what matters|what pulls you in|ask me|question on me)\b/i.test(
+        responseNormalized,
+      ) || hasDialogueKeywordOverlap(userText, responseText)
     );
   }
 
@@ -1717,6 +1760,7 @@ export default function SessionPage() {
   const committedAssistantTurnRef = useRef<Map<number, { requestId: string; normalizedText: string }>>(
     new Map(),
   );
+  const visibleAssistantTurnRef = useRef<Map<number, string>>(new Map());
   const lastAssistantReplayRef = useRef<{ anchorUserMessageId: number; normalizedText: string } | null>(
     null,
   );
@@ -3297,108 +3341,45 @@ export default function SessionPage() {
     ],
   );
 
-  function appendRavenOutput(text: string, traceMeta?: AssistantTraceMeta | null): boolean {
-    const maybeAction = parseDeviceActionRequest(text);
-    const strippedText = stripActionJsonBlock(text);
-    const speechText = strippedText || (maybeAction.ok ? "" : text.trim());
-    const actionDisplayText = maybeAction.ok
-      ? formatDeviceActionForDisplay(maybeAction.request)
-      : "";
-    const displayText = [speechText, actionDisplayText]
-      .filter((item) => item.length > 0)
-      .join("\n");
-    const effectiveTrace = traceMeta ?? activeAssistantTraceRef.current;
-    const commitText = speechText || displayText;
-    const anchorUserMessageId =
-      effectiveTrace && effectiveTrace.sourceUserMessageId > 0
-        ? effectiveTrace.sourceUserMessageId
-        : turnGateRef.current.lastUserMessageId;
-    if (commitText) {
-      const replayDecision = canCommitAssistantReplay(
-        lastAssistantReplayRef.current,
-        anchorUserMessageId,
-        commitText,
-      );
-      if (!replayDecision.allow) {
-        pushTurnTrace("turn.append.blocked", {
-          request_id: effectiveTrace?.requestId ?? "none",
-          session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
-          user_message_id: anchorUserMessageId,
-          step_id: effectiveTrace?.stepId ?? "none",
-          reason: replayDecision.reason,
-          source: effectiveTrace?.source ?? "scripted",
-          generation_path: effectiveTrace?.generationPath ?? "local",
-          committed_text: commitText,
-          at_ms: now(),
-        });
-        return false;
-      }
-    }
-    if (commitText && anchorUserMessageId > 0) {
-      const commitDecision =
-        effectiveTrace && effectiveTrace.sourceUserMessageId > 0
-          ? canCommitAssistantTurn(
-              committedAssistantTurnRef.current,
-              {
-                requestId: effectiveTrace.requestId,
-                sourceUserMessageId: effectiveTrace.sourceUserMessageId,
-              },
-              commitText,
-            )
-          : canCommitAnchoredAssistantTurn(
-              committedAssistantTurnRef.current,
-              anchorUserMessageId,
-              effectiveTrace?.requestId ?? null,
-              commitText,
-            );
-      if (!commitDecision.allow) {
-        pushTurnTrace("turn.append.blocked", {
-          request_id: effectiveTrace?.requestId ?? "none",
-          session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
-          user_message_id: anchorUserMessageId,
-          step_id: effectiveTrace?.stepId ?? "none",
-          reason: commitDecision.reason,
-          source: effectiveTrace?.source ?? "scripted",
-          model_ran: effectiveTrace?.modelRan ?? false,
-          deterministic_rail: effectiveTrace?.deterministicRail ?? "none",
-          generation_path: effectiveTrace?.generationPath ?? "unknown",
-          at_ms: now(),
-        });
-        return false;
-      }
+  function appendCommittedAssistantOutput(input: {
+    text: string;
+    speechText: string;
+    displayText: string;
+    actionParsed: ReturnType<typeof parseDeviceActionRequest>;
+    traceMeta: AssistantTraceMeta | null;
+    anchorUserMessageId: number;
+    alreadyCommittedNormalizedText?: string | null;
+  }): boolean {
+    const {
+      text,
+      speechText,
+      displayText,
+      actionParsed,
+      traceMeta,
+      anchorUserMessageId,
+      alreadyCommittedNormalizedText,
+    } = input;
+    if (alreadyCommittedNormalizedText && anchorUserMessageId > 0) {
       markAssistantTurnCommitted(
         committedAssistantTurnRef.current,
         {
-          requestId:
-            effectiveTrace?.requestId?.trim() || `anchored-${anchorUserMessageId}`,
+          requestId: traceMeta?.requestId?.trim() || `anchored-${anchorUserMessageId}`,
           sourceUserMessageId: anchorUserMessageId,
         },
-        commitDecision.normalizedText,
+        alreadyCommittedNormalizedText,
       );
-      pushTurnTrace("turn.append.committed", {
-        request_id: effectiveTrace?.requestId ?? `anchored-${anchorUserMessageId}`,
-        session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
-        user_message_id: anchorUserMessageId,
-        step_id: effectiveTrace?.stepId ?? "none",
-        source: effectiveTrace?.source ?? "scripted",
-        model_ran: effectiveTrace?.modelRan ?? false,
-        deterministic_rail: effectiveTrace?.deterministicRail ?? "none",
-        generation_path: effectiveTrace?.generationPath ?? "unknown",
-        final_output_source: effectiveTrace?.finalOutputSource ?? "unknown",
-        output_generator_count: effectiveTrace?.outputGeneratorCount ?? 1,
-        post_processed: effectiveTrace?.postProcessed ?? false,
-        turn_id_estimate: effectiveTrace?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
-        server_request_id: effectiveTrace?.serverRequestId ?? "none",
-        server_turn_id: effectiveTrace?.serverTurnId ?? "none",
-        committed_text: commitText,
-        at_ms: now(),
-      });
     }
-    if (commitText) {
+    if (speechText || displayText) {
       lastAssistantReplayRef.current = markAssistantReplay(
         anchorUserMessageId,
-        normalizeAssistantCommitText(commitText),
+        normalizeAssistantCommitText(speechText || displayText),
       );
+      if (anchorUserMessageId > 0) {
+        visibleAssistantTurnRef.current.set(
+          anchorUserMessageId,
+          normalizeAssistantCommitText(speechText || displayText),
+        );
+      }
     }
     if (displayText) {
       setRavenLines((current) => trimToSize([...current, displayText], 20));
@@ -3430,6 +3411,13 @@ export default function SessionPage() {
           topicResolved: resolvesTopic,
         }),
       );
+      const assistantConversationMode = sceneStateRef.current.interaction_mode;
+      if (sessionMemoryRef.current.conversation_mode?.value !== assistantConversationMode) {
+        syncSessionMemory(
+          writeConversationMode(sessionMemoryRef.current, assistantConversationMode, now(), 0.96),
+          `assistant commit -> conversation_mode=${assistantConversationMode}`,
+        );
+      }
       const sceneTransition = describeSceneTransition(previousSceneState, sceneStateRef.current);
       if (sceneTransition) {
         pushFeed({
@@ -3449,13 +3437,13 @@ export default function SessionPage() {
         topicAnchorRef.current = null;
       }
     }
-    if (maybeAction.ok) {
+    if (actionParsed.ok) {
       pushFeed({
         timestamp: now(),
         label: "session.action.request",
         detail: JSON.stringify({
           parsed_action: true,
-          action: maybeAction.request,
+          action: actionParsed.request,
           gate: {
             opt_in: deviceOptInRef.current,
             emergency_stop: stopped,
@@ -3464,14 +3452,14 @@ export default function SessionPage() {
         }),
       });
       if (debugMode) {
-        console.debug("device.action.parsed", maybeAction.request);
+        console.debug("device.action.parsed", actionParsed.request);
       }
-      void dispatchDeviceAction(maybeAction.request);
+      void dispatchDeviceAction(actionParsed.request);
     } else if (debugMode) {
       pushFeed({
         timestamp: now(),
         label: "session.action.parse",
-        detail: JSON.stringify({ parsed_action: false, reason: maybeAction.error }),
+        detail: JSON.stringify({ parsed_action: false, reason: actionParsed.error }),
       });
     }
     if (speechText) {
@@ -3498,10 +3486,248 @@ export default function SessionPage() {
     if (speechText) {
       speakRavenText(speechText);
     }
-    return true;
+    return Boolean(displayText || speechText || text.trim());
   }
 
-  function handleEngineEvent(event: StepEngineEvent) {
+  function prepareSessionVisibleOutput(
+    text: string,
+    traceMeta?: AssistantTraceMeta | null,
+  ): {
+    actionParsed: ReturnType<typeof parseDeviceActionRequest>;
+    speechText: string;
+    displayText: string;
+    hasRenderableText: boolean;
+  } {
+    const maybeAction = parseDeviceActionRequest(text);
+    const strippedText = stripActionJsonBlock(text);
+    const rawSpeechText = strippedText || (maybeAction.ok ? "" : text.trim());
+    const scrubbedSpeech = rawSpeechText
+      ? sanitizeSessionVisibleAssistantText(rawSpeechText)
+      : { text: "", changed: false, blocked: false };
+    if (scrubbedSpeech.changed) {
+      pushTurnTrace("turn.output.scrubbed", {
+        request_id: traceMeta?.requestId ?? "none",
+        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
+        user_message_id: traceMeta?.sourceUserMessageId ?? turnGateRef.current.lastUserMessageId,
+        final_output_source: traceMeta?.finalOutputSource ?? "unknown",
+        blocked: scrubbedSpeech.blocked,
+        before_text: rawSpeechText.slice(0, 240),
+        after_text: scrubbedSpeech.text.slice(0, 240),
+        at_ms: now(),
+      });
+    }
+    const actionDisplayText = maybeAction.ok
+      ? formatDeviceActionForDisplay(maybeAction.request)
+      : "";
+    // Mirror the server route's final internal-leak scrub right before the session client
+    // commits user-visible text, so local fallback paths cannot surface runtime labels.
+    const speechText = scrubbedSpeech.text;
+    const displayText = [speechText, actionDisplayText]
+      .filter((item) => item.length > 0)
+      .join("\n");
+    return {
+      actionParsed: maybeAction,
+      speechText,
+      displayText,
+      hasRenderableText: Boolean(displayText || speechText),
+    };
+  }
+
+  function appendRavenOutput(
+    text: string,
+    traceMeta?: AssistantTraceMeta | null,
+  ): {
+    committed: boolean;
+    reason: string;
+    hasRenderableText: boolean;
+    renderedText: string;
+  } {
+    const effectiveTrace = traceMeta ?? activeAssistantTraceRef.current;
+    const renderable = prepareSessionVisibleOutput(text, effectiveTrace);
+    const commitText = renderable.speechText || renderable.displayText;
+    const anchorUserMessageId =
+      effectiveTrace && effectiveTrace.sourceUserMessageId > 0
+        ? effectiveTrace.sourceUserMessageId
+        : turnGateRef.current.lastUserMessageId;
+    const hasRenderableText = renderable.hasRenderableText;
+    const visibleDecision = shouldAllowVisibleAssistantCommit({
+      sourceUserMessageId: anchorUserMessageId,
+      normalizedText: normalizeAssistantCommitText(commitText),
+      existingVisibleNormalizedText: visibleAssistantTurnRef.current.get(anchorUserMessageId) ?? null,
+    });
+    if (commitText && !visibleDecision.allow) {
+      pushTurnTrace("turn.append.blocked", {
+        request_id: effectiveTrace?.requestId ?? "none",
+        session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
+        user_message_id: anchorUserMessageId,
+        step_id: effectiveTrace?.stepId ?? "none",
+        reason: visibleDecision.reason,
+        source: effectiveTrace?.source ?? "scripted",
+        generation_path: effectiveTrace?.generationPath ?? "local",
+        committed_text: commitText,
+        at_ms: now(),
+      });
+      return {
+        committed: false,
+        reason: `visible_blocked:${visibleDecision.reason}`,
+        hasRenderableText,
+        renderedText: renderable.speechText || renderable.displayText,
+      };
+    }
+    if (commitText) {
+      const replayDecision = canCommitAssistantReplay(
+        lastAssistantReplayRef.current,
+        anchorUserMessageId,
+        commitText,
+      );
+      if (!replayDecision.allow) {
+        pushTurnTrace("turn.append.blocked", {
+          request_id: effectiveTrace?.requestId ?? "none",
+          session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
+          user_message_id: anchorUserMessageId,
+          step_id: effectiveTrace?.stepId ?? "none",
+          reason: replayDecision.reason,
+          source: effectiveTrace?.source ?? "scripted",
+          generation_path: effectiveTrace?.generationPath ?? "local",
+          committed_text: commitText,
+          at_ms: now(),
+        });
+        return {
+          committed: false,
+          reason: `replay_blocked:${replayDecision.reason}`,
+          hasRenderableText,
+          renderedText: renderable.speechText || renderable.displayText,
+        };
+      }
+    }
+    let committedNormalizedText: string | null = null;
+    if (commitText && anchorUserMessageId > 0) {
+      const commitDecision =
+        effectiveTrace && effectiveTrace.sourceUserMessageId > 0
+          ? canCommitAssistantTurn(
+              committedAssistantTurnRef.current,
+              {
+                requestId: effectiveTrace.requestId,
+                sourceUserMessageId: effectiveTrace.sourceUserMessageId,
+              },
+              commitText,
+            )
+          : canCommitAnchoredAssistantTurn(
+              committedAssistantTurnRef.current,
+              anchorUserMessageId,
+              effectiveTrace?.requestId ?? null,
+              commitText,
+            );
+      if (!commitDecision.allow) {
+        pushTurnTrace("turn.append.blocked", {
+          request_id: effectiveTrace?.requestId ?? "none",
+          session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
+          user_message_id: anchorUserMessageId,
+          step_id: effectiveTrace?.stepId ?? "none",
+          reason: commitDecision.reason,
+          source: effectiveTrace?.source ?? "scripted",
+          model_ran: effectiveTrace?.modelRan ?? false,
+          deterministic_rail: effectiveTrace?.deterministicRail ?? "none",
+          generation_path: effectiveTrace?.generationPath ?? "unknown",
+          at_ms: now(),
+        });
+        return {
+          committed: false,
+          reason: `commit_blocked:${commitDecision.reason}`,
+          hasRenderableText,
+          renderedText: renderable.speechText || renderable.displayText,
+        };
+      }
+      committedNormalizedText = commitDecision.normalizedText;
+      pushTurnTrace("turn.append.committed", {
+        request_id: effectiveTrace?.requestId ?? `anchored-${anchorUserMessageId}`,
+        session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
+        user_message_id: anchorUserMessageId,
+        step_id: effectiveTrace?.stepId ?? "none",
+        source: effectiveTrace?.source ?? "scripted",
+        model_ran: effectiveTrace?.modelRan ?? false,
+        deterministic_rail: effectiveTrace?.deterministicRail ?? "none",
+        generation_path: effectiveTrace?.generationPath ?? "unknown",
+        final_output_source: effectiveTrace?.finalOutputSource ?? "unknown",
+        output_generator_count: effectiveTrace?.outputGeneratorCount ?? 1,
+        post_processed: effectiveTrace?.postProcessed ?? false,
+        turn_id_estimate: effectiveTrace?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
+        server_request_id: effectiveTrace?.serverRequestId ?? "none",
+        server_turn_id: effectiveTrace?.serverTurnId ?? "none",
+        committed_text: commitText,
+        at_ms: now(),
+      });
+    }
+    return {
+      committed: appendCommittedAssistantOutput({
+        text: renderable.speechText || renderable.displayText,
+        speechText: renderable.speechText,
+        displayText: renderable.displayText,
+        actionParsed: renderable.actionParsed,
+        traceMeta: effectiveTrace,
+        anchorUserMessageId,
+        alreadyCommittedNormalizedText: committedNormalizedText,
+      }),
+      reason: "committed",
+      hasRenderableText,
+      renderedText: renderable.speechText || renderable.displayText,
+    };
+  }
+
+  function recoverSkippedAssistantRender(
+    text: string,
+    traceMeta: AssistantTraceMeta | null,
+    reason: string,
+  ): boolean {
+    const renderable = prepareSessionVisibleOutput(text, traceMeta);
+    const anchorUserMessageId =
+      traceMeta && traceMeta.sourceUserMessageId > 0
+        ? traceMeta.sourceUserMessageId
+        : turnGateRef.current.lastUserMessageId;
+    const visibleDecision = shouldAllowVisibleAssistantCommit({
+      sourceUserMessageId: anchorUserMessageId,
+      normalizedText: normalizeAssistantCommitText(
+        renderable.speechText || renderable.displayText,
+      ),
+      existingVisibleNormalizedText: visibleAssistantTurnRef.current.get(anchorUserMessageId) ?? null,
+    });
+    if (!visibleDecision.allow) {
+      pushTurnTrace("turn.append.recovery_blocked", {
+        request_id: traceMeta?.requestId ?? "none",
+        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
+        user_message_id: anchorUserMessageId,
+        step_id: traceMeta?.stepId ?? "none",
+        reason: visibleDecision.reason,
+        at_ms: now(),
+      });
+      return false;
+    }
+    const normalizedText = normalizeAssistantCommitText(
+      renderable.speechText || renderable.displayText,
+    );
+    pushTurnTrace("turn.append.recovered", {
+      request_id: traceMeta?.requestId ?? "none",
+      session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
+      user_message_id: anchorUserMessageId,
+      step_id: traceMeta?.stepId ?? "none",
+      reason,
+      generation_path: traceMeta?.generationPath ?? "unknown",
+      final_output_source: traceMeta?.finalOutputSource ?? "unknown",
+      rendered_text: renderable.speechText || renderable.displayText,
+      at_ms: now(),
+    });
+    return appendCommittedAssistantOutput({
+      text: renderable.speechText || renderable.displayText,
+      speechText: renderable.speechText,
+      displayText: renderable.displayText,
+      actionParsed: renderable.actionParsed,
+      traceMeta,
+      anchorUserMessageId,
+      alreadyCommittedNormalizedText: normalizedText || null,
+    });
+  }
+
+  function handleEngineEvent(event: StepEngineEvent): boolean {
     pushFeed(toFeedFromEngine(event));
 
     if (event.type === "state.changed") {
@@ -3509,7 +3735,7 @@ export default function SessionPage() {
       if (event.message) {
         setMessage(event.message);
       }
-      return;
+      return false;
     }
 
     if (event.type === "step.started") {
@@ -3518,18 +3744,56 @@ export default function SessionPage() {
       if (event.step.mode === "listen") {
         setUserReplied(false);
       }
-      return;
+      return false;
     }
 
     if (event.type === "step.tick") {
       setCurrentStepId(event.step.id);
       setCountdown(event.remainingSeconds);
-      return;
+      return false;
     }
 
     if (event.type === "output") {
-      appendRavenOutput(event.text);
-      return;
+      const appendResult = appendRavenOutput(event.text);
+      const sourceUserMessageId =
+        activeAssistantTraceRef.current?.sourceUserMessageId ?? turnGateRef.current.lastUserMessageId;
+      const recovered =
+        !appendResult.committed &&
+        shouldRecoverSkippedAssistantRender({
+        appendCommitted: appendResult.committed,
+        appendReason: appendResult.reason,
+        hasRenderableText: appendResult.hasRenderableText,
+        sourceUserMessageId,
+        lastAssistantUserMessageId: turnGateRef.current.lastAssistantUserMessageId,
+        visibleAssistantAlreadyCommitted:
+          (visibleAssistantTurnRef.current.get(sourceUserMessageId) ?? null) !== null,
+      })
+          ? recoverSkippedAssistantRender(
+              event.text,
+              activeAssistantTraceRef.current,
+              appendResult.reason,
+            )
+          : false;
+      pushTurnTrace("turn.engine.render.result", {
+        request_id: activeAssistantTraceRef.current?.requestId ?? "none",
+        session_id: activeAssistantTraceRef.current?.sessionId ?? turnGateRef.current.sessionId,
+        user_message_id: sourceUserMessageId,
+        committed: appendResult.committed,
+        recovered,
+        reason: appendResult.reason,
+        rendered_text: appendResult.renderedText,
+        at_ms: now(),
+      });
+      if (!appendResult.committed && !recovered) {
+        pushTurnTrace("turn.engine.render.skipped", {
+          request_id: activeAssistantTraceRef.current?.requestId ?? "none",
+          session_id: activeAssistantTraceRef.current?.sessionId ?? turnGateRef.current.sessionId,
+          user_message_id: sourceUserMessageId,
+          reason: appendResult.reason,
+          at_ms: now(),
+        });
+      }
+      return appendResult.committed || recovered;
     }
 
     if (event.type === "user.input.received") {
@@ -3540,22 +3804,23 @@ export default function SessionPage() {
         sessionMetricsRef.current.responseLatencySamples += 1;
         awaitingUserSinceRef.current = null;
       }
-      return;
+      return false;
     }
 
     if (event.type === "session.completed") {
       void finalizeSessionTracking("completed");
-      return;
+      return false;
     }
 
     if (event.type === "session.failed") {
       void finalizeSessionTracking(`failed:${event.reason}`);
-      return;
+      return false;
     }
 
     if (event.type === "session.stopped") {
       void finalizeSessionTracking(`stopped:${event.reason}`);
     }
+    return false;
   }
 
   function disposeEngine() {
@@ -3742,6 +4007,7 @@ export default function SessionPage() {
     const requestId = createRequestId("turn");
     lastAssistantReplayRef.current = null;
     committedAssistantTurnRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
+    visibleAssistantTurnRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
     inFlightTurnRequestRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
     inFlightModelRequestRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
     pendingUserTurnRef.current = {
@@ -3812,20 +4078,48 @@ export default function SessionPage() {
     if (engineState === "waiting_for_user") {
       void persistMemoryFromResponse(text);
     }
+    const shouldRunStandaloneTurn =
+      !dynamicRuntimeRef.current.active &&
+      !dynamicRuntimeRef.current.warming &&
+      !isSessionActive(sessionState);
+    if (sessionTestHooksEnabledRef.current) {
+      window.setTimeout(() => {
+        void runTestHookPendingTurn();
+      }, 0);
+    } else if (shouldRunStandaloneTurn) {
+      window.setTimeout(() => {
+        void runStandalonePendingTurn();
+      }, 0);
+    }
   }
 
-  async function readStreamedAssistantText(response: Response, requestId: string): Promise<string> {
+  async function readStreamedAssistantText(
+    response: Response,
+    requestId: string,
+    sourceUserMessageId: number,
+  ): Promise<string> {
     const finalizeGuard = registerStreamFinalize(finalizedRequestIdsRef.current, requestId);
     if (!finalizeGuard.allow) {
       pushTurnTrace("turn.stream.duplicate_finalize_blocked", {
         request_id: requestId,
         session_id: turnGateRef.current.sessionId,
+        user_message_id: sourceUserMessageId,
         reason: finalizeGuard.reason,
         at_ms: now(),
       });
       return SESSION_CHAT_NOOP_SENTINEL;
     }
     if (!response.body) {
+      pushTurnTrace("turn.model.response_payload", {
+        request_id: requestId,
+        session_id: turnGateRef.current.sessionId,
+        user_message_id: sourceUserMessageId,
+        content_type: response.headers.get("content-type") ?? "unknown",
+        raw_body: "",
+        parsed_text: "",
+        parse_status: "missing_body",
+        at_ms: now(),
+      });
       return "";
     }
 
@@ -3833,6 +4127,7 @@ export default function SessionPage() {
     const decoder = new TextDecoder();
     let buffer = "";
     let fullText = "";
+    let rawPayload = "";
 
     while (true) {
       const { done, value } = await reader.read();
@@ -3840,7 +4135,9 @@ export default function SessionPage() {
         break;
       }
 
-      buffer += decoder.decode(value, { stream: true });
+      const chunk = decoder.decode(value, { stream: true });
+      rawPayload += chunk;
+      buffer += chunk;
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 
@@ -3861,6 +4158,7 @@ export default function SessionPage() {
     }
 
     if (buffer.trim()) {
+      rawPayload += buffer;
       try {
         const parsed = JSON.parse(buffer) as { response?: unknown };
         if (typeof parsed.response === "string") {
@@ -3870,6 +4168,17 @@ export default function SessionPage() {
         // ignore malformed tail chunk
       }
     }
+
+    pushTurnTrace("turn.model.response_payload", {
+      request_id: requestId,
+      session_id: turnGateRef.current.sessionId,
+      user_message_id: sourceUserMessageId,
+      content_type: response.headers.get("content-type") ?? "unknown",
+      raw_body: rawPayload.slice(0, 600),
+      parsed_text: fullText.trim().slice(0, 400),
+      parse_status: fullText.trim() ? "parsed" : "empty_after_parse",
+      at_ms: now(),
+    });
 
     return fullText.trim();
   }
@@ -3944,6 +4253,20 @@ export default function SessionPage() {
       user_intent: intent,
       at_ms: now(),
     });
+    pushTurnTrace("turn.model.request_payload", {
+      request_id: requestId,
+      session_id: turnGateRef.current.sessionId,
+      user_message_id: sourceUserMessageId,
+      user_text: userText,
+      prompt_messages: chatMessages.length,
+      awaiting_user: awaitingUser,
+      session_phase: phase,
+      memory_text: userText,
+      working_memory_topic: workingMemoryRef.current.current_topic,
+      working_memory_unresolved_question: workingMemoryRef.current.current_unresolved_question,
+      working_memory_pending_proposal: workingMemoryRef.current.pending_proposal_kind,
+      at_ms: now(),
+    });
 
     const response = await fetch("/api/chat", {
       method: "POST",
@@ -3969,6 +4292,7 @@ export default function SessionPage() {
         memoryAutoSave,
         memoryText: userText,
         conversationState: conversationStateRef.current,
+        workingMemory: workingMemoryRef.current,
         awaitingUser,
         userAnswered: intent === "user_answer",
         verificationJustCompleted:
@@ -3997,6 +4321,13 @@ export default function SessionPage() {
     const deterministicRailHeader = response.headers.get("x-raven-deterministic-rail")?.trim() || null;
     const serverRequestId = response.headers.get("x-raven-request-id")?.trim() || null;
     const serverTurnId = response.headers.get("x-raven-turn-id")?.trim() || null;
+    const rawGameStartDetected = response.headers.get("x-raven-game-start-detected") === "1";
+    const rawGameStartQuestionPresent =
+      response.headers.get("x-raven-game-start-raw-question-present") === "1";
+    const finalGameStartQuestionPresent =
+      response.headers.get("x-raven-game-start-final-question-present") === "1";
+    const promptProfile = response.headers.get("x-raven-prompt-profile")?.trim() || "unknown";
+    const promptRoute = response.headers.get("x-raven-prompt-route")?.trim() || "unknown";
     pushTurnTrace("turn.model.response", {
       request_id: requestId,
       session_id: turnGateRef.current.sessionId,
@@ -4006,6 +4337,11 @@ export default function SessionPage() {
       deterministic_rail: deterministicRailHeader ?? "none",
       server_request_id: serverRequestId ?? "none",
       server_turn_id: serverTurnId ?? "none",
+      game_start_detected: rawGameStartDetected,
+      raw_game_start_question_present: rawGameStartQuestionPresent,
+      final_game_start_question_present: finalGameStartQuestionPresent,
+      prompt_profile: promptProfile,
+      prompt_route: promptRoute,
       at_ms: now(),
     });
     const responseDialogueAct = response.headers.get("x-raven-dialogue-act")?.trim() || dialogueAct;
@@ -4014,6 +4350,12 @@ export default function SessionPage() {
     const criticReasons = parseHeaderList(response.headers.get("x-raven-critic-reasons"));
     const shapeReason = response.headers.get("x-raven-shape-reason")?.trim() || "none";
     const noopReason = response.headers.get("x-raven-noop-reason")?.trim() || null;
+    const repairTurnDetected = response.headers.get("x-raven-repair-turn") === "1";
+    const repairSource = response.headers.get("x-raven-repair-source")?.trim() || "none";
+    const repairReferent = response.headers.get("x-raven-repair-referent")?.trim() || "none";
+    const repairConfidence = response.headers.get("x-raven-repair-confidence")?.trim() || "none";
+    const repairFallbackRestatement =
+      response.headers.get("x-raven-repair-fallback-restatement") === "1";
     const immersionDebug: ImmersionDebugState = {
       timestamp: now(),
       dialogueAct: responseDialogueAct,
@@ -4035,6 +4377,18 @@ export default function SessionPage() {
           `noop=${immersionDebug.noopReason ?? "none"}`,
           `critic=${immersionDebug.criticReasons.join("|") || "none"}`,
           `playbooks=${immersionDebug.selectedPlaybooks.join("|") || "none"}`,
+        ].join(" "),
+      });
+    }
+    if (debugMode && repairTurnDetected) {
+      pushFeed({
+        timestamp: now(),
+        label: "repair.meta",
+        detail: [
+          `source=${repairSource}`,
+          `referent=${repairReferent}`,
+          `confidence=${repairConfidence}`,
+          `fallback=${repairFallbackRestatement ? "1" : "0"}`,
         ].join(" "),
       });
     }
@@ -4068,11 +4422,14 @@ export default function SessionPage() {
             ? "deterministic_scene"
             : "model",
           outputGeneratorCount: 1,
+          rawGameStartDetected,
+          rawGameStartQuestionPresent,
+          finalGameStartQuestionPresent,
         },
       };
     }
 
-    const text = await readStreamedAssistantText(response, requestId);
+    const text = await readStreamedAssistantText(response, requestId, sourceUserMessageId);
     finishTurnRequest(inFlightModelRequestRef.current, sourceUserMessageId, requestId);
     if (text === SESSION_CHAT_NOOP_SENTINEL) {
       return {
@@ -4095,10 +4452,21 @@ export default function SessionPage() {
             ? "deterministic_scene"
             : "model",
           outputGeneratorCount: 1,
+          rawGameStartDetected,
+          rawGameStartQuestionPresent,
+          finalGameStartQuestionPresent,
         },
       };
     }
     if (!text) {
+      pushTurnTrace("turn.model.response_dropped", {
+        request_id: requestId,
+        session_id: turnGateRef.current.sessionId,
+        user_message_id: sourceUserMessageId,
+        reason: "empty_text_after_parse",
+        generation_path: generationPath,
+        at_ms: now(),
+      });
       return null;
     }
     const continuityFallback = buildTopicFallback(
@@ -4128,6 +4496,9 @@ export default function SessionPage() {
           ? "deterministic_scene"
           : "model",
         outputGeneratorCount: 1,
+        rawGameStartDetected,
+        rawGameStartQuestionPresent,
+        finalGameStartQuestionPresent,
       },
     };
   }
@@ -4144,6 +4515,14 @@ export default function SessionPage() {
     const nextWorkingMemory = workingMemoryRef.current;
     const summaryRequest = isProfileSummaryRequest(pendingTurn.text);
     const chatSwitchRequest = isChatSwitchRequest(pendingTurn.text);
+    const continuityTopic =
+      workingMemoryRef.current.current_topic !== "none"
+        ? workingMemoryRef.current.current_topic
+        : conversationStateRef.current.last_conversation_topic !== "none"
+          ? conversationStateRef.current.last_conversation_topic
+          : conversationStateRef.current.active_thread !== "none"
+            ? conversationStateRef.current.active_thread
+            : sceneStateRef.current.agreed_goal || null;
     const relationalRouteSelected =
       (isAssistantSelfQuestion(pendingTurn.text) || isMutualGettingToKnowRequest(pendingTurn.text)) &&
       !sceneStateRef.current.task_hard_lock_active;
@@ -4187,15 +4566,16 @@ export default function SessionPage() {
             interactionMode: sceneStateRef.current.interaction_mode,
             topicType: sceneStateRef.current.topic_type,
             lastQuestion: previousMemory.last_user_question?.value ?? null,
+            lastUserText:
+              previousMemory.last_user_answer?.value ??
+              previousMemory.last_user_question?.value ??
+              null,
             lastAssistantText:
               recentRavenOutputsRef.current[recentRavenOutputsRef.current.length - 1] ??
               sceneStateRef.current.last_profile_prompt ??
               null,
             lastUserAnswer: previousMemory.last_user_answer?.value ?? null,
-            currentTopic:
-              workingMemoryRef.current.current_topic !== "none"
-                ? workingMemoryRef.current.current_topic
-                : sceneStateRef.current.agreed_goal || null,
+            currentTopic: continuityTopic,
           })
         : null;
     const lastAssistantText =
@@ -4206,9 +4586,7 @@ export default function SessionPage() {
       userText: pendingTurn.text,
       previousAssistantText: lastAssistantText,
       currentTopic:
-        workingMemoryRef.current.current_topic !== "none"
-          ? workingMemoryRef.current.current_topic
-          : null,
+        continuityTopic,
     });
     const deterministicCoreConversationReply =
       shouldStabilizeCoreConversationMove(
@@ -4234,10 +4612,7 @@ export default function SessionPage() {
         ? pendingTurn.intent === "user_question"
           ? buildHumanQuestionFallback(pendingTurn.text, "neutral", {
               previousAssistantText: lastAssistantText,
-              currentTopic:
-                workingMemoryRef.current.current_topic !== "none"
-                  ? workingMemoryRef.current.current_topic
-                  : sceneStateRef.current.agreed_goal || null,
+              currentTopic: continuityTopic,
               inventory: sessionInventory,
             })
           : buildRelationalChatReply(
@@ -4248,7 +4623,7 @@ export default function SessionPage() {
         : null;
     const deterministicQuestionReply =
       deterministicRelationalReply ||
-      !shouldDeterministicallyAnswerOpenQuestion(
+          !shouldDeterministicallyAnswerOpenQuestion(
         pendingTurn.text,
         sceneStateRef.current,
         pendingTurn.dialogueAct,
@@ -4256,10 +4631,7 @@ export default function SessionPage() {
         ? null
         : buildHumanQuestionFallback(pendingTurn.text, "neutral", {
             previousAssistantText: lastAssistantText,
-            currentTopic:
-              workingMemoryRef.current.current_topic !== "none"
-                ? workingMemoryRef.current.current_topic
-                : sceneStateRef.current.agreed_goal || null,
+            currentTopic: continuityTopic,
             inventory: sessionInventory,
           });
 
@@ -4371,26 +4743,16 @@ export default function SessionPage() {
       pendingTurn.dialogueAct === "short_follow_up" &&
       Boolean(shortFollowUpReply ?? scaffolded ?? sceneFallback);
     const forceDeterministicConversationReply =
-      summaryRouteSelected ||
-      chatSwitchRouteSelected ||
-      shortFollowUpRouteSelected ||
-      Boolean(deterministicCoreConversationReply) ||
-      (Boolean(scaffolded) && isTopicInitiationRequest(pendingTurn.text)) ||
-      (Boolean(scaffolded) && isInventoryUseQuestion(pendingTurn.text)) ||
-      (Boolean(scaffolded) &&
-        (pendingTurn.dialogueAct === "task_request" ||
-          pendingTurn.dialogueAct === "duration_request")) ||
-      Boolean(deterministicGreetingReply) ||
-      Boolean(deterministicRelationalReply) ||
-      Boolean(deterministicQuestionReply) ||
-      Boolean(bareToyTaskClarificationReply);
+      Boolean(deterministicObservationReply) ||
+      Boolean(deterministicTaskReply);
     const bypassModel =
       forceDeterministicConversationReply ||
       shouldBypassModelForSceneTurn({
-      sceneState: sceneStateRef.current,
-      dialogueAct: pendingTurn.dialogueAct,
-      hasDeterministicCandidate: Boolean(deterministicCandidate),
-    });
+        sceneState: sceneStateRef.current,
+        dialogueAct: pendingTurn.dialogueAct,
+        hasDeterministicCandidate: Boolean(deterministicCandidate),
+        latestUserText: pendingTurn.text,
+      });
     const generated = bypassModel
       ? null
       : await generateSessionRespondText(
@@ -4406,7 +4768,7 @@ export default function SessionPage() {
         ? generated.node.text
         : null;
     if (generated?.node.type === "respond_step") {
-      availableFamilies.push(generated.trace.source);
+      availableFamilies.push(mapAssistantReplySourceToTurnResponseFamily(generated.trace.source));
     }
     if (!deterministicCandidate && !generated?.node) {
       availableFamilies.push("scene_fallback");
@@ -4414,6 +4776,18 @@ export default function SessionPage() {
     if (responseText === SESSION_CHAT_NOOP_SENTINEL) {
       return null;
     }
+    const turnPlan =
+      pendingTurn.dialogueAct === "user_question" || pendingTurn.dialogueAct === "short_follow_up"
+        ? buildTurnPlan(
+            conversationStateRef.current.recent_window.map((entry) => ({
+              role: entry.role,
+              content: entry.content,
+            })),
+            {
+              conversationState: conversationStateRef.current,
+            },
+          )
+        : null;
     const replyText = responseText ?? sceneFallback;
     const alignedResponseText =
       !bypassModel ||
@@ -4439,6 +4813,8 @@ export default function SessionPage() {
       dialogueAct: pendingTurn.dialogueAct,
       lastAssistantText:
         recentRavenOutputsRef.current[recentRavenOutputsRef.current.length - 1] ?? null,
+      toneProfile: settings.toneProfile,
+      turnPlan,
       sceneState: sceneStateRef.current,
       commitmentState: commitmentDecision.next.locked
         ? commitmentDecision.next
@@ -4447,13 +4823,47 @@ export default function SessionPage() {
       inventory: sessionInventory,
       observationTrust: evaluateObservationTrust(latestObservationRef.current, now()),
     });
-    const dialogueAlignedText = isAlignedWithDialogueAct(
-      pendingTurn.dialogueAct,
+    const rawGameStartInspection = inspectGameStartContract(
+      replyText,
+      sceneStateRef.current.game_template_id,
+    );
+    const gatedGameStartInspection = inspectGameStartContract(
       responseGate.text,
-      pendingTurn.text,
-    )
-      ? responseGate.text
-      : sceneFallback;
+      sceneStateRef.current.game_template_id,
+    );
+    const dialogueAlignedText = chooseDeliveredAssistantText({
+      responseText: responseGate.text,
+      sceneFallback,
+      responseGateForced: responseGate.forced,
+      responseGateReason: responseGate.reason,
+      dialogueAct: pendingTurn.dialogueAct,
+      userText: pendingTurn.text,
+      dialogueAligned: isAlignedWithDialogueAct(
+        pendingTurn.dialogueAct,
+        responseGate.text,
+        pendingTurn.text,
+      ),
+    });
+    const projectedSceneState = noteSceneStateAssistantTurn(sceneStateRef.current, {
+      text: dialogueAlignedText,
+      commitment: dialogueAlignedText,
+    });
+    const projectedConversationMode = projectedSceneState.interaction_mode;
+    if (nextMemory.conversation_mode?.value !== projectedConversationMode) {
+      nextMemory = writeConversationMode(nextMemory, projectedConversationMode, timestamp, 0.96);
+      memoryWritesAttempted = [
+        ...memoryWritesAttempted,
+        { key: "conversation_mode", value: projectedConversationMode },
+      ];
+      memoryWritesCommitted = [
+        ...memoryWritesCommitted,
+        { key: "conversation_mode", value: projectedConversationMode },
+      ];
+      syncSessionMemory(
+        nextMemory,
+        `assistant commit -> conversation_mode=${projectedConversationMode}`,
+      );
+    }
     const nextCommitmentState =
       commitmentDecision.next.locked &&
       isResponseAlignedWithCommitment(commitmentDecision.next, dialogueAlignedText)
@@ -4491,20 +4901,32 @@ export default function SessionPage() {
       nextTurnId,
       phase,
       memory: nextMemory,
-      interactionMode: sceneStateRef.current.interaction_mode,
+      interactionMode: projectedSceneState.interaction_mode,
       selectedFamily,
       availableFamilies: uniqueAvailableFamilies,
       responseGateForced: responseGate.forced,
       responseMode: shortFollowUpRouteSelected ? "short_follow_up" : "default",
     });
+    const finalGameStartInspection = inspectGameStartContract(
+      finalized.text,
+      projectedSceneState.game_template_id,
+    );
     pushTurnTrace("turn.response.selected", {
       request_id: pendingTurn.requestId,
       session_id: turnGateRef.current.sessionId,
       user_message_id: pendingTurn.messageId,
       detected_intent: pendingTurn.intent,
       dialogue_act: pendingTurn.dialogueAct,
+      active_thread: conversationStateRef.current.active_thread,
+      active_topic: conversationStateRef.current.active_topic,
+      continuity_context_present:
+        conversationStateRef.current.active_thread !== "none" ||
+        conversationStateRef.current.last_conversation_topic !== "none",
       conversation_mode: nextMemory.conversation_mode?.value ?? "none",
-      interaction_mode: sceneStateRef.current.interaction_mode,
+      interaction_mode: projectedSceneState.interaction_mode,
+      topic_type: projectedSceneState.topic_type,
+      game_progress: projectedSceneState.game_progress,
+      task_progress: projectedSceneState.task_progress,
       memory_writes_attempted: memoryWritesAttempted,
       memory_writes_committed: memoryWritesCommitted,
       fallback_chosen: responseGate.forced,
@@ -4523,6 +4945,16 @@ export default function SessionPage() {
       output_generator_families: uniqueAvailableFamilies,
       more_than_one_output_generator_fired: finalized.multipleGeneratorsFired,
       reflection_appended: finalized.reflectionAppended,
+      game_start_detected: finalGameStartInspection.detected,
+      raw_game_start_detected:
+        rawGameStartInspection.detected || Boolean(generated?.trace.rawGameStartDetected),
+      raw_game_start_question_present:
+        generated?.trace.rawGameStartQuestionPresent ?? rawGameStartInspection.hasPlayablePrompt,
+      gated_game_start_question_present: gatedGameStartInspection.hasPlayablePrompt,
+      final_game_start_question_present:
+        generated?.trace.finalGameStartQuestionPresent ?? finalGameStartInspection.hasPlayablePrompt,
+      final_mode_written: nextMemory.conversation_mode?.value ?? "none",
+      forbidden_internal_string_blocked: responseGate.reason === "removed_internal_or_identity_leak",
       post_processing_modified_output:
         truncateWords(dialogueAlignedText) !== truncateWords(finalized.text),
       at_ms: now(),
@@ -4730,7 +5162,12 @@ export default function SessionPage() {
       sessionId: turnGateRef.current.sessionId,
       sourceUserMessageId: pendingTurn.messageId,
       stepId: `idle-recovery-${pendingTurn.messageId}`,
-      source: recovery.source,
+      source:
+        recovery.source === "model" ||
+        recovery.source === "deterministic_task" ||
+        recovery.source === "deterministic_observation"
+          ? recovery.source
+          : "deterministic_scene",
       modelRan: false,
       deterministicRail: recovery.deterministicRail,
       postProcessed: false,
@@ -4978,7 +5415,12 @@ export default function SessionPage() {
     };
   }
 
-  async function runTestHookPendingTurn() {
+  async function processPendingUserTurnLocally(options?: {
+    allowRecovery?: boolean;
+    processingSource?: "test_hook" | "standalone";
+  }) {
+    const allowRecovery = options?.allowRecovery === true;
+    const processingSource = options?.processingSource ?? "standalone";
     if (dynamicRuntimeRef.current.active || dynamicRuntimeRef.current.warming) {
       return;
     }
@@ -4994,6 +5436,7 @@ export default function SessionPage() {
     );
     if (!turnRequestGuard.allow) {
       if (
+        allowRecovery &&
         turnRequestGuard.reason === "request_already_active" &&
         now() - pendingTurn.acceptedAtMs >= 1000
       ) {
@@ -5001,6 +5444,14 @@ export default function SessionPage() {
       }
       return;
     }
+    pushTurnTrace("turn.local_processing_started", {
+      request_id: pendingTurn.requestId,
+      session_id: turnGateRef.current.sessionId,
+      user_message_id: pendingTurn.messageId,
+      source: processingSource,
+      step_index: turnGateRef.current.stepIndex,
+      at_ms: now(),
+    });
 
     const stepIndex = turnGateRef.current.stepIndex;
     const prepared = await buildRespondNodeForPendingTurn(pendingTurn, stepIndex);
@@ -5037,7 +5488,60 @@ export default function SessionPage() {
       finalOutputSource: prepared.trace.finalOutputSource,
       outputGeneratorCount: prepared.trace.outputGeneratorCount,
     };
-    appendRavenOutput(promptText);
+    pushTurnTrace("turn.render.attempt", {
+      request_id: pendingTurn.requestId,
+      session_id: turnGateRef.current.sessionId,
+      user_message_id: pendingTurn.messageId,
+      selected_text: promptText,
+      selected_node_type: selectedNode.type,
+      final_output_source: prepared.trace.finalOutputSource,
+      at_ms: now(),
+    });
+    const appendResult = appendRavenOutput(promptText);
+    let recoveredRender = false;
+    if (
+      !appendResult.committed &&
+      shouldRecoverSkippedAssistantRender({
+        appendCommitted: appendResult.committed,
+        appendReason: appendResult.reason,
+        hasRenderableText: appendResult.hasRenderableText,
+        sourceUserMessageId: pendingTurn.messageId,
+        lastAssistantUserMessageId: turnGateRef.current.lastAssistantUserMessageId,
+        visibleAssistantAlreadyCommitted:
+          (visibleAssistantTurnRef.current.get(pendingTurn.messageId) ?? null) !== null,
+      })
+    ) {
+      recoveredRender = recoverSkippedAssistantRender(
+        promptText,
+        activeAssistantTraceRef.current,
+        appendResult.reason,
+      );
+    }
+    pushTurnTrace("turn.render.result", {
+      request_id: pendingTurn.requestId,
+      session_id: turnGateRef.current.sessionId,
+      user_message_id: pendingTurn.messageId,
+      committed: appendResult.committed,
+      recovered: recoveredRender,
+      reason: appendResult.reason,
+      rendered_text: appendResult.renderedText,
+      at_ms: now(),
+    });
+    if (!appendResult.committed && !recoveredRender) {
+      pushTurnTrace("turn.render.skipped", {
+        request_id: pendingTurn.requestId,
+        session_id: turnGateRef.current.sessionId,
+        user_message_id: pendingTurn.messageId,
+        reason: appendResult.reason,
+        at_ms: now(),
+      });
+      activeAssistantTraceRef.current = null;
+      finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+      setMessage("Raven generated a reply, but rendering was skipped. Check the trace for details.");
+      lastHandledUserMessageIdRef.current = pendingTurn.messageId;
+      pendingUserTurnRef.current = null;
+      return;
+    }
     activeAssistantTraceRef.current = null;
     finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
 
@@ -5081,6 +5585,29 @@ export default function SessionPage() {
     pendingUserTurnRef.current = null;
   }
 
+  async function runStandalonePendingTurn() {
+    if (dynamicRuntimeRef.current.active || dynamicRuntimeRef.current.warming) {
+      return;
+    }
+    if (isSessionActive(sessionState)) {
+      return;
+    }
+    await processPendingUserTurnLocally({
+      allowRecovery: false,
+      processingSource: "standalone",
+    });
+  }
+
+  async function runTestHookPendingTurn() {
+    if (!sessionTestHooksEnabledRef.current) {
+      return;
+    }
+    await processPendingUserTurnLocally({
+      allowRecovery: true,
+      processingSource: "test_hook",
+    });
+  }
+
   async function runDynamicStep(
     step: SessionStep,
     onFirstOutput: (text: string) => void,
@@ -5108,8 +5635,10 @@ export default function SessionPage() {
       const unsubscribe = engine.onEvent((event) => {
         if (event.type === "output" && !outputHandled) {
           outputHandled = true;
-          handleEngineEvent(event);
-          onFirstOutput(event.text);
+          const rendered = handleEngineEvent(event);
+          if (rendered) {
+            onFirstOutput(event.text);
+          }
         } else if (event.type !== "output") {
           handleEngineEvent(event);
         }
@@ -5176,10 +5705,35 @@ export default function SessionPage() {
     runtime.plannerAbort = null;
     runtime.loopId += 1;
     const loopId = runtime.loopId;
-    applyContractState(createSessionStateContract());
-    syncConversationState(createConversationStateSnapshot(turnGateRef.current.sessionId));
+    const preservedPendingTurn = pendingUserTurnRef.current;
+    const preserveQueuedUserTurn = shouldPreserveQueuedUserTurnOnSessionStart({
+      pendingTurnMessageId: preservedPendingTurn?.messageId ?? 0,
+      lastHandledUserMessageId: lastHandledUserMessageIdRef.current,
+    });
+    const preservedContract = currentContractState();
+    const preservedConversationState = conversationStateRef.current;
+    const preservedSessionMemory = sessionMemoryRef.current;
+    const preservedRecentDialogue = recentDialogueRef.current;
+    const preservedTopicAnchor = topicAnchorRef.current;
+    pushTurnTrace("session.loop.start_context", {
+      session_id: turnGateRef.current.sessionId,
+      preserve_queued_user_turn: preserveQueuedUserTurn,
+      pending_turn_message_id: preservedPendingTurn?.messageId ?? 0,
+      last_handled_user_message_id: lastHandledUserMessageIdRef.current,
+      at_ms: now(),
+    });
+    applyContractState(
+      preserveQueuedUserTurn
+        ? preservedContract
+        : createSessionStateContract(turnGateRef.current.sessionId),
+    );
+    syncConversationState(
+      preserveQueuedUserTurn
+        ? preservedConversationState
+        : createConversationStateSnapshot(turnGateRef.current.sessionId),
+    );
     setPromptDebugState(null);
-    sessionMemoryRef.current = createSessionMemory();
+    sessionMemoryRef.current = preserveQueuedUserTurn ? preservedSessionMemory : createSessionMemory();
     commitmentRef.current = createCommitmentState();
     syncSceneState({
       ...createSceneState(),
@@ -5191,16 +5745,19 @@ export default function SessionPage() {
     phaseRef.current = "warmup";
     complianceScoreRef.current = 0;
     lastHandledUserMessageIdRef.current = 0;
-    pendingUserTurnRef.current = null;
+    pendingUserTurnRef.current = preserveQueuedUserTurn ? preservedPendingTurn : null;
     pendingVerificationRef.current = null;
     clarifiedMessageIdRef.current = null;
     activeAskSlotRef.current = null;
     recentVerifySummariesRef.current = [];
     lastAssistantReplayRef.current = null;
-    recentDialogueRef.current = [];
-    topicAnchorRef.current = null;
+    visibleAssistantTurnRef.current.clear();
+    recentDialogueRef.current = preserveQueuedUserTurn ? preservedRecentDialogue : [];
+    topicAnchorRef.current = preserveQueuedUserTurn ? preservedTopicAnchor : null;
     setDynamicStepCount(0);
-    setSessionMemorySummary("- none");
+    setSessionMemorySummary(
+      preserveQueuedUserTurn ? summarizeSessionMemory(sessionMemoryRef.current) : "- none",
+    );
     setSessionPhase("warmup");
     setLastUserIntent("user_ack");
     setLastDialogueAct("noop");
@@ -6032,9 +6589,6 @@ export default function SessionPage() {
 
     if (voiceAutoSend) {
       void acceptUserResponse(transcript);
-      window.setTimeout(() => {
-        void runTestHookPendingTurn();
-      }, 0);
       setUserDraft("");
       markVoiceTranscriptSent(transcript);
       setMessage(null);
@@ -6200,9 +6754,6 @@ export default function SessionPage() {
       return;
     }
     void acceptUserResponse(text);
-    window.setTimeout(() => {
-      void runTestHookPendingTurn();
-    }, 0);
     setUserDraft("");
   }
 
@@ -6631,6 +7182,9 @@ export default function SessionPage() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      if (!sessionTestHooksEnabledRef.current) {
+        return;
+      }
       const pendingTurn = pendingUserTurnRef.current;
       if (!pendingTurn) {
         return;

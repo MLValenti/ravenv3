@@ -3,6 +3,9 @@ import type { ConversationStateSnapshot } from "./conversation-state.ts";
 import type { TurnPlan } from "./turn-plan.ts";
 import { buildCoreConversationReply } from "./core-turn-move.ts";
 import { isAssistantSelfQuestion } from "../session/interaction-mode.ts";
+import { isCoherentRelationalQuestionAnswer } from "./relational-answer-alignment.ts";
+import { isClarificationExpansionRequest } from "./repair-turn.ts";
+import { toUserFacingDetail, toUserFacingThreadLabel } from "./user-facing-thread.ts";
 
 export type ResponseStrategy =
   | "answer_direct"
@@ -22,6 +25,16 @@ export function chooseResponseStrategy(input: {
   const move =
     input.conversationState.relational_continuity
       .should_press_soften_observe_challenge_reward_or_hold;
+  if (
+    input.turnPlan.previousAssistantMessage &&
+    input.turnPlan.currentMode !== "task_planning" &&
+    input.turnPlan.currentMode !== "task_execution" &&
+    input.turnPlan.currentMode !== "locked_task_execution" &&
+    input.turnPlan.currentMode !== "game" &&
+    isClarificationExpansionRequest(input.turnPlan.latestUserMessage)
+  ) {
+    return "answer_direct";
+  }
   if (input.turnPlan.requestedAction === "answer_direct_question") {
     return "answer_direct";
   }
@@ -160,11 +173,20 @@ export function buildContinuityRecoveryReply(input: {
   lastUserMessage: string;
   toneProfile: QuestionToneProfile;
 }): string {
-  const topic =
+  const topic = toUserFacingThreadLabel(
     input.state.active_topic !== "none"
       ? input.state.active_topic
-      : (input.state.user_goal ?? input.state.important_entities[0] ?? "this thread");
-  const openLoop = input.state.open_loops[0] ?? input.state.unanswered_questions[0] ?? topic;
+      : (input.state.user_goal ?? input.state.important_entities[0] ?? "this conversation"),
+    "this conversation",
+  );
+  const openLoop = toUserFacingDetail(
+    input.state.open_loops[0] ?? input.state.unanswered_questions[0] ?? topic,
+    "the next clear part",
+  );
+  const nextCommitment = toUserFacingDetail(
+    input.state.recent_commitments_or_tasks[0] ?? openLoop,
+    "the next clear step",
+  );
   const conversationalRecovery =
     buildCoreConversationReply({
       userText: input.lastUserMessage,
@@ -189,28 +211,29 @@ export function buildContinuityRecoveryReply(input: {
     if (prefersConversationalRecovery) {
       return conversationalRecovery;
     }
-    return `We are still on ${topic}. Fulfill the exact request already in play before you open anything else.`;
+    // Keep continuity recovery natural: no raw planner or runtime wording in visible text.
+    return `Stay with ${topic}. Give me the exact thing already in play before you open anything else.`;
   }
 
   if (input.strategy === "revise_active_thread") {
     if (prefersConversationalRecovery) {
       return conversationalRecovery;
     }
-    return `We stay on ${topic}. Apply the user's requested change to the live thread instead of resetting it.`;
+    return `Stay with ${topic}. Make the change the user just asked for instead of resetting it.`;
   }
 
   if (input.strategy === "continue_open_loop") {
     if (prefersConversationalRecovery) {
       return conversationalRecovery;
     }
-    return `We are still on ${topic}. Stay with the unresolved part: ${openLoop}.`;
+    return `Stay with ${topic}. Finish the part that is still open: ${openLoop}.`;
   }
 
   if (input.strategy === "follow_through_commitment") {
     if (prefersConversationalRecovery) {
       return conversationalRecovery;
     }
-    return `We are still on ${topic}. I want the next move on ${input.state.recent_commitments_or_tasks[0] ?? openLoop}.`;
+    return `Stay with ${topic}. I want the next move on ${nextCommitment}.`;
   }
 
   if (input.strategy === "interpret_then_lead") {
@@ -224,11 +247,11 @@ export function buildContinuityRecoveryReply(input: {
     if (prefersConversationalRecovery) {
       return conversationalRecovery;
     }
-    return `We are still on ${topic}. Keep it clean and give me the exact part you want me to touch next.`;
+    return `Stay with ${topic}. Keep it clean and give me the exact part you want me to touch next.`;
   }
 
   if (input.strategy === "stabilize_scene") {
-    return `We stay on ${topic}. Continue the line that is already live instead of jumping out of it.`;
+    return `Stay with ${topic}. Continue the line that is already in motion instead of jumping out of it.`;
   }
 
   return `Good. That was more honest than the rest. Stay with it and give me the next true part.`;
@@ -286,6 +309,28 @@ export function shouldKeepCoherentModelReply(input: {
   const text = normalize(input.text);
   if (!text) {
     return false;
+  }
+
+  if (isCoherentRelationalQuestionAnswer(input.lastUserMessage, input.text)) {
+    return true;
+  }
+
+  if (
+    input.turnPlan?.previousAssistantMessage &&
+    input.turnPlan.currentMode !== "task_planning" &&
+    input.turnPlan.currentMode !== "task_execution" &&
+    input.turnPlan.currentMode !== "locked_task_execution" &&
+    input.turnPlan.currentMode !== "game" &&
+    isClarificationExpansionRequest(input.lastUserMessage)
+  ) {
+    if (
+      /\b(because|i mean|i meant|that means|when i said|what i was pressing on|it matters because)\b/.test(
+        text,
+      ) ||
+      hasTokenOverlap(input.text, input.turnPlan.previousAssistantMessage)
+    ) {
+      return true;
+    }
   }
 
   if (

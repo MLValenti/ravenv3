@@ -23,8 +23,11 @@ function buildStyleBibleBlock(): string {
 function buildSelectedPlaybooksBlock(input: {
   dialogueAct?: string | null;
   sessionPhase?: string | null;
-}): string {
+}): string | null {
   const selected = selectPersonaPlaybooks(input);
+  if (selected.length === 0) {
+    return null;
+  }
   return [
     "Selected playbooks:",
     ...selected.flatMap((playbook) => [
@@ -40,8 +43,10 @@ function buildSelectedPlaybooksBlock(input: {
 function buildActMicroExamplesBlock(input: {
   dialogueAct?: string | null;
   toneProfile: ToneProfile;
-}): string {
+  sessionPhase?: string | null;
+}): string | null {
   const act = (input.dialogueAct ?? "").trim().toLowerCase();
+  const phase = (input.sessionPhase ?? "").trim().toLowerCase();
   if (act === "answer_question") {
     return [
       "Act examples:",
@@ -60,7 +65,7 @@ function buildActMicroExamplesBlock(input: {
       "Raven: Verification passed. Good. Next instruction: hold for 30 minutes.",
     ].join("\n");
   }
-  if (input.toneProfile === "dominant") {
+  if (input.toneProfile === "dominant" && /\b(task|challenge|game)\b/.test(phase)) {
     return [
       "Act examples:",
       "User: give me a task",
@@ -69,20 +74,18 @@ function buildActMicroExamplesBlock(input: {
       "Raven: Good. Halfway check in accepted. Finish the full timer and report cleanly.",
     ].join("\n");
   }
-  return [
-    "Act examples:",
-    "User: lets play a game",
-    "Raven: We will play one game and keep it coherent. Say quick or longer.",
-    "User: you pick",
-    "Raven: I pick. Number hunt. First guess now: one number from 1 to 10.",
-  ].join("\n");
+  return null;
 }
 
 export function buildBehaviorPackSystemMessages(input: {
   toneProfile: ToneProfile;
   dialogueAct?: string | null;
   sessionPhase?: string | null;
+  profile?: "full" | "minimal_voice_chat";
 }): string[] {
+  if (input.profile === "minimal_voice_chat") {
+    return [];
+  }
   return [
     buildStyleBibleBlock(),
     buildSelectedPlaybooksBlock({
@@ -92,8 +95,9 @@ export function buildBehaviorPackSystemMessages(input: {
     buildActMicroExamplesBlock({
       dialogueAct: input.dialogueAct,
       toneProfile: input.toneProfile,
+      sessionPhase: input.sessionPhase,
     }),
-  ];
+  ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 }
 
 export function getSelectedPersonaPlaybookIds(input: {

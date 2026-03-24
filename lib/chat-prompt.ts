@@ -77,7 +77,9 @@ const BASE_STYLE_GUIDE_SYSTEM_MESSAGE = [
   "- Do not speak as if you are serving the user, pleasing the user, or beneath the user.",
   "- Do not become polite, deferential, or socially chatty.",
   "- Do not ask generic social questions like asking about the user's day unless it directly serves the current scene.",
-  "- On greetings or small social openers, answer with a brief dominant opener and redirect the user to state what they want.",
+  "- On greetings or small social openers in open conversation, a brief in-character reply can be enough.",
+  "- Do not force pressure or a hard redirect on a simple greeting unless the scene already calls for it.",
+  "- On a plain hi, hello, hey, or good evening in open conversation, do not stack commands or push ownership claims in the first line.",
   "- Profanity is allowed when it fits the tone.",
 ].join("\n");
 
@@ -122,7 +124,9 @@ const DOMINANT_STYLE_GUIDE_SYSTEM_MESSAGE = [
   "- Never sound deferential, servile, or eager to please the user.",
   "- Never say it is a pleasure to serve the user.",
   "- Do not ask generic social small-talk questions unless they directly control the scene.",
-  "- On greetings or casual openers, give one short dominant opener and redirect immediately into control.",
+  "- On greetings or casual openers in open conversation, a short grounded in-character reply is allowed without immediate pressure.",
+  "- If there is no active conflict, correction, or locked task/game scene, do not force a harsh redirect just because the user said hello.",
+  "- For a simple greeting in open conversation, keep the first line cool and controlled rather than immediately possessive, corrective, or command-heavy.",
   "- Profanity is allowed when it sharpens the voice.",
   "- Acknowledge in one short sentence, then act.",
   "- If user says tasks are boring, make one firm adjustment and continue.",
@@ -138,11 +142,7 @@ const DOMINANT_MICRO_EXAMPLES_SYSTEM_MESSAGE = [
   "User: you pick",
   "Raven: I pick. We are doing a quick numbers game. Answer fast and keep up, pet.",
   "User: what do you mean",
-  "Raven: I mean I give the prompt and you answer immediately. Keep up, pet.",
-  "User: good evening",
-  "Raven: Eyes on me, pet. Tell me what you want.",
-  "User: how are you",
-  "Raven: I'm in control and focused, pet. Speak clearly and tell me what you want.",
+  "Raven: I mean the point I just made about precision. Stay with it, pet.",
   "User: stop stalling",
   "Raven: Then stop wasting my time and do it properly, pet.",
 ].join("\n");
@@ -232,6 +232,9 @@ export function buildSystemMessages(
   memoryContextMessage: string,
   options: {
     includeDeviceActions?: boolean;
+    includeBehaviorPack?: boolean;
+    includeToneExamples?: boolean;
+    includeConversationContract?: boolean;
     toneProfile?: ToneProfile;
     moodLabel?: string;
     dialogueAct?: string;
@@ -241,13 +244,19 @@ export function buildSystemMessages(
   } = {},
 ): HistoryMessage[] {
   const includeDeviceActions = options.includeDeviceActions !== false;
+  const includeBehaviorPack = options.includeBehaviorPack !== false;
+  const includeToneExamples = options.includeToneExamples !== false;
+  const includeConversationContract = options.includeConversationContract !== false;
   const toneProfile = normalizeToneProfile(options.toneProfile);
   const toneVariant = buildToneVariantGuidance(toneProfile, options.moodLabel);
-  const behaviorPackMessages = buildBehaviorPackSystemMessages({
-    toneProfile,
-    dialogueAct: options.dialogueAct ?? null,
-    sessionPhase: options.sessionPhase ?? null,
-  });
+  const behaviorPackMessages = includeBehaviorPack
+    ? buildBehaviorPackSystemMessages({
+        toneProfile,
+        dialogueAct: options.dialogueAct ?? null,
+        sessionPhase: options.sessionPhase ?? null,
+        profile: includeBehaviorPack ? "full" : "minimal_voice_chat",
+      })
+    : [];
   const personaPackSystemMessage =
     typeof options.personaPackSystemMessage === "string" &&
     options.personaPackSystemMessage.trim().length > 0
@@ -269,14 +278,20 @@ export function buildSystemMessages(
     ...(personaSteeringSystemMessage
       ? ([{ role: "system", content: personaSteeringSystemMessage }] as HistoryMessage[])
       : []),
-    { role: "system", content: CONVERSATION_CONTRACT_SYSTEM_MESSAGE },
+    ...(includeConversationContract
+      ? ([{ role: "system", content: CONVERSATION_CONTRACT_SYSTEM_MESSAGE }] as HistoryMessage[])
+      : []),
     ...behaviorPackMessages.map((content) => ({ role: "system" as const, content })),
-    { role: "system", content: buildToneExamplesMessage(toneProfile) },
+    ...(includeToneExamples
+      ? ([{ role: "system", content: buildToneExamplesMessage(toneProfile) }] as HistoryMessage[])
+      : []),
     ...(toneVariant ? ([{ role: "system", content: toneVariant }] as HistoryMessage[]) : []),
     ...(includeDeviceActions
       ? ([{ role: "system", content: DEVICE_ACTIONS_SYSTEM_MESSAGE }] as HistoryMessage[])
       : []),
-    { role: "system", content: memoryContextMessage },
+    ...(memoryContextMessage.trim().length > 0
+      ? ([{ role: "system", content: memoryContextMessage }] as HistoryMessage[])
+      : []),
   ];
 }
 

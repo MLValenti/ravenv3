@@ -84,10 +84,64 @@ test("conversation state clears answered questions and records assistant commitm
   assert.equal(state.request_fulfilled, true);
   assert.match(state.last_satisfied_request, /what do i do next/i);
   assert.equal(state.pending_modification, "none");
+  assert.match(state.last_assistant_claim, /next, start by locking in your wake time/i);
+  assert.equal(state.last_assistant_question, "none");
   assert.ok(state.open_loops.some((loop) => /wake time/i.test(loop)));
   assert.ok(
     state.rolling_summary.commitments_or_assigned_tasks.some((item) => /wake time/i.test(item)),
   );
+});
+
+test("conversation state stores repair context and assistant referent continuity", () => {
+  let state = createConversationStateSnapshot("conversation-state-repair");
+
+  state = noteConversationUserTurn(state, {
+    text: "none",
+    userIntent: "user_answer",
+    routeAct: "other",
+    nowMs: 1,
+  });
+  state = noteConversationAssistantTurn(state, {
+    text: "You said none, but that answer usually hides something.",
+    ravenIntent: "respond",
+    nowMs: 2,
+  });
+  state = noteConversationUserTurn(state, {
+    text: "what do you mean?",
+    userIntent: "user_short_follow_up",
+    routeAct: "short_follow_up",
+    nowMs: 3,
+  });
+
+  assert.match(state.last_assistant_claim, /you said none, but that answer usually hides something/i);
+  assert.match(state.last_assistant_referent_candidate, /none/i);
+  assert.match(state.repair_context, /source=previous_assistant/i);
+});
+
+test("conversation state keeps stable relational threads for get-to-know and service questions", () => {
+  let state = createConversationStateSnapshot("conversation-state-relational-thread");
+
+  state = noteConversationUserTurn(state, {
+    text: "what do you want to know about me?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+  assert.equal(state.active_thread, "what I want to know about you");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "Good. We can play it both ways. Put a real question on me first, then I may put one back on you.",
+    ravenIntent: "respond",
+    nowMs: 2,
+  });
+  state = noteConversationUserTurn(state, {
+    text: "what can i do to be a better sub to you",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 3,
+  });
+
+  assert.equal(state.active_thread, "what you can do for me");
 });
 
 test("conversation state keeps active thread and modification request until it is fulfilled", () => {

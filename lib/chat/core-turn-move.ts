@@ -9,6 +9,11 @@ import {
   isAssistantServiceQuestion,
   isAssistantTrainingRequest,
 } from "../session/interaction-mode.ts";
+import {
+  detectRepairTurnKind,
+  isClarificationExpansionRequest,
+  resolveRepairTurn,
+} from "./repair-turn.ts";
 
 export type CoreConversationMove =
   | "continue_current_thought"
@@ -60,6 +65,8 @@ const STOP_WORDS = new Set([
   "here",
   "just",
   "keep",
+  "know",
+  "knowing",
   "land",
   "like",
   "mean",
@@ -131,6 +138,8 @@ const WEAK_ANCHOR_TOKENS = new Set([
   "hear",
   "here",
   "keep",
+  "know",
+  "knowing",
   "land",
   "tell",
   "thread",
@@ -196,9 +205,7 @@ function isQuestion(text: string): boolean {
 }
 
 function isClarificationCue(text: string): boolean {
-  return /^(what|what do you mean|why|how so|explain|explain that|clarify|say that again|repeat that|go on|keep going|more|then what)$/i.test(
-    normalize(text).toLowerCase(),
-  );
+  return isClarificationExpansionRequest(text);
 }
 
 function isAgreementCue(text: string): boolean {
@@ -348,6 +355,15 @@ function extractSemanticFocus(text: string | null | undefined): string | null {
   }
   if (/\bwhat would make you useful to me\b/i.test(normalized)) {
     return "what would make you useful to me";
+  }
+  if (/\bwhat i want to know about you\b/i.test(normalized)) {
+    return "what people usually miss about you";
+  }
+  if (/\bwhat you want to know about me\b/i.test(normalized)) {
+    return "what you actually want to know about me";
+  }
+  if (/\bwhat you can do for me\b/i.test(normalized)) {
+    return "what you can do for me";
   }
   if (/\bwhat i can do for you\b/i.test(normalized)) {
     return "what you can do for me";
@@ -600,6 +616,16 @@ export function buildCoreConversationReply(input: CoreTurnMoveInput): string | n
         ? `Yes. Keep going. Stay with the concrete part of ${anchor}, not the wording around it.`
         : "Yes. Keep going. Tell me the concrete part, not the wording around it.";
     case "clarify_meaning":
+      {
+        const repairResolution = resolveRepairTurn({
+          userText: input.userText,
+          previousAssistantText: input.previousAssistantText,
+          currentTopic: input.currentTopic,
+        });
+        if (repairResolution.reply) {
+          return repairResolution.reply;
+        }
+      }
       if (semanticFocus) {
         return `I mean ${semanticFocus}.`;
       }

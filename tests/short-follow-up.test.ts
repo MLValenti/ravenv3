@@ -14,18 +14,31 @@ test("short follow-up helper detects terse clarification turns", () => {
   assert.equal(isShortClarificationTurn("why?"), true);
   assert.equal(isShortClarificationTurn("what do you mean?"), true);
   assert.equal(isShortClarificationTurn("go on"), true);
+  assert.equal(isShortClarificationTurn("tell me more"), true);
   assert.equal(detectShortFollowUpKind("what?"), "what");
   assert.equal(detectShortFollowUpKind("go on"), "go_on");
+  assert.equal(detectShortFollowUpKind("tell me more"), "go_on");
 });
 
 test("short follow-up intent typing stays out of generic question and answer buckets", () => {
   assert.equal(classifyUserIntent("what?", false), "user_short_follow_up");
   assert.equal(classifyUserIntent("what do you mean?", false), "user_short_follow_up");
+  assert.equal(classifyUserIntent("tell me more", false), "user_short_follow_up");
 });
 
 test("short follow-up dialogue routing is explicit and traceable", () => {
   const routed = classifyDialogueRoute({
     text: "what do you mean?",
+    awaitingUser: false,
+    currentTopic: null,
+    nowMs: 1_000,
+  });
+  assert.equal(routed.act, "short_follow_up");
+});
+
+test("tell me more routes as a short follow-up instead of generic question answering", () => {
+  const routed = classifyDialogueRoute({
+    text: "tell me more",
     awaitingUser: false,
     currentTopic: null,
     nowMs: 1_000,
@@ -138,10 +151,10 @@ test("short clarification reply keeps semantic focus on steadiness instead of we
     interactionMode: "relational_chat",
     topicType: "general_request",
     lastAssistantText:
-      "Be useful in a real way. Attention, follow-through, honesty, and enough steadiness that I do not have to drag clarity out of you.",
+      "Usefulness is simple. Be clear, follow through, and stop making me drag the truth out of you. If you want to offer me something, start there.",
   });
 
-  assert.match(reply, /attention, follow-through, honesty, and steadiness/i);
+  assert.match(reply, /usefulness|be clear|follow through|drag the truth out of you/i);
   assert.doesNotMatch(reply, /part about would|part about makes|part about sounds/i);
 });
 
@@ -168,4 +181,72 @@ test("short clarification reply does not literalize malformed answer fragments i
 
   assert.match(reply, /concrete part|last idea|point i just made|exactly what i gave you/i);
   assert.doesNotMatch(reply, /i mean happens|i mean keep|part about happens|part about keep/i);
+});
+
+test("repair clarification resolves none from the previous assistant line instead of saying about none", () => {
+  const reply = buildShortClarificationReply({
+    userText: "what do you mean?",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    lastAssistantText: "You said none, but that answer usually hides something.",
+    lastUserText: "none",
+    lastUserAnswer: "none",
+  });
+
+  assert.match(reply, /when you said none|last answer sounded/i);
+  assert.doesNotMatch(reply, /about none|tell me about none|what part of none/i);
+});
+
+test("repair clarification restates scaffold phrasing instead of asking a new question", () => {
+  const reply = buildShortClarificationReply({
+    userText: "what do you mean?",
+    interactionMode: "normal_chat",
+    topicType: "general_request",
+    lastAssistantText: "Fine. We can talk without the scaffolding for a minute.",
+  });
+
+  assert.match(reply, /stop the scripted questioning|talk directly/i);
+  assert.doesNotMatch(reply, /\?$/i);
+});
+
+test("repair clarification resolves what part from the immediately previous point", () => {
+  const reply = buildShortClarificationReply({
+    userText: "what part?",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    lastAssistantText: "That part matters more than you are pretending.",
+    lastUserText: "I said none because I didn't want to get into it",
+  });
+
+  assert.match(reply, /the part you just said about i said none because i didn't want to get into it|last answer that actually carried weight/i);
+  assert.doesNotMatch(reply, /drop the fog|start talking|part about that/i);
+});
+
+test("repair clarification with weak recovered referent prefers restatement over hallucination", () => {
+  const reply = buildShortClarificationReply({
+    userText: "what do you mean?",
+    interactionMode: "normal_chat",
+    topicType: "general_request",
+    lastAssistantText: "That answer is doing more work than you think.",
+    lastUserText: "none",
+    lastUserAnswer: "none",
+  });
+
+  assert.match(reply, /last answer|doing more work than you think/i);
+  assert.doesNotMatch(reply, /about none|about that|about it/i);
+});
+
+test("repair clarification prefers grounded restatement over a shallow extracted fragment", () => {
+  const reply = buildShortClarificationReply({
+    userText: "what do you mean?",
+    interactionMode: "normal_chat",
+    topicType: "general_request",
+    lastAssistantText:
+      "Then start with what actually holds your attention, and I will stay with that.",
+    lastUserText: "i want to talk",
+    lastUserAnswer: "i want to talk",
+  });
+
+  assert.match(reply, /what is actually holding your attention|start with what is actually holding your attention/i);
+  assert.doesNotMatch(reply, /^i mean holds your attention\.?$/i);
 });

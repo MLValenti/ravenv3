@@ -139,9 +139,9 @@ test("transcript flow asks once, stores answer, answers clarification, and block
   assert.doesNotMatch(noGenericFallback, /Proceed to the next instruction now\./i);
 });
 
-test("implicit follow-up prompts count as questions in both intent layers", () => {
+test("implicit follow-up prompts stay on the short follow-up rail", () => {
   const userIntent = classifyUserIntent("tell me more", false);
-  assert.equal(userIntent, "user_question");
+  assert.equal(userIntent, "user_short_follow_up");
 
   const route = classifyDialogueRoute({
     text: "tell me more",
@@ -149,7 +149,7 @@ test("implicit follow-up prompts count as questions in both intent layers", () =
     currentTopic: null,
     nowMs: 1_000,
   });
-  assert.equal(route.act, "user_question");
+  assert.equal(route.act, "short_follow_up");
 });
 
 test("phase progression and reflection trigger over turns", () => {
@@ -441,7 +441,7 @@ test("session transcript stays dominant and coherent across greeting, wager, gam
     /pleasure serving you|what would you like to talk about next|how's your day been so far|my dear|well-lit area|minimal distractions|how can i help/i;
 
   const greetingReply = buildDeterministicDominantWeakInputReply("hello");
-  assert.equal(greetingReply, "Talk to me. What is on your mind?");
+  assert.equal(greetingReply, "Enough hovering, pet. Tell me what you actually want.");
   assert.doesNotMatch(greetingReply ?? "", disallowedDrift);
 
   const first = classifyDialogueRoute({
@@ -614,7 +614,7 @@ test("session transcript keeps a coherent task lifecycle and supports a 30 minut
     /pleasure serving you|what would you like to talk about next|how's your day been so far|my dear|well-lit area|minimal distractions|how can i help/i;
 
   const greetingReply = buildDeterministicDominantWeakInputReply("hello");
-  assert.equal(greetingReply, "Talk to me. What is on your mind?");
+  assert.equal(greetingReply, "Enough hovering, pet. Tell me what you actually want.");
 
   let scene = createSceneState();
 

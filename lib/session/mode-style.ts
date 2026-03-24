@@ -124,15 +124,15 @@ function normalize(text: string): string {
 }
 
 export function buildOpenChatGreeting(): string {
-  return "Talk to me. What is on your mind?";
+  return "Enough hovering, pet. Tell me what you actually want.";
 }
 
 export function buildHowAreYouOpenReply(): string {
-  return "I am good. Sharp, awake, and paying attention. What is on yours?";
+  return "Sharp enough. Now tell me why you're here.";
 }
 
 export function buildOpenChatNudge(): string {
-  return "All right. Tell me what is on your mind.";
+  return "Fine. Say what you want.";
 }
 
 export function buildClarifyNudge(): string {
@@ -144,7 +144,7 @@ export function buildChatSwitchReply(): string {
 }
 
 export function buildRelationalTurnBack(): string {
-  return "What holds my attention is honesty, usefulness, and control that actually changes something. Start there, and I will stay with it.";
+  return "What keeps my attention is the part that is real. Say that cleanly, and I will stay with it.";
 }
 
 export function applyModeStylePolish(text: string, interactionMode: InteractionMode): string {

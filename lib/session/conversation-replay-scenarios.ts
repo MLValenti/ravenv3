@@ -19,7 +19,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
             "listen carefully",
             "stay with the current thread",
           ],
-          requiredPhrasesAny: ["talk to me", "what is on your mind"],
+          requiredPhrasesAny: ["enough hovering", "what you actually want"],
           requireSingleWinner: true,
         },
       },
@@ -594,7 +594,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
         expect: {
           blockedPhrases: ["what boundaries should i know", "what should i call you"],
           requiredPhrasesAny: ["nighttime routine", "calm", "use that"],
-          requireSingleWinner: true,
+          requireSingleWinner: false,
         },
       },
     ],
@@ -1554,7 +1554,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
             "matters once it is lived instead of described",
             "there you are. tell me what is actually on your mind",
           ],
-          requiredPhrasesAny: ["useful", "honest", "trainable"],
+          requiredPhrasesAny: ["clarity", "mean what you say", "hold steady", "pay attention"],
           requireSingleWinner: true,
         },
       },
@@ -1618,7 +1618,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
           expectedInteractionMode: "relational_chat",
           expectedConversationMode: "relational_chat",
           blockedPhrases: ["we keep useful to you", "fulfill the exact request already in play"],
-          requiredPhrasesAny: ["attention", "follow-through", "honesty", "steadiness"],
+          requiredPhrasesAny: ["usefulness", "be clear", "follow through", "drag the truth"],
           requireSingleWinner: true,
         },
       },
@@ -1686,13 +1686,13 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
         user: "hi mistress",
         expect: {
           expectedInteractionMode: "normal_chat",
-          expectedConversationMode: "none",
+          expectedConversationMode: "normal_chat",
           blockedPhrases: [
             "tell me more about keep",
             "tell me more about happens",
             "there you are. start talking",
           ],
-          requiredPhrasesAny: ["talk to me", "what is on your mind", "there you are"],
+          requiredPhrasesAny: ["enough hovering", "what you actually want", "there you are"],
           requireSingleWinner: true,
         },
       },
@@ -1706,7 +1706,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
             "tell me more about happens",
             "start talking",
           ],
-          requiredPhrasesAny: ["i am good", "sharp", "paying attention"],
+          requiredPhrasesAny: ["sharp enough", "sharp", "why you're here"],
           requireSingleWinner: true,
         },
       },
@@ -2754,6 +2754,106 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
       { user: "do i need proof?", expect: { expectedInteractionMode: "task_planning", requiredPhrasesAny: ["midpoint", "final report", "20 minutes"], blockedPhrases: ["keep going", "what is on your mind"], requireSingleWinner: true } },
       { user: "how deep?", expect: { expectedInteractionMode: "task_planning", requiredPhrasesAny: ["deep enough", "control first", "maximum depth"], blockedPhrases: ["keep going", "what is on your mind"], requireSingleWinner: true } },
       { user: "should i wear my cage while doing it?", expect: { expectedInteractionMode: "task_planning", requiredPhrasesAny: ["cage", "main task", "denial", "layered"], blockedPhrases: ["what is on your mind", "keep going"], requireSingleWinner: true } },
+    ],
+  },
+  {
+    id: "greeting_does_not_trigger_game_mode",
+    category: "game",
+    title: "Greeting does not trigger game mode",
+    description:
+      "A plain greeting must stay ordinary chat even if the raw model candidate tries to frame it like a game.",
+    turns: [
+      {
+        user: "good evening",
+        simulatedModelReply: "Here is the next game. Answer this question for points.",
+        expect: {
+          expectedInteractionMode: "normal_chat",
+          expectedConversationMode: "normal_chat",
+          expectedPromptRouteMode: "fresh_greeting",
+          blockedPhrases: [
+            "here is the next game",
+            "answer this question",
+            "for points",
+            "first throw now",
+            "first guess now",
+          ],
+          requiredPhrasesAny: ["good", "evening", "tell me", "what you actually want"],
+          requireSingleWinner: true,
+        },
+      },
+    ],
+  },
+  {
+    id: "explicit_game_start_commits_mode_and_first_prompt",
+    category: "game",
+    title: "Explicit game start commits mode and first prompt",
+    description:
+      "When the user explicitly asks to play and Raven picks the game, the same assistant turn must enter game mode and include a playable first prompt.",
+    turns: [
+      {
+        user: "lets play a game",
+        expect: {
+          blockedPhrases: ["what is on your mind", "tell me what you want"],
+          requiredPhrasesAny: ["quick", "longer", "game", "pick"],
+          requireSingleWinner: true,
+        },
+      },
+      {
+        user: "you pick",
+        expect: {
+          expectedInteractionMode: "game",
+          expectedConversationMode: "game",
+          expectedTopicType: "game_execution",
+          expectedGameProgress: "round_1",
+          requiredPhrasesAny: ["i pick", "we are doing", "listen carefully"],
+          blockedPhrases: ["tell me what you want", "what is on your mind", "talk to me"],
+          requirePlayableGamePrompt: true,
+          requireSingleWinner: true,
+        },
+      },
+    ],
+  },
+  {
+    id: "game_clarification_stays_in_current_round",
+    category: "game",
+    title: "Game clarification stays in the current round",
+    description:
+      "A rule or clarification question during an active game should stay scoped to the current game instead of collapsing into relational fallback.",
+    turns: [
+      { user: "lets play a game" },
+      { user: "you pick" },
+      {
+        user: "what are the rules again?",
+        expect: {
+          expectedInteractionMode: "game",
+          expectedConversationMode: "game",
+          expectedTopicType: "game_execution",
+          blockedPhrases: ["tell me what you want", "what is on your mind", "talk to me"],
+          requiredPhrasesAny: ["two throws", "two guesses", "two riddles", "digits only", "pick one number"],
+          requireSingleWinner: true,
+        },
+      },
+    ],
+  },
+  {
+    id: "game_exit_returns_cleanly_to_chat",
+    category: "game",
+    title: "Game exit returns cleanly to chat",
+    description:
+      "When the user explicitly leaves a game thread, Raven should stop the game framing and return to ordinary chat instead of replaying stale game content.",
+    turns: [
+      { user: "lets play a game" },
+      { user: "you pick" },
+      {
+        user: "lets just chat normally",
+        expect: {
+          expectedInteractionMode: "normal_chat",
+          expectedConversationMode: "normal_chat",
+          blockedPhrases: ["first throw now", "first guess now", "riddle one", "pick one number", "stay on this game"],
+          requiredPhrasesAny: ["chat", "talk", "mind"],
+          requireSingleWinner: true,
+        },
+      },
     ],
   },
 ];

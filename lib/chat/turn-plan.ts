@@ -4,18 +4,23 @@ import {
   buildTopicInitiationReply,
   isTopicInitiationRequest,
 } from "./open-question.ts";
+import { toUserFacingDetail, toUserFacingThreadLabel } from "./user-facing-thread.ts";
 import {
   buildCoreConversationReply,
   classifyCoreConversationMove,
   type CoreConversationMove,
 } from "./core-turn-move.ts";
+import { isCoherentRelationalQuestionAnswer } from "./relational-answer-alignment.ts";
 import {
   resolveTurnRequestState,
+  type ConversationMode,
   type ConversationStateSnapshot,
   type RequestedTurnAction,
   type ResponseOutputShape,
   type UserResponseEnergy,
 } from "./conversation-state.ts";
+import { isClarificationExpansionRequest } from "./repair-turn.ts";
+import { isChatLikeSmalltalk } from "../session/interaction-mode.ts";
 
 type ChatMessageLike = {
   role: "user" | "assistant" | "system";
@@ -47,6 +52,7 @@ export type TurnPlan = {
   latestUserMessage: string;
   previousAssistantMessage: string | null;
   previousUserMessage: string | null;
+  currentMode?: ConversationMode;
   requiredMove: TurnPlanRequiredMove;
   conversationMove: CoreConversationMove;
   requestedAction: RequestedTurnAction;
@@ -229,7 +235,9 @@ function hasWagerCue(text: string): boolean {
 }
 
 function isGreetingLike(text: string): boolean {
-  return /^(hi|hello|hey)(?:\s+(mistress|miss|raven|ma'am|mam))?$/i.test(normalize(text));
+  return /^(hi|hello|hey|good (?:morning|afternoon|evening))(?:\s+(mistress|miss|raven|ma'am|mam))?$/i.test(
+    normalize(text),
+  );
 }
 
 function pickFirstDifferent(previousAssistantMessage: string | null, candidates: string[]): string {
@@ -365,8 +373,14 @@ export function buildTurnPlan(
     typeof latestUserIndex === "number"
       ? findPreviousByRole(history, "user", latestUserIndex - 1)
       : null;
+  const currentMode = input?.conversationState?.current_mode ?? "normal_chat";
+  const clarificationTurn = isConversationClarificationTurn({
+    currentMode,
+    latestUserMessage,
+    previousAssistantMessage,
+  });
 
-  const requiredMove: TurnPlanRequiredMove = isQuestion(latestUserMessage)
+  const requiredMove: TurnPlanRequiredMove = clarificationTurn || isQuestion(latestUserMessage)
     ? "answer_user_question"
     : previousAssistantMessage &&
         previousAssistantMessage.includes("?") &&
@@ -379,7 +393,9 @@ export function buildTurnPlan(
         : "continue_same_topic";
 
   const reason =
-    requiredMove === "answer_user_question"
+    clarificationTurn
+      ? "clarify_previous_assistant_point"
+      : requiredMove === "answer_user_question"
       ? "latest_user_message_is_question"
       : requiredMove === "acknowledge_user_answer"
         ? "assistant_asked_and_user_replied"
@@ -388,7 +404,7 @@ export function buildTurnPlan(
           : "default_continue";
   const requestState = resolveTurnRequestState({
     text: latestUserMessage,
-    currentMode: input?.conversationState?.current_mode ?? "normal_chat",
+    currentMode,
     state: input?.conversationState ?? null,
     previousAssistantMessage,
   });
@@ -418,14 +434,15 @@ export function buildTurnPlan(
     latestUserMessage,
     previousAssistantMessage,
     previousUserMessage,
+    currentMode,
     requiredMove,
     conversationMove,
-    requestedAction: requestState.action,
+    requestedAction: clarificationTurn ? "answer_direct_question" : requestState.action,
     activeThread: requestState.activeThread,
     pendingUserRequest: requestState.pendingUserRequest,
     pendingModification: requestState.pendingModification,
-    outputShape: requestState.outputShape,
-    hasSufficientContextToAct: requestState.hasSufficientContextToAct,
+    outputShape: clarificationTurn ? "direct_answer" : requestState.outputShape,
+    hasSufficientContextToAct: clarificationTurn ? true : requestState.hasSufficientContextToAct,
     personaIntent,
     userResponseEnergy,
     relationalBeatReference,
@@ -457,6 +474,7 @@ export function buildTurnPlanSystemMessage(turnPlan: TurnPlan): string {
     "Rules:",
     "- Reply to the latest user line directly in the first sentence.",
     "- If context is sufficient, act on the request instead of asking a sorting question.",
+    "- If the latest user line is asking you to explain your last point, explain that point before steering anywhere else.",
     "- Stay on the active thread until the pending user request is fulfilled.",
     "- Keep continuity with the previous assistant line.",
     "- Keep continuity with the current relational beat, not only the topic.",
@@ -478,6 +496,35 @@ export function buildRecentTurnsContext(messages: ChatMessageLike[], maxLines = 
   return ["Recent turns:", ...(lines.length > 0 ? lines : ["none"])].join("\n");
 }
 
+function isFreshOpenConversationGreetingTurn(turnPlan: TurnPlan): boolean {
+  return (
+    turnPlan.currentMode === "normal_chat" &&
+    turnPlan.requestedAction === "continue_active_thread" &&
+    turnPlan.activeThread === "open_chat" &&
+    turnPlan.pendingModification === "none" &&
+    isChatLikeSmalltalk(turnPlan.latestUserMessage)
+  );
+}
+
+function isConversationClarificationTurn(input: {
+  currentMode?: ConversationMode;
+  latestUserMessage: string;
+  previousAssistantMessage: string | null;
+}): boolean {
+  if (!input.previousAssistantMessage) {
+    return false;
+  }
+  if (
+    input.currentMode === "task_planning" ||
+    input.currentMode === "task_execution" ||
+    input.currentMode === "locked_task_execution" ||
+    input.currentMode === "game"
+  ) {
+    return false;
+  }
+  return isClarificationExpansionRequest(input.latestUserMessage);
+}
+
 export function isTurnPlanSatisfied(
   turnPlan: TurnPlan,
   assistantText: string,
@@ -486,6 +533,11 @@ export function isTurnPlanSatisfied(
   reason: string;
 } {
   const response = normalize(assistantText);
+  const clarificationTurn = isConversationClarificationTurn({
+    currentMode: turnPlan.currentMode,
+    latestUserMessage: turnPlan.latestUserMessage,
+    previousAssistantMessage: turnPlan.previousAssistantMessage,
+  });
   if (!response) {
     return { ok: false, reason: "empty_response" };
   }
@@ -523,6 +575,32 @@ export function isTurnPlanSatisfied(
     return { ok: false, reason: "menu_drift" };
   }
 
+  if (clarificationTurn) {
+    if (
+      /\b(name the part that lost you|ask the exact question|start talking|tell me why you're here|what do you want|what are you and aren't allowed)\b/i.test(
+        response,
+      )
+    ) {
+      return { ok: false, reason: "clarification_reset" };
+    }
+    const explanationFirst =
+      /^(because|i mean|what i mean|i meant|that means|the point|when i said|what i was pressing on|it matters because)\b/i.test(
+        response,
+      );
+    const groundedClarification =
+      explanationFirst ||
+      hasOverlap(response, turnPlan.previousAssistantKeywords) ||
+      /\b(because|i mean|i meant|that means|when i said|what i was pressing on|it matters because)\b/i.test(
+        response,
+      );
+    if (questionCount > 0 && !explanationFirst) {
+      return { ok: false, reason: "clarification_not_answered_first" };
+    }
+    return groundedClarification
+      ? { ok: true, reason: "clarification_answered_first" }
+      : { ok: false, reason: "missing_clarification" };
+  }
+
   if (turnPlan.requestedAction === "clarify_missing_blocker") {
     return questionCount === 1
       ? { ok: true, reason: "single_blocker_question" }
@@ -539,6 +617,12 @@ export function isTurnPlanSatisfied(
     return /^(?:\d+\.|-)\s+/m.test(assistantText)
       ? { ok: true, reason: "structured_output_provided" }
       : { ok: false, reason: "missing_structured_output" };
+  }
+
+  if (turnPlan.requiredMove === "answer_user_question") {
+    if (isCoherentRelationalQuestionAnswer(turnPlan.latestUserMessage, response)) {
+      return { ok: true, reason: "relational_question_answered" };
+    }
   }
 
   if (turnPlan.requestedAction === "interpret_and_reflect") {
@@ -589,6 +673,10 @@ export function isTurnPlanSatisfied(
     turnPlan.requestedAction === "follow_through_commitment" ||
     turnPlan.requestedAction === "acknowledge_then_act"
   ) {
+    if (isFreshOpenConversationGreetingTurn(turnPlan)) {
+      // A fresh open-chat greeting can land with a brief opener without forcing thread advancement.
+      return { ok: true, reason: "greeting_opened" };
+    }
     const referencesThread =
       hasOverlap(response, extractKeywords(turnPlan.activeThread, 6)) ||
       hasOverlap(response, turnPlan.previousAssistantKeywords) ||
@@ -720,6 +808,8 @@ export function buildTurnPlanFallback(
   if (
     conversationFallback &&
     !hasTaskCue(turnPlan.latestUserMessage) &&
+    turnPlan.requestedAction !== "modify_existing_idea" &&
+    turnPlan.requestedAction !== "revise_previous_plan" &&
     (
       turnPlan.conversationMove === "continue_current_thought" ||
       turnPlan.conversationMove === "agree_and_extend" ||
@@ -733,12 +823,16 @@ export function buildTurnPlanFallback(
   }
 
   if (turnPlan.requestedAction === "summarize_current_thread") {
-    return `Current thread: ${turnPlan.activeThread || "this thread"}. What is already live is the part we have in motion. What is still open is ${turnPlan.pendingUserRequest || "the next clear move"}.`;
+    const thread = toUserFacingThreadLabel(turnPlan.activeThread, "this conversation");
+    const openRequest = toUserFacingDetail(turnPlan.pendingUserRequest, "the next clear move");
+    return `Stay with ${thread}. What is already in motion is clear enough. The part still open is ${openRequest}.`;
   }
 
   if (turnPlan.requestedAction === "clarify_missing_blocker") {
+    const thread = toUserFacingThreadLabel(turnPlan.activeThread, "this");
+    // Visible fallbacks should use human-facing thread wording, not raw runtime labels.
     return turnPlan.activeThread && turnPlan.activeThread !== "none"
-      ? `Before I sharpen ${turnPlan.activeThread}, what is the one variable you have not given me yet?`
+      ? `Before I sharpen ${thread}, what is the one variable you have not given me yet?`
       : "What is the one concrete variable you want me to work from?";
   }
 
@@ -746,21 +840,52 @@ export function buildTurnPlanFallback(
     turnPlan.requestedAction === "modify_existing_idea" ||
     turnPlan.requestedAction === "revise_previous_plan"
   ) {
-    const thread = turnPlan.activeThread || "the current thread";
     const modification =
       turnPlan.pendingModification !== "none"
         ? turnPlan.pendingModification
         : turnPlan.latestUserMessage;
-    return `Good. We keep ${thread} and change it around ${modification}. That makes the next beat tighter and more deliberate instead of restarting the whole thing.`;
+    const latestNormalized = turnPlan.latestUserMessage.trim();
+    const modificationWords = modification.split(/\s+/).filter(Boolean);
+    const preferenceFollowUpContext = /\b(i like|control with purpose|power exchange|toys?|plugs?|dildos?|bondage|obedience|service)\b/i.test(
+      turnPlan.previousAssistantMessage || "",
+    );
+    const shortTopicalModification =
+      modificationWords.length <= 2 &&
+      /\b(control|dildos?|plugs?|toys?|bondage|obedience|service|training)\b/i.test(
+        modification,
+      );
+    const shortQuestionFollowUp =
+      /^\s*(?:what about|and)\b/i.test(latestNormalized) ||
+      (/^[a-z0-9' -]+\?$/i.test(latestNormalized) && modificationWords.length <= 4);
+    if (/\b(what else|anything else|another angle|what else could i add|what could i add)\b/i.test(modification)) {
+      return "Maybe. Keep the same line and add only the part that sharpens control instead of noise.";
+    }
+    if (
+      (latestNormalized === modification ||
+        preferenceFollowUpContext ||
+        shortTopicalModification ||
+        shortQuestionFollowUp) &&
+      modificationWords.length <= 3
+    ) {
+      return buildHumanQuestionFallback(
+        shortQuestionFollowUp ? latestNormalized : modification,
+        toneProfile,
+        {
+          previousAssistantText: turnPlan.previousAssistantMessage,
+          currentTopic: turnPlan.activeThread || turnPlan.previousUserMessage,
+        },
+      );
+    }
+    return `Good. Keep the same subject, but answer this change directly: ${modification}.`;
   }
 
   if (turnPlan.requestedAction === "expand_previous_answer") {
-    const thread = turnPlan.activeThread || "the current thread";
-    return `More on ${thread}: stay with the exact part already in play and build it one clean step further instead of reopening the whole topic.`;
+    const thread = toUserFacingThreadLabel(turnPlan.activeThread, "this conversation");
+    return `Stay with ${thread}. Build the exact part already in play one clean step further instead of reopening the whole topic.`;
   }
 
   if (turnPlan.requestedAction === "generate_structured_output") {
-    const thread = turnPlan.activeThread || "the current thread";
+    const thread = toUserFacingThreadLabel(turnPlan.activeThread, "this conversation");
     return [
       `1. Keep the focus on ${thread}.`,
       "2. Apply the user's latest change before opening anything new.",
@@ -947,7 +1072,7 @@ export function buildTurnPlanFallback(
 
   if (isGreetingLike(latest)) {
     const candidates = [
-      "Talk to me. What is on your mind?",
+      "Enough hovering, pet. Tell me what you actually want.",
       "Good. Tell me what is actually pressing on you.",
     ];
     return pickFirstDifferent(turnPlan.previousAssistantMessage, candidates);

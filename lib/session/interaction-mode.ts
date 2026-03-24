@@ -29,12 +29,16 @@ const ASSISTANT_PREFERENCE_DOMAIN_PATTERN =
 
 const ASSISTANT_SERVICE_QUESTION_PATTERNS = [
   /\bwhat can i do for you\b/i,
+  /\bwhat do you want me to do(?: for you)?\b/i,
   /\bwhat do you want from me\b/i,
   /\bhow can i (?:serve|help|please|entertain) you\b/i,
   /\bhow could i (?:serve|help|please|entertain) you\b/i,
   /\bhow can i be useful to you\b/i,
   /\bhow could i be useful to you\b/i,
   /\bwhat would make me useful to you\b/i,
+  /\bhow can i be a better (?:sub|submissive) to you\b/i,
+  /\bwhat can i do to be a better (?:sub|submissive) to you\b/i,
+  /\bhow do i become a better (?:sub|submissive) for you\b/i,
   /\bhow do you want me to (?:serve|please|help) you\b/i,
   /\bwhat do you think would be a good training we could do today\b/i,
   /\bwhat(?: kind of)? training (?:should|could|would) (?:we|i) do(?: today)?\b/i,
@@ -173,7 +177,7 @@ export function isMutualGettingToKnowRequest(text: string): boolean {
   if (!normalized) {
     return false;
   }
-  return /\b(learn more about you|learn about you|tell me about yourself|let me get to know you|get to know you|get to know each other|learn about each other|ask me questions and i(?:'ll| will) ask you some too|i(?:'d| would) like to know more about you)\b/i.test(
+  return /\b(learn more about you|learn about you|tell me about yourself|let me get to know you|get to know you|get to know each other|learn about each other|ask me questions and i(?:'ll| will) ask you some too|i(?:'d| would) like to know more about you|what do you want to know about me|what would you want to know about me|what do you want to ask me|what should i tell you about me)\b/i.test(
     normalized,
   );
 }
@@ -241,7 +245,9 @@ export function isChatLikeSmalltalk(text: string): boolean {
   if (!normalized) {
     return false;
   }
-  return /^(hi|hello|hey|thanks|thank you|good morning|good night)\b/i.test(normalized);
+  return /^(hi|hello|hey|thanks|thank you|good morning|good afternoon|good evening|good night)\b/i.test(
+    normalized,
+  );
 }
 
 export function normalizeInteractionMode(value: unknown): InteractionMode {

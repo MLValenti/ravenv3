@@ -85,9 +85,5 @@ export function selectPersonaPlaybooks(input: {
     selected.push(PLAYBOOKS[3]!);
   }
 
-  if (selected.length === 0) {
-    selected.push(PLAYBOOKS[0]!);
-  }
-
   return selected.slice(0, 2);
 }

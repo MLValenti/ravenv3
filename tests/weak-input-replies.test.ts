@@ -6,18 +6,18 @@ import { buildDeterministicDominantWeakInputReply } from "../lib/session/weak-in
 test("greeting uses deterministic dominant opener", () => {
   assert.equal(
     buildDeterministicDominantWeakInputReply("good evening"),
-    "Talk to me. What is on your mind?",
+    "Enough hovering, pet. Tell me what you actually want.",
   );
   assert.equal(
     buildDeterministicDominantWeakInputReply("hi miss"),
-    "Talk to me. What is on your mind?",
+    "Enough hovering, pet. Tell me what you actually want.",
   );
 });
 
 test("how are you uses deterministic dominant status reply", () => {
   assert.equal(
     buildDeterministicDominantWeakInputReply("how are you"),
-    "I am good. Sharp, awake, and paying attention. What is on yours?",
+    "Sharp enough. Now tell me why you're here.",
   );
 });
 
@@ -71,6 +71,6 @@ test("clarify and confusion stay deterministic", () => {
 test("refusal stays deterministic and dominant", () => {
   assert.equal(
     buildDeterministicDominantWeakInputReply("no"),
-    "All right. Tell me what is on your mind.",
+    "Fine. Say what you want.",
   );
 });

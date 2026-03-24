@@ -43,6 +43,32 @@ test("generic off-thread model reply is not preserved on a turn-plan miss", () =
   );
 });
 
+test("coherent relational get-to-know reply is preserved even without lexical overlap", () => {
+  const state = createConversationStateSnapshot("response-strategy-relational-keep");
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: "Tell me where your submission started. Be specific.",
+      state,
+      lastUserMessage: "what do you want to know about me?",
+    }),
+    true,
+  );
+});
+
+test("relational reply with prompt residue is not preserved", () => {
+  const state = createConversationStateSnapshot("response-strategy-relational-residue");
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: 'You can kneel and call me "Mistress Raven." tone_variant: dominant_neutral. Memory context: profile facts.',
+      state,
+      lastUserMessage: "what can i do for you?",
+    }),
+    false,
+  );
+});
+
 test("response strategy stays on unresolved loops before shifting modes", () => {
   const state = {
     ...createConversationStateSnapshot("response-strategy-open-loop"),
@@ -107,6 +133,74 @@ test("response strategy can shift into interpretive mode during profile-building
   assert.equal(strategy, "interpret_then_lead");
 });
 
+test("response strategy answers clarification turns directly before steering", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-clarification"),
+    current_mode: "relational_chat" as const,
+  };
+
+  const strategy = chooseResponseStrategy({
+    turnPlan: {
+      requiredMove: "answer_user_question",
+      requestedAction: "answer_direct_question",
+      activeThread: "what you can do for me",
+      pendingUserRequest: "yes please explain",
+      pendingModification: "none",
+      outputShape: "direct_answer",
+      hasSufficientContextToAct: true,
+      latestUserMessage: "yes please explain",
+      previousAssistantMessage:
+        "Exactly. Usefulness is not a pose. It shows up in honesty, steadiness, and follow-through.",
+      previousUserMessage: "what can i do for you?",
+      currentMode: "relational_chat",
+      conversationMove: "clarify_meaning",
+      personaIntent: "shift_from_observation_to_guidance",
+      userResponseEnergy: "steady",
+      relationalBeatReference: "controlled_explanation",
+      reason: "clarify_previous_assistant_point",
+      userKeywords: ["explain"],
+      previousAssistantKeywords: ["usefulness", "honesty", "steadiness"],
+    },
+    conversationState: state,
+  });
+
+  assert.equal(strategy, "answer_direct");
+});
+
+test("coherent clarification reply is preserved when it explains the previous assistant point", () => {
+  const state = createConversationStateSnapshot("response-strategy-clarify-preserve");
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: "Because usefulness only matters to me when it shows up in honesty, steadiness, and follow-through once there is pressure on you.",
+      state,
+      lastUserMessage: "yes please explain",
+      turnPlan: {
+        requiredMove: "answer_user_question",
+        requestedAction: "answer_direct_question",
+        activeThread: "what you can do for me",
+        pendingUserRequest: "yes please explain",
+        pendingModification: "none",
+        outputShape: "direct_answer",
+        hasSufficientContextToAct: true,
+        latestUserMessage: "yes please explain",
+        previousAssistantMessage:
+          "Exactly. Usefulness is not a pose. It shows up in honesty, steadiness, and follow-through.",
+        previousUserMessage: "what can i do for you?",
+        currentMode: "relational_chat",
+        conversationMove: "clarify_meaning",
+        personaIntent: "shift_from_observation_to_guidance",
+        userResponseEnergy: "steady",
+        relationalBeatReference: "controlled_explanation",
+        reason: "clarify_previous_assistant_point",
+        userKeywords: ["explain"],
+        previousAssistantKeywords: ["usefulness", "honesty", "steadiness"],
+      },
+    }),
+    true,
+  );
+});
+
 test("response strategy prioritizes revision when the user modifies the live thread", () => {
   const state = {
     ...createConversationStateSnapshot("response-strategy-revise"),
@@ -160,4 +254,47 @@ test("continuity recovery for assistant-self preference questions stays conversa
   assert.match(reply, /i like bondage|restraint|dynamic|ornamental/i);
   assert.doesNotMatch(reply, /fulfill the exact request already in play/i);
   assert.doesNotMatch(reply, /we are still on feeling/i);
+});
+
+test("continuity recovery fallback avoids planner wording and internal labels", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-visible-fallback"),
+    current_mode: "task_execution" as const,
+    active_topic: "open_chat",
+    active_thread: "open_chat",
+    open_loops: ["pending modification"],
+  };
+
+  const reply = buildContinuityRecoveryReply({
+    strategy: "continue_open_loop",
+    state,
+    lastUserMessage: "go on",
+    toneProfile: "dominant",
+  });
+
+  assert.doesNotMatch(
+    reply,
+    /open_chat|relational_chat|normal_chat|current_mode|active_thread|pending modification|live thread|unresolved part|fulfill the exact request already in play/i,
+  );
+  assert.match(reply, /stay with|finish the part that is still open|this conversation/i);
+});
+
+test("continuity recovery revision fallback stays coherent and in character", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-visible-revision"),
+    current_mode: "task_execution" as const,
+    active_topic: "week planning",
+    active_thread: "week planning",
+    pending_modification: "move the gym later",
+  };
+
+  const reply = buildContinuityRecoveryReply({
+    strategy: "revise_active_thread",
+    state,
+    lastUserMessage: "move the gym later",
+    toneProfile: "dominant",
+  });
+
+  assert.doesNotMatch(reply, /live thread|resetting categorization|response strategy|turn plan/i);
+  assert.match(reply, /week planning|change the user just asked for|resetting it/i);
 });

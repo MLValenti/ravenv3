@@ -95,7 +95,11 @@ export function normalizePersonaStylePack(raw: unknown): PersonaStylePack | null
   };
 }
 
-export function buildPersonaPackSystemMessage(pack: PersonaStylePack): string {
+export function buildPersonaPackSystemMessage(
+  pack: PersonaStylePack,
+  options: { includeExamples?: boolean } = {},
+): string {
+  const includeExamples = options.includeExamples !== false;
   const mustLines =
     pack.style_rules.must.length > 0
       ? pack.style_rules.must.map((line) => `- ${line}`).join("\n")
@@ -122,8 +126,8 @@ export function buildPersonaPackSystemMessage(pack: PersonaStylePack): string {
     "Avoid:",
     avoidLines,
     `Voice markers: ${markerLine}`,
-    "Style examples:",
-    examplesBlock,
+    ...(includeExamples
+      ? (["Style examples:", examplesBlock] as string[])
+      : []),
   ].join("\n");
 }
-

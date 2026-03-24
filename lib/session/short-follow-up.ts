@@ -1,4 +1,8 @@
 import { buildCoreConversationReply } from "../chat/core-turn-move.ts";
+import {
+  detectRepairTurnKind,
+  resolveRepairTurn,
+} from "../chat/repair-turn.ts";
 
 type ShortFollowUpMode =
   | "normal_chat"
@@ -453,10 +457,34 @@ function buildDirectClarificationReply(
   return `${lead}.`;
 }
 
+function shouldPreferRepairReply(
+  resolution: ReturnType<typeof resolveRepairTurn>,
+): boolean {
+  if (!resolution.detected || !resolution.reply) {
+    return false;
+  }
+  if (resolution.confidence === "high") {
+    return true;
+  }
+  return /\b(when you said|scripted questioning|talk directly|the part you just said|last answer sounded|last answer|last point)\b/i.test(
+    resolution.reply,
+  );
+}
+
 export function detectShortFollowUpKind(text: string): ShortFollowUpKind | null {
   const normalized = normalize(text);
   if (!normalized) {
     return null;
+  }
+  const repairKind = detectRepairTurnKind(normalized);
+  if (repairKind === "clarify_reason") {
+    return "why";
+  }
+  if (repairKind === "repeat_previous") {
+    return "repeat";
+  }
+  if (repairKind === "clarify_meaning" || repairKind === "clarify_referent") {
+    return normalized === "what" || normalized === "huh" ? "what" : "clarify";
   }
   if (normalized === "what") {
     return "what";
@@ -468,6 +496,13 @@ export function detectShortFollowUpKind(text: string): ShortFollowUpKind | null 
     return "how";
   }
   if (normalized === "go on" || normalized === "more" || normalized === "then what") {
+    return "go_on";
+  }
+  if (
+    normalized === "tell me more" ||
+    normalized === "say more" ||
+    normalized === "keep going"
+  ) {
     return "go_on";
   }
   if (
@@ -515,26 +550,38 @@ export function buildShortClarificationReply(input: {
   topicType?: ShortFollowUpTopic;
   lastQuestion?: string | null;
   lastAssistantText?: string | null;
+  lastUserText?: string | null;
   lastUserAnswer?: string | null;
   currentTopic?: string | null;
 }): string {
   const kind = detectShortFollowUpKind(input.userText);
   const lead = buildContextLead(input.interactionMode, input.topicType);
+  const previousUserText = input.lastUserText ?? input.lastUserAnswer ?? input.lastQuestion ?? null;
+  const repairResolution = resolveRepairTurn({
+    userText: input.userText,
+    previousAssistantText: input.lastAssistantText,
+    previousUserText,
+    currentTopic: input.currentTopic,
+    memoryFallbackText: input.lastUserAnswer ?? input.lastQuestion ?? null,
+  });
   const questionLead =
     buildQuestionClarificationLead(input.lastAssistantText) ??
     buildQuestionClarificationLead(input.lastQuestion) ??
-    buildQuestionClarificationLead(input.lastUserAnswer) ??
+    buildQuestionClarificationLead(previousUserText) ??
     buildQuestionClarificationLead(input.currentTopic);
   const contextToken =
     (questionLead
       ? null
       : extractContextToken(input.lastAssistantText) ??
         extractContextToken(input.lastQuestion) ??
-        extractContextToken(input.lastUserAnswer) ??
+        extractContextToken(previousUserText) ??
         extractContextToken(input.currentTopic));
   const contextLead = questionLead ?? (contextToken ? `I mean the part about ${contextToken}` : lead);
 
   if (kind === "why") {
+    if (repairResolution.detected && repairResolution.kind === "clarify_reason" && repairResolution.reply) {
+      return repairResolution.reply;
+    }
     if (
       input.interactionMode === "task_execution" ||
       input.interactionMode === "locked_task_execution" ||
@@ -558,7 +605,16 @@ export function buildShortClarificationReply(input: {
   }
 
   if (kind === "repeat") {
-    return buildDirectClarificationReply(questionLead, contextToken, lead);
+    if (questionLead) {
+      return buildDirectClarificationReply(questionLead, contextToken, lead);
+    }
+    return shouldPreferRepairReply(repairResolution)
+      ? (repairResolution.reply ?? buildDirectClarificationReply(questionLead, contextToken, lead))
+      : buildDirectClarificationReply(questionLead, contextToken, lead);
+  }
+
+  if (shouldPreferRepairReply(repairResolution)) {
+    return repairResolution.reply;
   }
 
   return buildDirectClarificationReply(questionLead, contextToken, lead);

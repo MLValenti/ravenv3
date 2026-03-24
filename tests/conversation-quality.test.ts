@@ -502,7 +502,7 @@ test("output shaping strips servile and social fallback drift", () => {
   assert.doesNotMatch(shaped.text, /pleasant and respectful thus far/i);
   assert.doesNotMatch(shaped.text, /good evening to you as well/i);
   assert.doesNotMatch(shaped.text, /how'?s your day been so far/i);
-  assert.match(shaped.text, /talk to me|what is on your mind/i);
+  assert.match(shaped.text, /enough hovering|what you actually want/i);
 });
 
 test("dominant shaping forces a deterministic opener for greeting drift", () => {
@@ -515,7 +515,7 @@ test("dominant shaping forces a deterministic opener for greeting drift", () => 
   });
 
   assert.equal(shaped.noop, false);
-  assert.equal(shaped.text, "Talk to me. What is on your mind?");
+  assert.equal(shaped.text, "Enough hovering, pet. Tell me what you actually want.");
 });
 
 test("dominant shaping forces a deterministic opener for how-are-you drift", () => {
@@ -528,7 +528,7 @@ test("dominant shaping forces a deterministic opener for how-are-you drift", () 
   });
 
   assert.equal(shaped.noop, false);
-  assert.equal(shaped.text, "I am good. Sharp, awake, and paying attention. What is on yours?");
+  assert.equal(shaped.text, "Sharp enough. Now tell me why you're here.");
 });
 
 test("output shaping strips preference disclaimer drift and answers the kink question directly", () => {
@@ -653,7 +653,7 @@ test("dominant shaping forces a deterministic reply for blunt refusal", () => {
   });
 
   assert.equal(shaped.noop, false);
-  assert.equal(shaped.text, "All right. Tell me what is on your mind.");
+  assert.equal(shaped.text, "Fine. Say what you want.");
 });
 
 test("dominant shaping rejects unseen deferential variants", () => {
@@ -667,9 +667,11 @@ test("dominant shaping rejects unseen deferential variants", () => {
   });
 
   assert.equal(shaped.noop, false);
+  assert.doesNotMatch(shaped.text, /delighted to explain that for you/i);
+  assert.doesNotMatch(shaped.text, /what would you prefer me to cover next/i);
   assert.match(
     shaped.text,
-    /keep going|concrete part|what you actually want|real goal/i,
+    /i mean|last idea|keep going|concrete part|what you actually want|real goal/i,
   );
 });
 
@@ -683,11 +685,9 @@ test("dominant shaping rejects passive social openers that slip past phrase filt
   });
 
   assert.equal(shaped.noop, false);
-  assert.match(
-    shaped.text,
-    /^(eyes on me, pet\.|stay sharp, pet\.|keep focus, pet\.|pay attention, pet\.|noted, pet\.|listen carefully, pet\.)/i,
-  );
-  assert.match(shaped.text, /stay focused\. you follow my lead now\./i);
+  assert.doesNotMatch(shaped.text, /lovely to spend time with you/i);
+  assert.doesNotMatch(shaped.text, /please let me know what you prefer next/i);
+  assert.notEqual(shaped.debug?.selectedSource, "model");
 });
 
 test("dominant shaping wraps plain factual answers in a dominant frame", () => {
@@ -729,6 +729,105 @@ test("dominant shaping does not prepend listen carefully to open-chat question a
   assert.equal(shaped.noop, false);
   assert.doesNotMatch(shaped.text, /^listen carefully/i);
   assert.match(shaped.text, /aftercare/i);
+});
+
+test("coherent dominant greeting reply is preserved instead of flattened into canned opener", () => {
+  const shaped = shapeAssistantOutput({
+    rawText: "Sharp. You have me now, so stop hovering and tell me why you're here.",
+    lastUserMessage: "good evening",
+    lastAssistantOutput: null,
+    toneProfile: "dominant",
+    dialogueAct: "acknowledge",
+    allowFreshGreetingOpener: true,
+  });
+
+  assert.equal(shaped.noop, false);
+  assert.equal(
+    shaped.text,
+    "Sharp. You have me now, so stop hovering and tell me why you're here.",
+  );
+  assert.notEqual(shaped.text, "Enough hovering, pet. Tell me what you actually want.");
+  assert.equal(shaped.debug?.selectedSource, "model");
+  assert.equal(shaped.debug?.preservedModelVoice, true);
+});
+
+test("fresh hey greeting is not rewritten to deterministic weak input when the opener is already valid", () => {
+  const shaped = shapeAssistantOutput({
+    rawText: "Hey. Come closer and keep your attention on me.",
+    lastUserMessage: "hey",
+    lastAssistantOutput: null,
+    toneProfile: "dominant",
+    dialogueAct: "acknowledge",
+    allowFreshGreetingOpener: true,
+  });
+
+  assert.equal(shaped.noop, false);
+  assert.equal(shaped.text, "Hey. Come closer and keep your attention on me.");
+  assert.notEqual(shaped.text, "Enough hovering, pet. Tell me what you actually want.");
+  assert.equal(shaped.debug?.selectedSource, "model");
+  assert.equal(shaped.debug?.preservedModelVoice, true);
+});
+
+test("weak non-answer greeting drift can still be rewritten as deterministic weak input", () => {
+  const shaped = shapeAssistantOutput({
+    rawText: "Good evening to you as well. How's your day been so far?",
+    lastUserMessage: "hey",
+    lastAssistantOutput: null,
+    toneProfile: "dominant",
+    dialogueAct: "acknowledge",
+    allowFreshGreetingOpener: true,
+  });
+
+  assert.equal(shaped.noop, false);
+  assert.equal(shaped.text, "Enough hovering, pet. Tell me what you actually want.");
+  assert.equal(shaped.debug?.selectedSource, "deterministic_weak_input");
+});
+
+test("coherent dominant clarification reply is preserved instead of replaced with canned rail", () => {
+  const shaped = shapeAssistantOutput({
+    rawText:
+      "I meant the part where you gave me nothing and expected me not to notice. That kind of dodge is exactly what I was pressing on.",
+    lastUserMessage: "what do you mean",
+    lastAssistantOutput: "You said none, but that answer usually hides something.",
+    toneProfile: "dominant",
+    dialogueAct: "answer_question",
+  });
+
+  assert.equal(shaped.noop, false);
+  assert.match(shaped.text, /i meant the part where you gave me nothing/i);
+  assert.doesNotMatch(shaped.text, /about none|tell me about none|what part of none/i);
+  assert.equal(shaped.debug?.selectedSource, "model");
+  assert.equal(shaped.debug?.preservedModelVoice, true);
+});
+
+test("non-answer clarification drift still falls back to real clarification handling", () => {
+  const shaped = shapeAssistantOutput({
+    rawText: "Let me rephrase that in a gentler way.",
+    lastUserMessage: "what do you mean",
+    lastAssistantOutput: "You said none, but that answer usually hides something.",
+    toneProfile: "dominant",
+    dialogueAct: "answer_question",
+  });
+
+  assert.equal(shaped.noop, false);
+  assert.doesNotMatch(shaped.text, /gentler way/i);
+  assert.match(shaped.text, /i mean|last point|part/i);
+  assert.notEqual(shaped.debug?.selectedSource, "model");
+});
+
+test("clarification shaping answers yes please explain from the prior assistant point before steering", () => {
+  const shaped = shapeAssistantOutput({
+    rawText: "Good, slut. Now tell me why you're here.",
+    lastUserMessage: "yes please explain",
+    lastAssistantOutput:
+      "Exactly. Usefulness is not a pose. It shows up in honesty, steadiness, and follow-through.",
+    toneProfile: "dominant",
+    dialogueAct: "answer_question",
+  });
+
+  assert.equal(shaped.noop, false);
+  assert.match(shaped.text, /i mean|because|usefulness|honesty|steadiness|follow-through/i);
+  assert.doesNotMatch(shaped.text, /why you're here|follow my lead|allowed to do/i);
 });
 
 test("immersion critic flags hard policy leaks", () => {

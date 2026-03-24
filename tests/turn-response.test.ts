@@ -39,7 +39,7 @@ test("open-chat model turn does not append task-style reflection", () => {
     responseGateForced: false,
   });
 
-  assert.equal(result.text, "Talk to me. What is on your mind?");
+  assert.equal(result.text, "Enough hovering, pet. Tell me what you actually want.");
   assert.equal(result.finalOutputSource, "model");
   assert.equal(result.reflectionAppended, false);
 });

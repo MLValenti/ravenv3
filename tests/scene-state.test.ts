@@ -1420,6 +1420,30 @@ test("scene state accepts a game answer even when the user phrases it as a quest
   assert.equal(state.game_progress, "round_2");
 });
 
+test("scene state keeps the current round when the user asks for the rules again", () => {
+  const state = noteSceneStateUserTurn(
+    {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+      topic_state: "open",
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+      game_outcome: "none",
+    },
+    {
+      text: "what are the rules again?",
+      act: "user_question",
+      sessionTopic: null,
+    },
+  );
+
+  assert.equal(state.topic_type, "game_execution");
+  assert.equal(state.game_progress, "round_1");
+  assert.equal(state.game_outcome, "none");
+});
+
 test("scene state keeps the same game progress when the user only gives a passive acknowledgement", () => {
   let state = noteSceneStateUserTurn(createSceneState(), {
     text: "lets play a game",
@@ -1530,4 +1554,23 @@ test("scene state tracks number command choice and resolves on done or failed", 
   });
   assert.equal(failed.game_progress, "failed");
   assert.equal(failed.game_outcome, "raven_win");
+});
+
+test("scene state commits assistant-led game start from relational chat into game execution", () => {
+  const state = noteSceneStateAssistantTurn(
+    {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    {
+      text: "Here is the next game. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    },
+  );
+
+  assert.equal(state.interaction_mode, "game");
+  assert.equal(state.topic_type, "game_execution");
+  assert.equal(state.topic_locked, true);
+  assert.equal(state.game_progress, "round_1");
+  assert.equal(state.next_expected_user_action.includes("answer the next"), true);
 });

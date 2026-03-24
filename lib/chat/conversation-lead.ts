@@ -39,6 +39,12 @@ function normalizeSemanticTopic(value: string | null | undefined): string | null
   if (!cleaned) {
     return null;
   }
+  if (/\bwhat i want to know about you\b/i.test(cleaned)) {
+    return "what people usually miss about you";
+  }
+  if (/\bwhat you want to know about me\b/i.test(cleaned)) {
+    return "what you actually want to know about me";
+  }
   if (/\bwhat i can do for you\b/i.test(cleaned)) {
     return "what you can do for me";
   }

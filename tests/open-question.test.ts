@@ -76,7 +76,7 @@ test("open question fallback stays human for unknown definition questions", () =
 
 test("greeting cannot fall through to the exact-question clarification fallback", () => {
   const text = buildHumanQuestionFallback("hi", "dominant");
-  assert.match(text, /talk to me|what is on your mind/i);
+  assert.match(text, /enough hovering|what you actually want/i);
   assert.doesNotMatch(text, /ask the exact question you want answered/i);
   assert.doesNotMatch(text, /answer it plainly/i);
 });
@@ -179,7 +179,7 @@ test("broad continuation variants use context instead of literal deictic words",
 test("how are you stays human instead of falling into process scaffolding", () => {
   const text = buildHumanQuestionFallback("how are you?", "dominant");
 
-  assert.match(text, /i am good|sharp|paying attention|what is on yours/i);
+  assert.match(text, /sharp enough|why you're here/i);
   assert.doesNotMatch(text, /live hinge|outline|start with/i);
 });
 
@@ -231,7 +231,7 @@ test("contextual toy follow-up stays on preference context instead of resetting"
 test("service-context follow-up question answers semantically instead of literalizing the question frame", () => {
   const text = buildHumanQuestionFallback("what would you notice first?", "dominant", {
     previousAssistantText:
-      "Be useful in a real way. Attention, follow-through, honesty, and enough steadiness that I do not have to drag clarity out of you.",
+      "Usefulness is simple. Be clear, follow through, and stop making me drag the truth out of you.",
   });
 
   assert.match(text, /precise|performing|clean answers|honesty|hold the rule/i);
@@ -244,7 +244,7 @@ test("service-context start question uses the live service thread instead of def
       "Whether you answer cleanly or perform. I notice honesty, steadiness, and whether you follow through once the idea stops sounding pretty.",
   });
 
-  assert.match(text, /start with consistency|answer cleanly|follow through/i);
+  assert.match(text, /start with consistency|say it cleanly|follow through/i);
   assert.doesNotMatch(text, /should i start with matters once it is lived instead of described/i);
 });
 

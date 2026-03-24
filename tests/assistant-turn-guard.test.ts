@@ -179,7 +179,7 @@ test("anchored commit guard blocks an untraced fallback after the first reply on
     committed,
     55,
     null,
-    "Talk to me. What is on your mind.",
+    "Enough hovering, pet. Tell me what you actually want.",
   );
   assert.equal(untracedFollowUp.allow, false);
   assert.equal(untracedFollowUp.reason, "second_authoritative_reply_same_turn");

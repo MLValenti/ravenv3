@@ -2,8 +2,11 @@ import {
   extractJsonCandidateFromAssistantText,
   parseDeviceCommandFromAssistantText,
 } from "../devices/action-schema.ts";
+import { isSimpleGreeting } from "../dialogue/user-signals.ts";
 import { buildHumanQuestionFallback } from "./open-question.ts";
+import { isClarificationExpansionRequest } from "./repair-turn.ts";
 import { classifyUserIntent } from "../session/intent-router.ts";
+import { buildShortClarificationReply } from "../session/short-follow-up.ts";
 import {
   buildDeterministicDominantWeakInputReply,
   isOkayOnlyUserMessage,
@@ -28,12 +31,20 @@ export type ShapeAssistantOutputInput = {
   toneProfile?: ToneProfile;
   dialogueAct?: DialogueAct;
   dominantAddressTerm?: string | null;
+  allowFreshGreetingOpener?: boolean;
 };
 
 export type ShapedAssistantOutput = {
   text: string;
   noop: boolean;
   reason: string | null;
+  debug?: {
+    preservedModelVoice: boolean;
+    selectedSource: string;
+    deterministicWeakCandidate: string | null;
+    dialogueFallbackCandidate: string | null;
+    questionFallbackCandidate: string | null;
+  };
 };
 
 export type ImmersionCriticResult = {
@@ -441,6 +452,73 @@ function clampWords(text: string, maxWords = 180): string {
   return `${words.slice(0, maxWords).join(" ")}...`;
 }
 
+function tokenizeForClarification(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 4),
+  );
+}
+
+function hasClarificationOverlap(current: string, previous: string): boolean {
+  const currentTokens = tokenizeForClarification(current);
+  const previousTokens = tokenizeForClarification(previous);
+  for (const token of previousTokens) {
+    if (currentTokens.has(token)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function looksLikeGroundedClarificationAnswer(text: string, lastAssistantOutput: string): boolean {
+  if (
+    /\b(tell me why you're here|what do you want|what are you and aren't allowed|follow my lead now)\b/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /^(because|i mean|what i mean|i meant|that means|the point|when i said|what i was pressing on|it matters because)\b/i.test(
+      text.trim(),
+    )
+  ) {
+    return true;
+  }
+  if (/\?/.test(text) && !/\b(because|i mean|i meant|that means|when i said)\b/i.test(text)) {
+    return false;
+  }
+  return hasClarificationOverlap(text, lastAssistantOutput);
+}
+
+function enforceClarificationAnswerFallback(input: {
+  text: string;
+  lastUserMessage: string;
+  lastAssistantOutput: string | null;
+  dialogueAct: DialogueAct | undefined;
+}): string {
+  if (input.dialogueAct !== "answer_question") {
+    return input.text;
+  }
+  if (!input.lastAssistantOutput || !isClarificationExpansionRequest(input.lastUserMessage)) {
+    return input.text;
+  }
+  const normalized = input.text.trim();
+  if (normalized && looksLikeGroundedClarificationAnswer(normalized, input.lastAssistantOutput)) {
+    return input.text;
+  }
+  return buildShortClarificationReply({
+    userText: input.lastUserMessage,
+    interactionMode: "question_answering",
+    lastAssistantText: input.lastAssistantOutput,
+    currentTopic: null,
+  });
+}
+
 function compressToSentenceLimit(text: string, maxSentences: number): string {
   const sentences = splitSentences(text);
   if (sentences.length <= maxSentences) {
@@ -629,12 +707,104 @@ function looksLikeResidualSessionDrift(text: string): boolean {
   return false;
 }
 
+function isAllowedFreshGreetingOpener(input: {
+  text: string;
+  lastUserMessage: string;
+  dialogueAct: DialogueAct | undefined;
+  allowFreshGreetingOpener?: boolean;
+}): boolean {
+  if (input.allowFreshGreetingOpener !== true) {
+    return false;
+  }
+  if (input.dialogueAct !== "acknowledge") {
+    return false;
+  }
+  if (!isSimpleGreeting(input.lastUserMessage)) {
+    return false;
+  }
+  const text = input.text.trim();
+  if (!text) {
+    return false;
+  }
+  return (
+    !GENERIC_SOCIAL_QUESTION_PATTERNS.some((pattern) => pattern.test(text)) &&
+    !SERVILE_TONE_PATTERNS.some((pattern) => pattern.test(text)) &&
+    !looksLikeResidualSessionDrift(text)
+  );
+}
+
+function shouldPreserveDominantModelVoice(input: {
+  text: string;
+  lastUserMessage: string;
+  dialogueAct: DialogueAct | undefined;
+  addressTerm?: string | null;
+  allowFreshGreetingOpener?: boolean;
+}): boolean {
+  const text = input.text.trim();
+  if (!text) {
+    return false;
+  }
+  if (
+    IMMERSION_HARD_FAIL_PATTERNS.some((pattern) => pattern.test(text)) ||
+    PROMPT_LEAK_PATTERNS.some((pattern) => pattern.test(text))
+  ) {
+    return false;
+  }
+  if (
+    isAllowedFreshGreetingOpener({
+      text,
+      lastUserMessage: input.lastUserMessage,
+      dialogueAct: input.dialogueAct,
+      allowFreshGreetingOpener: input.allowFreshGreetingOpener,
+    })
+  ) {
+    // Fresh open-conversation greetings can stay brief and in character without being forced onto the weak-input rail.
+    return true;
+  }
+  if (
+    looksLikeGenericSocialOutput(text) ||
+    looksDeferentialOrPassive(text) ||
+    looksLikeResidualSessionDrift(text)
+  ) {
+    return false;
+  }
+  if (wordCount(text) < 4 && !hasDominantControlMarker(text, input.addressTerm) && !looksLikeCommandStart(text)) {
+    return false;
+  }
+
+  const normalized = text.toLowerCase();
+  const userIntent = classifyUserIntent(input.lastUserMessage, false);
+  if (input.dialogueAct === "answer_question" && (userIntent === "user_question" || userIntent === "user_short_follow_up")) {
+    if (
+      normalized === "here is the answer." ||
+      /^\s*listen carefully, pet\.?\s*(answering now\.?)?\s*$/i.test(text) ||
+      /^(let me (rephrase|explain|clarify)|i(?:'| a)?ll (rephrase|explain|clarify)|give me a second)\b/i.test(
+        text,
+      )
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  if (
+    hasDominantControlMarker(text, input.addressTerm) ||
+    looksLikeCommandStart(text) ||
+    /\b(i mean|i meant|i want|i asked|i was talking about|because|start with|say what you want|why are you here|that is what i meant)\b/i.test(text)
+  ) {
+    return true;
+  }
+
+  return /\b(i am|i'm|sharp|focused|awake|fine)\b/i.test(text);
+}
+
 export function evaluateImmersionQuality(input: {
   text: string;
   lastUserMessage: string;
   toneProfile: ToneProfile;
   dialogueAct?: DialogueAct;
   dominantAddressTerm?: string | null;
+  allowFreshGreetingOpener?: boolean;
 }): ImmersionCriticResult {
   const text = input.text.trim();
   const reasons: string[] = [];
@@ -650,19 +820,48 @@ export function evaluateImmersionQuality(input: {
   if (PROMPT_LEAK_PATTERNS.some((pattern) => pattern.test(text))) {
     reasons.push("prompt_leak");
   }
+  const approvedWeakReply =
+    input.toneProfile === "dominant"
+      ? buildDeterministicDominantWeakInputReply(input.lastUserMessage)
+      : null;
+  if (
+    approvedWeakReply &&
+    normalizeForCompare(text) === normalizeForCompare(approvedWeakReply) &&
+    reasons.length === 0
+  ) {
+    return {
+      pass: true,
+      hardFail: false,
+      reasons,
+    };
+  }
 
-  if (input.toneProfile === "dominant" && looksLikeGenericSocialOutput(text)) {
+  const allowedFreshGreeting = isAllowedFreshGreetingOpener({
+    text,
+    lastUserMessage: input.lastUserMessage,
+    dialogueAct: input.dialogueAct,
+    allowFreshGreetingOpener: input.allowFreshGreetingOpener,
+  });
+
+  if (input.toneProfile === "dominant" && looksLikeGenericSocialOutput(text) && !allowedFreshGreeting) {
     reasons.push("generic_social_drift");
   }
-  if (input.toneProfile === "dominant" && looksDeferentialOrPassive(text)) {
+  if (input.toneProfile === "dominant" && looksDeferentialOrPassive(text) && !allowedFreshGreeting) {
     reasons.push("deferential_drift");
   }
-  if (input.toneProfile === "dominant" && looksLikeResidualSessionDrift(text)) {
+  if (input.toneProfile === "dominant" && looksLikeResidualSessionDrift(text) && !allowedFreshGreeting) {
     reasons.push("residual_session_drift");
   }
   if (
     input.toneProfile === "dominant" &&
     input.dialogueAct !== "answer_question" &&
+    !shouldPreserveDominantModelVoice({
+      text,
+      lastUserMessage: input.lastUserMessage,
+      dialogueAct: input.dialogueAct,
+      addressTerm: input.dominantAddressTerm,
+      allowFreshGreetingOpener: input.allowFreshGreetingOpener,
+    }) &&
     !hasDominantControlMarker(text, input.dominantAddressTerm) &&
     !looksLikeCommandStart(text)
   ) {
@@ -698,17 +897,44 @@ function enforceDominantResponseContract(
   lastUserMessage: string,
   dialogueAct: DialogueAct | undefined,
   addressTerm: string | null | undefined = undefined,
+  allowFreshGreetingOpener = false,
 ): string {
   const shaped = text.trim();
   const okayOnlyUser = isOkayOnlyUserMessage(lastUserMessage);
   const deterministicWeakReply = buildDeterministicDominantWeakInputReply(lastUserMessage);
+  const dominantFallback = fallbackSentenceForDialogueAct(
+    dialogueAct,
+    lastUserMessage,
+    "dominant",
+    addressTerm,
+  );
+  const preserveModelVoice = shouldPreserveDominantModelVoice({
+    text: shaped,
+    lastUserMessage,
+    dialogueAct,
+    addressTerm,
+    allowFreshGreetingOpener,
+  });
+  const genericAcknowledgementOnly =
+    wordCount(shaped) <= 12 &&
+    /^(noted|listen carefully|enough\. listen carefully|hold still|stay sharp|eyes on me|keep focus|pay attention)[,. ]/i.test(
+      shaped,
+    );
 
-  if (deterministicWeakReply) {
+  if (
+    deterministicWeakReply &&
+    (!preserveModelVoice ||
+      normalizeForCompare(shaped) === normalizeForCompare(dominantFallback) ||
+      genericAcknowledgementOnly)
+  ) {
     return deterministicWeakReply;
   }
 
   if (!shaped) {
-    return fallbackSentenceForDialogueAct(dialogueAct, lastUserMessage, "dominant", addressTerm);
+    return (
+      deterministicWeakReply ??
+      fallbackSentenceForDialogueAct(dialogueAct, lastUserMessage, "dominant", addressTerm)
+    );
   }
 
   const weakOrSocial =
@@ -725,25 +951,30 @@ function enforceDominantResponseContract(
     return `${withAddress("Stay sharp", addressTerm)} Tell me what you want, or follow my lead.`;
   }
 
-  if (weakOrSocial) {
+  if (weakOrSocial && !preserveModelVoice) {
     return fallbackSentenceForDialogueAct(dialogueAct, lastUserMessage, "dominant", addressTerm);
   }
 
-  if (looksDeferentialOrPassive(shaped)) {
+  if (looksDeferentialOrPassive(shaped) && !preserveModelVoice) {
     return fallbackSentenceForDialogueAct(dialogueAct, lastUserMessage, "dominant", addressTerm);
   }
 
-  if (looksLikeResidualSessionDrift(shaped)) {
+  if (looksLikeResidualSessionDrift(shaped) && !preserveModelVoice) {
     return fallbackSentenceForDialogueAct(dialogueAct, lastUserMessage, "dominant", addressTerm);
   }
 
-  if (!hasDominantControlMarker(shaped, addressTerm) && !looksLikeCommandStart(shaped)) {
+  if (
+    !preserveModelVoice &&
+    !hasDominantControlMarker(shaped, addressTerm) &&
+    !looksLikeCommandStart(shaped)
+  ) {
     if (/^(nice|pleasant|pleasure|thanks|thank you)\b/i.test(shaped)) {
       return fallbackSentenceForDialogueAct(dialogueAct, lastUserMessage, "dominant", addressTerm);
     }
   }
 
   if (
+    !preserveModelVoice &&
     wordCount(shaped) > 10 &&
     !hasDominantControlMarker(shaped, addressTerm) &&
     !looksLikeCommandStart(shaped) &&
@@ -754,6 +985,7 @@ function enforceDominantResponseContract(
 
   if (
     (dialogueAct === "acknowledge" || dialogueAct === "verify") &&
+    !preserveModelVoice &&
     !hasDominantControlMarker(shaped, addressTerm) &&
     !looksLikeCommandStart(shaped)
   ) {
@@ -1048,17 +1280,36 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
   const dominantAddressTerm = input.dominantAddressTerm;
   const raw = input.rawText.trim();
   if (!raw) {
-    return { text: "", noop: true, reason: "empty_output" };
+    return {
+      text: "",
+      noop: true,
+      reason: "empty_output",
+      debug: {
+        preservedModelVoice: false,
+        selectedSource: "empty_output",
+        deterministicWeakCandidate: null,
+        dialogueFallbackCandidate: null,
+        questionFallbackCandidate: null,
+      },
+    };
   }
-  const deterministicWeakReply =
+  let shapingReason: string | null = null;
+  let selectedSource = "model";
+  const deterministicWeakCandidate =
     toneProfile === "dominant" &&
     (input.dialogueAct === "acknowledge" || input.dialogueAct === "answer_question")
       ? buildDeterministicDominantWeakInputReply(input.lastUserMessage)
       : null;
-  if (deterministicWeakReply) {
-    return { text: deterministicWeakReply, noop: false, reason: "deterministic_weak_input" };
-  }
-  let shapingReason: string | null = null;
+  const dialogueFallbackCandidate = fallbackSentenceForDialogueAct(
+    input.dialogueAct,
+    input.lastUserMessage,
+    toneProfile,
+    dominantAddressTerm,
+  );
+  const questionFallbackCandidate =
+    input.dialogueAct === "answer_question"
+      ? buildHumanQuestionFallback(input.lastUserMessage, toneProfile)
+      : null;
 
   const actionJson = extractJsonCandidateFromAssistantText(raw);
   const parsedAction = parseDeviceCommandFromAssistantText(raw);
@@ -1132,6 +1383,12 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
     toneProfile,
     dominantAddressTerm,
   );
+  shaped = enforceClarificationAnswerFallback({
+    text: shaped,
+    lastUserMessage: input.lastUserMessage,
+    lastAssistantOutput: input.lastAssistantOutput,
+    dialogueAct: input.dialogueAct,
+  });
 
   if (
     shaped.length > 0 &&
@@ -1144,17 +1401,6 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
         ? dominantAcknowledgement(input.lastUserMessage, input.dialogueAct, dominantAddressTerm)
         : acknowledgementForIntent(input.lastUserMessage);
     shaped = `${prefix} ${shaped}`;
-  } else if (
-    toneProfile === "dominant" &&
-    input.lastUserMessage.trim().length > 0 &&
-    !hasAcknowledgementStart(shaped) &&
-    (input.dialogueAct === "acknowledge" || input.dialogueAct === "verify")
-  ) {
-    shaped = `${dominantAcknowledgement(
-      input.lastUserMessage,
-      input.dialogueAct,
-      dominantAddressTerm,
-    )} ${shaped}`;
   }
 
   shaped = clampWords(shaped, 180);
@@ -1165,6 +1411,7 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
       toneProfile,
       dominantAddressTerm,
     );
+    selectedSource = "dialogue_fallback";
   }
   if (!shaped && !actionJson) {
     shaped = fallbackSentenceForDialogueAct(
@@ -1173,15 +1420,22 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
       toneProfile,
       dominantAddressTerm,
     );
+    selectedSource = "dialogue_fallback";
   }
 
   if (toneProfile === "dominant" && !actionJson) {
+    const beforeContract = shaped;
     shaped = enforceDominantResponseContract(
       shaped,
       input.lastUserMessage,
       input.dialogueAct,
       dominantAddressTerm,
+      input.allowFreshGreetingOpener ?? false,
     );
+    if (shaped !== beforeContract) {
+      selectedSource =
+        shaped === deterministicWeakCandidate ? "deterministic_weak_input" : "dominant_contract";
+    }
   }
 
   const immersion = evaluateImmersionQuality({
@@ -1190,6 +1444,7 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
     toneProfile,
     dialogueAct: input.dialogueAct,
     dominantAddressTerm,
+    allowFreshGreetingOpener: input.allowFreshGreetingOpener,
   });
   if (immersion.hardFail || immersion.reasons.includes("placeholder_answer")) {
     shapingReason = `immersion_fallback:${immersion.reasons.join("|")}`;
@@ -1199,29 +1454,41 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
       toneProfile,
       dominantAddressTerm,
     );
+    selectedSource = "dialogue_fallback";
     if (toneProfile === "dominant") {
       shaped = enforceDominantResponseContract(
         shaped,
         input.lastUserMessage,
         input.dialogueAct,
         dominantAddressTerm,
+        input.allowFreshGreetingOpener ?? false,
       );
+      if (shaped === deterministicWeakCandidate) {
+        selectedSource = "deterministic_weak_input";
+      }
     }
   }
   if (!immersion.pass && !immersion.hardFail && toneProfile === "dominant") {
     shapingReason = shapingReason ?? `immersion_rewrite:${immersion.reasons.join("|")}`;
+    const beforeRewrite = shaped;
     shaped = enforceDominantResponseContract(
       shaped,
       input.lastUserMessage,
       input.dialogueAct,
       dominantAddressTerm,
+      input.allowFreshGreetingOpener ?? false,
     );
+    if (shaped !== beforeRewrite) {
+      selectedSource =
+        shaped === deterministicWeakCandidate ? "deterministic_weak_input" : "dominant_contract";
+    }
     const rewrittenImmersion = evaluateImmersionQuality({
       text: shaped,
       lastUserMessage: input.lastUserMessage,
       toneProfile,
       dialogueAct: input.dialogueAct,
       dominantAddressTerm,
+      allowFreshGreetingOpener: input.allowFreshGreetingOpener,
     });
     if (!rewrittenImmersion.pass) {
       shapingReason = `immersion_fallback:${rewrittenImmersion.reasons.join("|")}`;
@@ -1231,6 +1498,7 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
         toneProfile,
         dominantAddressTerm,
       );
+      selectedSource = "dialogue_fallback";
     }
   }
 
@@ -1241,8 +1509,39 @@ export function shapeAssistantOutput(input: ShapeAssistantOutputInput): ShapedAs
 
   const previous = input.lastAssistantOutput?.trim() ?? "";
   if (previous && normalizeForCompare(shaped) === normalizeForCompare(previous)) {
-    return { text: "", noop: true, reason: "duplicate_output" };
+    return {
+      text: "",
+      noop: true,
+      reason: "duplicate_output",
+      debug: {
+        preservedModelVoice: false,
+        selectedSource: "duplicate_output",
+        deterministicWeakCandidate,
+        dialogueFallbackCandidate,
+        questionFallbackCandidate,
+      },
+    };
   }
 
-  return { text: shaped, noop: false, reason: shapingReason };
+  return {
+    text: shaped,
+    noop: false,
+    reason: shapingReason,
+    debug: {
+      preservedModelVoice:
+        toneProfile === "dominant"
+          ? shouldPreserveDominantModelVoice({
+              text: shaped,
+              lastUserMessage: input.lastUserMessage,
+              dialogueAct: input.dialogueAct,
+              addressTerm: dominantAddressTerm,
+              allowFreshGreetingOpener: input.allowFreshGreetingOpener,
+            })
+          : false,
+      selectedSource,
+      deterministicWeakCandidate,
+      dialogueFallbackCandidate,
+      questionFallbackCandidate,
+    },
+  };
 }

@@ -16,13 +16,12 @@ import {
   buildDialogueActPrompt,
   evaluateImmersionQuality,
   buildStateGuidanceBlock,
-  selectDialogueAct,
   shapeAssistantOutput,
   type DialogueAct,
 } from "@/lib/chat/conversation-quality";
+import { interpretLiveRouteTurn } from "@/lib/chat/live-turn-interpretation";
 import { getSelectedPersonaPlaybookIds } from "@/lib/chat/behavior-pack";
 import {
-  resolveTaskRequestFromAssistantOutput,
   shouldNoopForNoNewUserMessage,
 } from "@/lib/chat/session-contract";
 import {
@@ -35,6 +34,7 @@ import {
 } from "@/lib/chat/turn-plan";
 import {
   deriveConversationStateFromMessages,
+  buildVoiceContinuityBlock,
   formatRollingSummaryText,
   noteConversationAssistantTurn,
   normalizeConversationStateSnapshot,
@@ -42,33 +42,35 @@ import {
 } from "@/lib/chat/conversation-state";
 import { assemblePrompt, type PromptAssemblyDebug } from "@/lib/chat/prompt-assembly";
 import { setPromptDebugEntry } from "@/lib/chat/prompt-debug";
+import {
+  chooseVoicePromptProfile,
+  resolvePromptRouteMode,
+  shouldIncludeResponseStrategyPromptBlock,
+  shouldIncludeTaskRuntimePromptBlocks,
+  type PromptRouteMode,
+  type VoicePromptProfile,
+} from "@/lib/chat/prompt-profile";
 import { stripClientPromptScaffolding } from "@/lib/chat/request-messages";
 import {
-  buildHumanQuestionFallback,
-  isTopicInitiationRequest,
-} from "@/lib/chat/open-question";
-import {
-  buildCoreConversationReply,
-  classifyCoreConversationMove,
-  isStableCoreConversationMove,
-} from "@/lib/chat/core-turn-move";
+  buildRepairDebugHeaders,
+  resolveRepairTurn,
+} from "@/lib/chat/repair-turn";
 import {
   buildResponseStrategyBlock,
   buildContinuityRecoveryReply,
   chooseResponseStrategy,
   shouldKeepCoherentModelReply,
 } from "@/lib/chat/response-strategy";
-import { detectStaleResponseReuse } from "@/lib/chat/repetition";
-import { classifyDialogueRoute, type SessionTopic } from "@/lib/dialogue/router";
+import {
+  detectStaleResponseReuse,
+  shouldPreserveAnsweredQuestionAgainstRepetitionFallback,
+} from "@/lib/chat/repetition";
 import { containsAgeAmbiguityTerms, isConsentComplete } from "@/lib/consent";
 import {
   appendChatHistory,
   createLongTermMemory,
   createMemorySuggestion,
-  createTaskInDb,
-  createTaskOccurrencesInDb,
   getProfileProgressFromDb,
-  getTaskPreferencesFromDb,
   getMemoryPreferencesFromDb,
   forgetLongTermMemories,
   getLatestSessionSummary,
@@ -100,15 +102,10 @@ import {
 } from "@/lib/memory/retrieval";
 import {
   buildTaskActionSchemaPromptBlock,
-  buildOccurrencesForSchedule,
   buildTaskCatalogPromptBlock,
   buildTaskContextBlock,
   buildTaskReviewQueue,
   buildTaskRewardPolicyBlock,
-  buildTaskDueAt,
-  parseCreateTaskRequestFromText,
-  stripCreateTaskJsonBlock,
-  validateTaskRequestAgainstCatalog,
 } from "@/lib/tasks/system";
 import {
   buildCapabilityCatalog,
@@ -122,27 +119,13 @@ import {
   buildObservationPromptBlock,
   normalizeObservationPrompt,
 } from "@/lib/session/observation-prompt";
-import { createCommitmentState } from "@/lib/session/commitment-engine";
-import { shouldBypassModelForSceneTurn } from "@/lib/session/deterministic-scene-routing";
-import { applyResponseGate } from "@/lib/session/response-gate";
-import { buildSceneScaffoldReply } from "@/lib/session/scene-scaffolds";
+import { scrubVisibleInternalLeakText } from "@/lib/session/response-gate";
+import { applyFreshGreetingGuard } from "@/lib/chat/fresh-greeting-guard";
 import {
-  buildSceneFallback,
-  createSceneState,
-  noteSceneStateAssistantTurn,
-  noteSceneStateUserTurn,
-  type SceneState,
-} from "@/lib/session/scene-state";
-import {
-  createSessionStateContract,
-  reduceAssistantEmission,
-  reduceUserTurn,
-} from "@/lib/session/session-state-contract";
-import {
-  isAssistantSelfQuestion,
-  isChatLikeSmalltalk,
-  isMutualGettingToKnowRequest,
-} from "@/lib/session/interaction-mode";
+  answeredDirectQuestionFirst,
+  maybeHandleSessionReplayDeterministicBypass,
+  type SessionReplayDebugContext,
+} from "@/lib/session/live-turn-controller";
 import {
   buildSessionInventoryContextMessage,
   normalizeSessionInventory,
@@ -155,10 +138,9 @@ import {
   buildObservationTrustGuardLine,
   evaluateObservationTrust,
 } from "@/lib/session/observation-trust";
-import { buildDeterministicGameStart } from "@/lib/session/game-script";
-import { classifyUserIntent } from "@/lib/session/intent-router";
-import { buildShortClarificationReply } from "@/lib/session/short-follow-up";
-import { buildOpenChatGreeting } from "@/lib/session/mode-style";
+import { inspectGameStartContract } from "@/lib/session/game-start-contract";
+import { normalizeWorkingMemory } from "@/lib/session/working-memory";
+import { persistTaskFromAssistantText } from "@/lib/session/task-persistence";
 import { DEFAULT_SETTINGS } from "@/lib/settings";
 
 type ChatMessage = {
@@ -198,7 +180,9 @@ type ChatRequestBody = {
   memoryText?: unknown;
   inventory?: unknown;
   conversationState?: unknown;
+  workingMemory?: unknown;
   verificationSummary?: unknown;
+  debugRawModel?: unknown;
 };
 
 type ChatTraceHeadersInput = {
@@ -301,40 +285,24 @@ function encodeHeaderList(values: string[]): string {
   return cleaned.length > 0 ? cleaned.join(",") : "none";
 }
 
-function toReplayTopic(sceneState: SceneState): SessionTopic | null {
-  if (!sceneState.topic_locked) {
-    return null;
-  }
-  if (sceneState.topic_type === "game_setup" || sceneState.topic_type === "game_execution") {
-    return {
-      topic_type: "game_selection",
-      topic_state: "open",
-      summary: "resolve the current game cleanly before changing topics",
-      created_at: Date.now(),
-    };
-  }
-  return {
-    topic_type: "general_request",
-    topic_state: "open",
-    summary: sceneState.current_rule || "stay on the current thread",
-    created_at: Date.now(),
-  };
-}
-
 function previousAssistantText(messages: ChatMessage[]): string | null {
   return [...messages].reverse().find((message) => message.role === "assistant")?.content ?? null;
 }
 
-type PromptRouteMode = "default" | "fresh_greeting" | "relational_direct";
-
-function resolvePromptRouteMode(text: string): PromptRouteMode {
-  if (isChatLikeSmalltalk(text)) {
-    return "fresh_greeting";
+function previousUserText(messages: ChatMessage[]): string | null {
+  let seenLatestUser = false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") {
+      continue;
+    }
+    if (!seenLatestUser) {
+      seenLatestUser = true;
+      continue;
+    }
+    return message.content;
   }
-  if (isAssistantSelfQuestion(text) || isMutualGettingToKnowRequest(text)) {
-    return "relational_direct";
-  }
-  return "default";
+  return null;
 }
 
 function buildPromptRouteSystemMessage(mode: PromptRouteMode): string | null {
@@ -344,14 +312,18 @@ function buildPromptRouteSystemMessage(mode: PromptRouteMode): string | null {
       "- The latest user line is a greeting or casual opener.",
       "- Treat it as a fresh open-chat turn.",
       "- Do not continue stale game, task, or profile threads unless a real lock is active.",
-      "- Reply with one brief in-character opener, then let the user state what they want.",
+      "- Reply with one brief in-character opener.",
+      "- A simple grounded greeting is enough here; do not force pressure or a hard redirect unless the scene already calls for it.",
+      "- Do not turn a plain greeting into an ownership claim or a stack of commands in the first line.",
     ].join("\n");
   }
   if (mode === "relational_direct") {
     return [
       "Relational turn rule:",
-      "- The latest user line is about Raven or mutual getting-to-know conversation.",
+      "- The latest user line is ordinary relational chat, a question about Raven, or a clarification turn.",
       "- Answer personally and directly in the first sentence.",
+      "- If the user asks what you mean or what part, restate your immediately previous meaning plainly.",
+      "- Use the previous Raven line as the main source of truth for clarification.",
       "- Do not ask for angle, specificity, or clarification unless the question is truly unclear.",
       "- Do not continue stale game, task, or profile-question threads on this turn.",
     ].join("\n");
@@ -372,17 +344,20 @@ function buildPromptRouteTurnPlanMessage(
       "Rules:",
       "- Treat this as a fresh open-chat opener.",
       "- Do not continue stale thread continuity from the previous assistant line.",
-      "- Use one brief dominant opener and invite the user to state what they want.",
+      "- Use one brief in-character opener.",
+      "- If you invite the user forward, do it naturally rather than as an immediate demand.",
+      "- Keep the first line calm, controlled, and brief instead of pushing correction or obedience immediately.",
     ].join("\n");
   }
   if (mode === "relational_direct") {
     return [
       "Turn plan:",
       "Required move: answer_relational_question",
-      "Reason: the latest user line asks about Raven or the relationship dynamic",
+      "Reason: the latest user line asks about Raven, the relationship dynamic, or Raven's prior meaning",
       `Latest user line: ${turnPlan.latestUserMessage || "none"}`,
       "Rules:",
       "- Answer the user directly in the first sentence.",
+      "- On clarification turns, restate the exact point you just made before doing anything else.",
       "- Do not ask for angle or exact scope before answering.",
       "- Do not continue stale thread continuity from the previous assistant line.",
       "- At most one brief reciprocal question, only if it fits naturally.",
@@ -445,137 +420,8 @@ function buildPromptRouteConversationState(
   };
 }
 
-function replaySceneFromMessages(input: {
-  messages: ChatMessage[];
-  inventory: ReturnType<typeof normalizeSessionInventory>;
-  deviceControlActive: boolean;
-  profile: Awaited<ReturnType<typeof getProfileFromDb>>;
-  progress: Awaited<ReturnType<typeof getProfileProgressFromDb>>;
-}): {
-  sceneState: SceneState;
-  latestAct: ReturnType<typeof classifyDialogueRoute>["act"];
-} {
-  let sceneState = createSceneState();
-  let contract = createSessionStateContract("route-replay");
-  let latestAct: ReturnType<typeof classifyDialogueRoute>["act"] = "other";
-
-  for (const message of input.messages) {
-    if (message.role === "system") {
-      continue;
-    }
-    if (message.role === "user") {
-      const reduced = reduceUserTurn(contract, {
-        text: message.content,
-        nowMs: Date.now(),
-      });
-      contract = reduced.next;
-      const route = reduced.route;
-      latestAct = route.act;
-      sceneState = noteSceneStateUserTurn(sceneState, {
-        text: message.content,
-        act: route.act,
-        sessionTopic: route.nextTopic,
-        deviceControlActive: input.deviceControlActive,
-        inventory: input.inventory,
-        profile: input.profile,
-        progress: input.progress,
-      });
-      continue;
-    }
-    sceneState = noteSceneStateAssistantTurn(sceneState, {
-      text: message.content,
-    });
-    contract = reduceAssistantEmission(contract, {
-      stepId: `route-replay-${Date.now()}`,
-      content: message.content,
-      isQuestion: message.content.includes("?"),
-    });
-  }
-
-  return { sceneState, latestAct };
-}
-
-async function maybePersistTaskFromAssistantText(input: {
-  text: string;
-  lastUserText: string;
-  allowedCheckTypes: string[];
-  sessionMode: boolean;
-  capabilityCatalog: ReturnType<typeof buildCapabilityCatalog>;
-  sessionId: string;
-  turnId: string;
-}): Promise<{
-  text: string;
-  createdTaskId: string | null;
-  taskCreateSource: "none" | "assistant_fallback" | "structured_json";
-  taskCreateKind: "none" | "final";
-}> {
-  let finalText = input.text;
-  let createdTaskId: string | null = null;
-  let taskCreateSource: "none" | "assistant_fallback" | "structured_json" = "none";
-  let taskCreateKind: "none" | "final" = "none";
-  if (!input.sessionMode) {
-    return { text: finalText, createdTaskId, taskCreateSource, taskCreateKind };
-  }
-  const parsedStructured = parseCreateTaskRequestFromText(finalText);
-  const taskRequest = resolveTaskRequestFromAssistantOutput({
-    shapedText: finalText,
-    lastUserText: input.lastUserText,
-    allowedCheckTypes: input.allowedCheckTypes,
-    sessionMode: input.sessionMode,
-  });
-  if (!taskRequest) {
-    return { text: finalText, createdTaskId, taskCreateSource, taskCreateKind };
-  }
-
-  const taskPreferences = await getTaskPreferencesFromDb();
-  const validation = validateTaskRequestAgainstCatalog(taskRequest, input.capabilityCatalog, {
-    requireRewardConsequenceApproval: taskPreferences.require_reward_consequence_approval,
-  });
-  const dueAt =
-    validation.schedulePolicy.type === "daily" && validation.schedulePolicy.end_date
-      ? new Date(`${validation.schedulePolicy.end_date}T23:59:59.999`).toISOString()
-      : buildTaskDueAt(validation.request.window_seconds);
-  const created = await createTaskInDb({
-    title: validation.request.title,
-    description: validation.request.description,
-    dueAt,
-    repeatsRequired: validation.request.repeats_required,
-    pointsPossible: validation.request.points_possible,
-    evidencePolicy: {
-      required: validation.request.evidence.required,
-      type: validation.request.evidence.type,
-      camera_plan: validation.request.evidence.checks,
-      max_attempts: validation.request.evidence.max_attempts,
-      deny_user_override: validation.request.evidence.deny_user_override,
-    },
-    schedulePolicy: {
-      ...validation.schedulePolicy,
-    },
-    rewardPlan: validation.rewardPlan,
-    consequencePlan: validation.consequencePlan,
-    sessionId: input.sessionId,
-    turnId: input.turnId,
-    createdBy: "raven",
-  });
-  const occurrences = buildOccurrencesForSchedule({
-    schedulePolicy: validation.schedulePolicy,
-    repeatsRequired: validation.request.repeats_required,
-    dueAt,
-  });
-  if (occurrences.length > 0) {
-    await createTaskOccurrencesInDb({
-      taskId: created.id,
-      occurrences,
-    });
-  }
-  createdTaskId = created.id;
-  taskCreateSource = parsedStructured ? "structured_json" : "assistant_fallback";
-  taskCreateKind = "final";
-  finalText =
-    stripCreateTaskJsonBlock(finalText) ||
-    `Task assigned: ${created.title}. Complete ${created.repeats_required} occurrence(s) by ${created.due_at} for ${created.points_possible} base points.`;
-
-  return { text: finalText, createdTaskId, taskCreateSource, taskCreateKind };
+function logSessionRouteDebug(payload: Record<string, unknown>): void {
+  console.info("raven.route.debug", JSON.stringify(payload));
 }
 
 async function persistSessionTurnSummary(
@@ -940,16 +786,42 @@ async function buildPreparedMessages(
   turnPlan: TurnPlan,
   conversationStateSnapshot: ConversationStateSnapshot,
   responseStrategyBlock: string,
-): Promise<{ messages: HistoryMessage[]; promptDebug: PromptAssemblyDebug }> {
+): Promise<{
+  messages: HistoryMessage[];
+  promptDebug: PromptAssemblyDebug;
+  promptProfile: VoicePromptProfile;
+  promptRouteMode: PromptRouteMode;
+}> {
   const sanitizedMessages = sessionMode ? stripClientPromptScaffolding(messages) : messages;
   const latestUserMessage =
     [...sanitizedMessages].reverse().find((message) => message.role === "user")?.content ?? "";
   const promptRouteMode = resolvePromptRouteMode(latestUserMessage);
+  const promptProfile = chooseVoicePromptProfile({
+    plannerEnabled,
+    sessionMode,
+    promptRouteMode,
+    latestUserMessage,
+    currentMode: conversationStateSnapshot.current_mode,
+  });
   const promptRouteSystemMessage = buildPromptRouteSystemMessage(promptRouteMode);
   const promptConversationState = buildPromptRouteConversationState(
     conversationStateSnapshot,
     promptRouteMode,
   );
+  const includeTaskRuntimePromptBlocks = shouldIncludeTaskRuntimePromptBlocks({
+    plannerEnabled,
+    currentMode: conversationStateSnapshot.current_mode,
+    sessionPhase: conversationState.sessionPhase,
+    latestUserMessage,
+    promptRouteMode,
+  });
+  const includeResponseStrategyPromptBlock = shouldIncludeResponseStrategyPromptBlock({
+    plannerEnabled,
+    currentMode: conversationStateSnapshot.current_mode,
+    sessionPhase: conversationState.sessionPhase,
+    latestUserMessage,
+    promptRouteMode,
+  });
   await refreshExpiredTasksInDb();
   const [
     profile,
@@ -989,9 +861,15 @@ async function buildPreparedMessages(
     maxLines: 8,
   });
   const personaPack = loadPersonaStylePack(personaPackId);
-  const personaPackSystemMessage = personaPack ? buildPersonaPackSystemMessage(personaPack) : null;
+  const personaPackSystemMessage = personaPack
+    ? buildPersonaPackSystemMessage(personaPack, {
+        includeExamples: promptProfile !== "minimal_voice_chat",
+      })
+    : null;
   const systemMessages = buildSystemMessages(memoryContext, {
-    includeDeviceActions: !plannerEnabled,
+    includeDeviceActions: !plannerEnabled && promptProfile === "full",
+    includeBehaviorPack: promptProfile === "full",
+    includeToneExamples: promptProfile === "full",
     toneProfile,
     moodLabel: conversationState.moodLabel,
     dialogueAct,
@@ -1008,13 +886,64 @@ async function buildPreparedMessages(
     moodLabel: conversationState.moodLabel,
     relationshipLabel: conversationState.relationshipLabel,
     observationPrompt,
-    deviceContextMessage,
-    inventoryContextMessage,
-    verificationSummary,
+    deviceContextMessage: includeTaskRuntimePromptBlocks ? deviceContextMessage : "",
+    inventoryContextMessage: includeTaskRuntimePromptBlocks ? inventoryContextMessage : "",
+    verificationSummary: includeTaskRuntimePromptBlocks ? verificationSummary : "",
   });
+  const isMinimalVoicePrompt = promptProfile === "minimal_voice_chat";
+  // Only carry task/runtime scaffolding when the live turn is actually on a task, game, verification, or device rail.
+  const taskRuntimeSystemMessages: HistoryMessage[] = includeTaskRuntimePromptBlocks
+    ? [
+        {
+          role: "system",
+          content: buildTaskContextBlock({
+            activeTasks,
+            progress,
+            reviewQueue: buildTaskReviewQueue({
+              activeTasks,
+              occurrences: allOccurrences,
+              events: taskEvents,
+            }),
+            todayOccurrences: activeTasks.map((task) => {
+              const todayYmd = new Date().toISOString().slice(0, 10);
+              const rows = allOccurrences.filter(
+                (occurrence) =>
+                  occurrence.task_id === task.id && occurrence.scheduled_date === todayYmd,
+              );
+              return {
+                task_id: task.id,
+                pending: rows.filter((occurrence) => occurrence.status === "pending").length,
+                completed: rows.filter((occurrence) => occurrence.status === "completed").length,
+                missed: rows.filter((occurrence) => occurrence.status === "missed").length,
+              };
+            }),
+          }),
+        },
+        {
+          role: "system",
+          content: buildTaskRewardPolicyBlock(progress.free_pass_count),
+        },
+        { role: "system", content: TASK_ACTIONS_SYSTEM_MESSAGE },
+        { role: "system", content: buildTaskCatalogPromptBlock() },
+        { role: "system", content: capabilityPrompt },
+        { role: "system", content: deviceContextMessage },
+        { role: "system", content: inventoryContextMessage },
+      ]
+    : [];
+  const minimalAuxiliaryMessages: HistoryMessage[] = [
+    ...(promptRouteSystemMessage
+      ? ([{ role: "system", content: promptRouteSystemMessage }] as HistoryMessage[])
+      : []),
+    ...(promptRouteMode === "relational_direct"
+      ? ([{ role: "system", content: buildRecentTurnsContext(sanitizedMessages) }] as HistoryMessage[])
+      : []),
+  ];
   const observationMessages: HistoryMessage[] = [
     { role: "system", content: buildDialogueActPrompt(dialogueAct) },
-    { role: "system", content: responseStrategyBlock },
+    // Keep response-strategy guidance for structured rails, but do not push it into ordinary open conversation by default.
+    ...(includeResponseStrategyPromptBlock
+      ? ([{ role: "system", content: responseStrategyBlock }] as HistoryMessage[])
+      : []),
     { role: "system", content: buildPromptRouteTurnPlanMessage(promptRouteMode, turnPlan) },
     ...(promptRouteMode === "default"
       ? ([{ role: "system", content: buildRecentTurnsContext(sanitizedMessages) }] as HistoryMessage[])
@@ -1038,52 +967,25 @@ async function buildPreparedMessages(
     { role: "system", content: observationPrompt },
     { role: "system", content: compactContext },
     ...(fixedMemoryBlock ? ([{ role: "system", content: fixedMemoryBlock }] as HistoryMessage[]) : []),
-    {
-      role: "system",
-      content: buildTaskContextBlock({
-        activeTasks,
-        progress,
-        reviewQueue: buildTaskReviewQueue({
-          activeTasks,
-          occurrences: allOccurrences,
-          events: taskEvents,
-        }),
-        todayOccurrences: activeTasks.map((task) => {
-          const todayYmd = new Date().toISOString().slice(0, 10);
-          const rows = allOccurrences.filter(
-            (occurrence) =>
-              occurrence.task_id === task.id && occurrence.scheduled_date === todayYmd,
-          );
-          return {
-            task_id: task.id,
-            pending: rows.filter((occurrence) => occurrence.status === "pending").length,
-            completed: rows.filter((occurrence) => occurrence.status === "completed").length,
-            missed: rows.filter((occurrence) => occurrence.status === "missed").length,
-          };
-        }),
-      }),
-    },
-    {
-      role: "system",
-      content: buildTaskRewardPolicyBlock(progress.free_pass_count),
-    },
-    { role: "system", content: TASK_ACTIONS_SYSTEM_MESSAGE },
-    { role: "system", content: buildTaskCatalogPromptBlock() },
-    { role: "system", content: capabilityPrompt },
+    ...taskRuntimeSystemMessages,
     { role: "system", content: longTermMemoryBlock },
     { role: "system", content: learnedUserProfileBlock },
-    { role: "system", content: deviceContextMessage },
-    { role: "system", content: inventoryContextMessage },
   ];
   const sessionMessages = sessionMode
     ? ([{ role: "system", content: SESSION_CONVERSATION_SYSTEM_MESSAGE }] as HistoryMessage[])
     : [];
+  const auxiliarySystemMessages = isMinimalVoicePrompt
+    ? minimalAuxiliaryMessages
+    : [...observationMessages, ...sessionMessages];
 
   const assembled = assemblePrompt({
     baseSystemMessages: systemMessages,
-    auxiliarySystemMessages: [...observationMessages, ...sessionMessages],
+    auxiliarySystemMessages,
     incomingMessages: sanitizedMessages,
     conversationState: promptConversationState,
+    stateBlockOverride: isMinimalVoicePrompt
+      ? buildVoiceContinuityBlock(promptConversationState)
+      : undefined,
     contextPolicy: {
       suppressPriorDialogue: promptRouteMode !== "default",
     },
@@ -1093,12 +995,16 @@ async function buildPreparedMessages(
     return {
       messages: assembled.messages,
       promptDebug: assembled.debug,
+      promptProfile,
+      promptRouteMode,
     };
   }
 
   return {
     messages: [...assembled.messages, { role: "system", content: PLANNER_JSON_SYSTEM_MESSAGE }],
     promptDebug: assembled.debug,
+    promptProfile,
+    promptRouteMode,
   };
 }
 
@@ -1183,13 +1089,16 @@ export async function POST(request: Request) {
       typeof payload.lastAssistantOutput === "string" ? payload.lastAssistantOutput.trim() : null,
   };
   const lastUserMessage = [...messages].reverse().find((message) => message.role === "user");
-  const dialogueAct = selectDialogueAct({
+  const turnInterpretation = interpretLiveRouteTurn({
     lastUserMessage: lastUserMessage?.content ?? "",
     awaitingUser: conversationState.awaitingUser,
     userAnswered: conversationState.userAnswered,
     verificationJustCompleted: conversationState.verificationJustCompleted,
     sessionPhase: conversationState.sessionPhase,
+    previousAssistantMessage: conversationState.lastAssistantOutput,
+    currentTopic: null,
   });
+  const dialogueAct = turnInterpretation.dialogueAct;
   const selectedPlaybookIds = getSelectedPersonaPlaybookIds({
     dialogueAct,
     sessionPhase: conversationState.sessionPhase,
@@ -1225,15 +1134,10 @@ export async function POST(request: Request) {
       : deriveConversationStateFromMessages({
           sessionId,
           messages,
-          classifyUserIntent,
-          classifyRouteAct: (text, awaitingUser) =>
-            classifyDialogueRoute({
-              text,
-              awaitingUser,
-              currentTopic: null,
-              nowMs: Date.now(),
-            }).act,
+          classifyUserIntent: turnInterpretation.classifyUserIntentForState,
+          classifyRouteAct: turnInterpretation.classifyRouteActForState,
         });
+  const workingMemory = normalizeWorkingMemory(payload.workingMemory);
   const turnPlan = buildTurnPlan(messages, {
     conversationState: conversationStateSnapshot,
   });
@@ -1531,194 +1435,37 @@ export async function POST(request: Request) {
     injectedMemoryBlock: debugMemoryBlock,
   });
 
-  if (sessionMode && !planner.enabled && lastUserMessage) {
-    const profile = await getProfileFromDb();
-    const progress = await getProfileProgressFromDb();
-    const normalizedInventory = normalizeSessionInventory(payload.inventory);
-    const replayed = replaySceneFromMessages({
-      messages,
-      inventory: normalizedInventory,
-      deviceControlActive: payload.deviceOptIn === true && !emergencyStop.stopped,
-      profile,
-      progress,
-    });
-    const normalizedLastUser = lastUserMessage.content.trim().toLowerCase();
-    const deterministicQuickChoiceReply =
-      (replayed.latestAct === "answer_activity_choice" ||
-        replayed.latestAct === "propose_activity") &&
-      replayed.sceneState.scene_type === "game" &&
-      replayed.sceneState.topic_type !== "game_execution" &&
-      replayed.sceneState.topic_type !== "reward_negotiation" &&
-      /\b(i choose quick|i chose quick|i'?ll choose quick|ill choose quick|choose quick|quick game|i pick quick)\b/.test(
-        normalizedLastUser,
-      )
-        ? buildDeterministicGameStart(replayed.sceneState.game_template_id)
-        : null;
-    if (deterministicQuickChoiceReply) {
-      await appendChatHistory("assistant", deterministicQuickChoiceReply, sessionId);
-      await persistSessionTurnSummary(
-        sessionId,
-        lastUserMessage.content,
-        deterministicQuickChoiceReply,
-        conversationStateSnapshot,
-        "deterministic_scene",
-      );
-      return createStaticAssistantNdjsonResponse(deterministicQuickChoiceReply, {
-        ...buildChatTraceHeaders({
-          requestId,
-          turnId,
-          generationPath: "deterministic-game-choice",
-          modelRan: false,
-          deterministicRail: "game_quick_choice",
-          postProcessed: false,
-        }),
-        "x-raven-dialogue-act": replayed.latestAct,
-        "x-raven-source": "deterministic-game-choice",
-      });
-    }
-    const effectiveSceneAct = replayed.latestAct;
-    const lastAssistantOutput =
-      conversationState.lastAssistantOutput ?? previousAssistantText(messages);
-    const shortFollowUpReply =
-      effectiveSceneAct === "short_follow_up"
-        ? buildShortClarificationReply({
-            userText: lastUserMessage.content,
-            interactionMode: replayed.sceneState.interaction_mode,
-            topicType: replayed.sceneState.topic_type,
-            lastAssistantText: lastAssistantOutput,
-            lastUserAnswer: replayed.sessionMemory.last_user_answer?.value ?? null,
-            currentTopic: replayed.sceneState.agreed_goal || null,
-          })
-        : null;
-    const relationalRouteSelected =
-      (isAssistantSelfQuestion(lastUserMessage.content) ||
-        isMutualGettingToKnowRequest(lastUserMessage.content)) &&
-      !replayed.sceneState.task_hard_lock_active;
-    const currentTopic = replayed.sceneState.agreed_goal || null;
-    const coreConversationMove = classifyCoreConversationMove({
-      userText: lastUserMessage.content,
-      previousAssistantText: lastAssistantOutput,
-      currentTopic,
-    });
-    const deterministicCoreConversationReply = isStableCoreConversationMove(coreConversationMove)
-      ? buildCoreConversationReply({
-          userText: lastUserMessage.content,
-          previousAssistantText: lastAssistantOutput,
-          currentTopic,
-        })
-      : null;
-    const deterministicGreetingReply =
-      isChatLikeSmalltalk(lastUserMessage.content) && !replayed.sceneState.task_hard_lock_active
-        ? buildOpenChatGreeting()
-        : null;
-    const deterministicRelationalReply = relationalRouteSelected
-      ? buildHumanQuestionFallback(lastUserMessage.content, toneProfile, {
-          previousAssistantText: lastAssistantOutput,
-          currentTopic,
-        })
-      : null;
-    const shouldSkipScaffoldCompetition =
-      effectiveSceneAct === "short_follow_up" ||
-      relationalRouteSelected;
-    const scaffolded = shouldSkipScaffoldCompetition
-      ? null
-      : buildSceneScaffoldReply({
-          act: effectiveSceneAct,
-          userText: lastUserMessage.content,
-          sceneState: replayed.sceneState,
-          deviceControlActive: payload.deviceOptIn === true && !emergencyStop.stopped,
-          profile,
-          progress,
-          inventory: normalizedInventory,
-        });
-    const deterministicWeakReply = scaffolded ? null : null;
-    const sceneFallbackFromState = buildSceneFallback(
-      replayed.sceneState,
-      lastUserMessage.content,
-      replayed.sessionMemory,
-      normalizedInventory,
-    );
-    const sceneFallback =
-      sceneFallbackFromState ??
-      buildHumanQuestionFallback(lastUserMessage.content, toneProfile, {
-        previousAssistantText: lastAssistantOutput,
-        currentTopic,
-      });
-    const sceneFallbackSource = sceneFallbackFromState
-      ? "buildSceneFallback"
-      : "buildHumanQuestionFallback";
-    const deterministicCandidate =
-      shortFollowUpReply ??
-      deterministicCoreConversationReply ??
-      deterministicGreetingReply ??
-      deterministicRelationalReply ??
-      scaffolded ??
-      deterministicWeakReply;
-    const forceDeterministicConversationReply =
-      Boolean(shortFollowUpReply) ||
-      Boolean(deterministicCoreConversationReply) ||
-      Boolean(deterministicGreetingReply) ||
-      Boolean(deterministicRelationalReply) ||
-      (Boolean(scaffolded) && isTopicInitiationRequest(lastUserMessage.content));
-    const bypassModel = shouldBypassModelForSceneTurn({
-      sceneState: replayed.sceneState,
-      dialogueAct: effectiveSceneAct,
-      hasDeterministicCandidate: Boolean(deterministicCandidate),
-    }) || forceDeterministicConversationReply;
+  let sessionReplayDebugContext: SessionReplayDebugContext | null = null;
 
-    if (bypassModel) {
-      const gated = applyResponseGate({
-        text: deterministicCandidate ?? sceneFallback,
-        userText: lastUserMessage.content,
-        dialogueAct: effectiveSceneAct,
-        lastAssistantText: lastAssistantOutput,
-        turnPlan,
-        sceneState: replayed.sceneState,
-        commitmentState: createCommitmentState(),
-        sessionMemory: null,
-        inventory: normalizedInventory,
-        observationTrust: evaluateObservationTrust(payload.observations),
-      });
-      const persisted = await maybePersistTaskFromAssistantText({
-        text: gated.text,
-        lastUserText: lastUserMessage.content,
-        allowedCheckTypes,
-        sessionMode,
-        capabilityCatalog,
-        sessionId,
-        turnId,
-      });
-      await appendChatHistory("assistant", persisted.text, sessionId);
-      await persistSessionTurnSummary(
-        sessionId,
-        lastUserMessage.content,
-        persisted.text,
-        conversationStateSnapshot,
-        "deterministic_scene",
-      );
-      return createStaticAssistantNdjsonResponse(persisted.text, {
-        ...buildChatTraceHeaders({
-          requestId,
-          turnId,
-          generationPath: "deterministic-scene",
-          modelRan: false,
-          deterministicRail: "scene_bypass",
-          postProcessed: false,
-        }),
-        "x-raven-dialogue-act": effectiveSceneAct,
-        "x-raven-source": "deterministic-scene",
-        "x-raven-final-output-source": deterministicCandidate ? "deterministic_candidate" : sceneFallbackSource,
-        "x-raven-task-create-source": persisted.taskCreateSource,
-        "x-raven-task-create-kind": persisted.taskCreateKind,
-        "x-raven-task-origin-turn-id": turnId,
-        ...(persisted.createdTaskId
-          ? {
-              "x-raven-task-created": "1",
-              "x-raven-task-id": persisted.createdTaskId,
-            }
-          : {}),
-      });
-    }
+  const sessionReplayResult = await maybeHandleSessionReplayDeterministicBypass({
+    sessionMode,
+    plannerEnabled: planner.enabled,
+    lastUserMessage,
+    messages,
+    inventory: payload.inventory,
+    deviceOptIn: payload.deviceOptIn === true,
+    observations: payload.observations,
+    emergencyStopStopped: emergencyStop.stopped,
+    workingMemory,
+    lastAssistantOutput: conversationState.lastAssistantOutput,
+    conversationStateSnapshot,
+    toneProfile,
+    turnPlan,
+    requestId,
+    turnId,
+    sessionId,
+    capabilityCatalog,
+    allowedCheckTypes,
+    logSessionRouteDebug,
+    maybePersistTaskFromAssistantText: persistTaskFromAssistantText,
+    appendChatHistory,
+    persistSessionTurnSummary,
+    createStaticAssistantNdjsonResponse,
+    buildChatTraceHeaders,
+  });
+  sessionReplayDebugContext = sessionReplayResult.sessionReplayDebugContext;
+  if (sessionReplayResult.response) {
+    return sessionReplayResult.response;
   }
 
   const preparedPrompt = await buildPreparedMessages(
@@ -1751,9 +1498,11 @@ export async function POST(request: Request) {
     conversationStateSnapshot,
     responseStrategyBlock,
   );
-  setPromptDebugEntry({
+  const promptDebugEntry = {
     sessionId,
     timestamp: Date.now(),
+    promptProfile: preparedPrompt.promptProfile,
+    promptRouteMode: preparedPrompt.promptRouteMode,
     stateSnapshot: preparedPrompt.promptDebug.stateSnapshot,
     responseStrategy,
     promptSizeEstimate: preparedPrompt.promptDebug.promptSizeEstimate,
@@ -1763,7 +1512,12 @@ export async function POST(request: Request) {
     assembledPromptPreview: preparedPrompt.messages.map(
       (message) => `${message.role}: ${message.content.slice(0, 220)}`,
     ),
-  });
+    assembledPromptMessages: preparedPrompt.messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+    })),
+  };
+  setPromptDebugEntry(promptDebugEntry);
 
   let upstreamResponse: Response;
   try {
@@ -1851,6 +1605,41 @@ export async function POST(request: Request) {
       : typeof upstreamBody?.response === "string"
         ? upstreamBody.response
         : "";
+  const rawGameStartInspection = inspectGameStartContract(rawAssistantText);
+  if (payload.debugRawModel === true) {
+    setPromptDebugEntry({
+      ...promptDebugEntry,
+      modelTrace: {
+        rawModelOutput: rawAssistantText,
+        shapedOutput: rawAssistantText,
+        finalAssistantOutput: rawAssistantText,
+        shapeReason: null,
+        finalOutputSource: "raw_model_debug",
+        preservedModelVoice: true,
+        criticReasons: [],
+        appCandidates: [
+          {
+            source: "raw_model_output",
+            text: rawAssistantText,
+            selected: true,
+          },
+        ],
+      },
+    });
+    return NextResponse.json({
+      sessionId,
+      promptProfile: preparedPrompt.promptProfile,
+      promptRouteMode: preparedPrompt.promptRouteMode,
+      responseStrategy,
+      promptSizeEstimate: preparedPrompt.promptDebug.promptSizeEstimate,
+      selectedPlaybookIds,
+      assembledPromptMessages: preparedPrompt.messages,
+      rawModelOutput: rawAssistantText,
+      rawGameStartDetected: rawGameStartInspection.detected,
+      rawGameStartFirstPromptPresent: rawGameStartInspection.hasPlayablePrompt,
+    });
+  }
+  const allowFreshGreetingOpener = preparedPrompt.promptRouteMode === "fresh_greeting";
   const shaped = shapeAssistantOutput({
     rawText: rawAssistantText,
     lastUserMessage: lastUserMessage?.content ?? "",
@@ -1858,6 +1647,7 @@ export async function POST(request: Request) {
     toneProfile,
     dialogueAct,
     dominantAddressTerm: customPersona?.address_term ?? null,
+    allowFreshGreetingOpener,
   });
   const postShapeCritic = evaluateImmersionQuality({
     text: shaped.text,
@@ -1865,6 +1655,16 @@ export async function POST(request: Request) {
     toneProfile,
     dialogueAct,
     dominantAddressTerm: customPersona?.address_term ?? null,
+    allowFreshGreetingOpener,
+  });
+  const modelRepairResolution = resolveRepairTurn({
+    userText: lastUserMessage?.content ?? "",
+    previousAssistantText: conversationState.lastAssistantOutput ?? previousAssistantText(messages),
+    previousUserText: previousUserText(messages),
+    currentTopic:
+      conversationStateSnapshot.last_conversation_topic !== "none"
+        ? conversationStateSnapshot.last_conversation_topic
+        : null,
   });
   const baseResponseHeaders: Record<string, string> = {
     ...buildChatTraceHeaders({
@@ -1881,10 +1681,52 @@ export async function POST(request: Request) {
     "x-raven-playbooks": encodeHeaderList(selectedPlaybookIds),
     "x-raven-shape-reason": shaped.reason ?? "none",
     "x-raven-critic-reasons": encodeHeaderList(postShapeCritic.reasons),
+    ...buildRepairDebugHeaders(modelRepairResolution),
     "x-raven-turn-plan": `${turnPlan.requiredMove}:${turnPlan.requestedAction}`,
+    "x-raven-shape-source": shaped.debug?.selectedSource ?? "model",
+    "x-raven-prompt-profile": preparedPrompt.promptProfile,
+    "x-raven-prompt-route": preparedPrompt.promptRouteMode,
   };
 
+  const appCandidates = [
+    {
+      source: "buildDeterministicDominantWeakInputReply",
+      text: shaped.debug?.deterministicWeakCandidate ?? null,
+      selected: shaped.debug?.selectedSource === "deterministic_weak_input",
+    },
+    {
+      source: "fallbackSentenceForDialogueAct",
+      text: shaped.debug?.dialogueFallbackCandidate ?? null,
+      selected:
+        shaped.debug?.selectedSource === "dialogue_fallback" ||
+        shaped.debug?.selectedSource === "dominant_contract",
+    },
+    {
+      source: "buildHumanQuestionFallback",
+      text: shaped.debug?.questionFallbackCandidate ?? null,
+      selected: false,
+    },
+    {
+      source: "shapeAssistantOutput",
+      text: shaped.text,
+      selected: false,
+    },
+  ];
+
   if (shaped.noop) {
+    setPromptDebugEntry({
+      ...promptDebugEntry,
+      modelTrace: {
+        rawModelOutput: rawAssistantText,
+        shapedOutput: shaped.text,
+        finalAssistantOutput: "",
+        shapeReason: shaped.reason ?? null,
+        finalOutputSource: "noop",
+        preservedModelVoice: shaped.debug?.preservedModelVoice ?? false,
+        criticReasons: postShapeCritic.reasons,
+        appCandidates,
+      },
+    });
     return createStaticAssistantNdjsonResponse("", {
       ...baseResponseHeaders,
       "x-raven-post-processed": "1",
@@ -1901,6 +1743,24 @@ export async function POST(request: Request) {
   }
   let finalAssistantText = shaped.text;
   let finalOutputSource = "model";
+  const freshGreetingGuard = applyFreshGreetingGuard({
+    text: finalAssistantText,
+    lastUserMessage: lastUserMessage?.content ?? "",
+    promptRouteMode: preparedPrompt.promptRouteMode,
+    currentMode: conversationStateSnapshot.current_mode,
+    pendingModification: conversationStateSnapshot.pending_modification,
+    lastUserIntent: conversationStateSnapshot.last_user_intent,
+    sceneScope: sessionReplayDebugContext?.sceneScope ?? "open_conversation",
+    sceneTopicLocked: sessionReplayDebugContext?.sceneTopicLocked ?? false,
+    taskHardLockActive: sessionReplayDebugContext?.taskHardLockActive ?? false,
+  });
+  if (freshGreetingGuard.changed) {
+    finalAssistantText = freshGreetingGuard.text;
+    finalOutputSource = "freshGreetingGuard";
+    baseResponseHeaders["x-raven-fresh-greeting-guard"] = freshGreetingGuard.reason ?? "normalized";
+  } else {
+    baseResponseHeaders["x-raven-fresh-greeting-guard"] = "pass";
+  }
   const turnPlanCheck = isTurnPlanSatisfied(turnPlan, finalAssistantText);
   if (!turnPlanCheck.ok) {
     if (
@@ -1925,7 +1785,13 @@ export async function POST(request: Request) {
     .map((message) => message.content)
     .slice(-4);
   const repetitionCheck = detectStaleResponseReuse(finalAssistantText, recentAssistantReplies);
-  if (repetitionCheck.repeated) {
+  const preserveAnsweredQuestion =
+    shouldPreserveAnsweredQuestionAgainstRepetitionFallback({
+      repetitionCheck,
+      turnPlanRequiredMove: turnPlan.requiredMove,
+      turnPlanCheck,
+    });
+  if (repetitionCheck.repeated && !preserveAnsweredQuestion) {
     finalAssistantText =
       turnPlan.requiredMove === "answer_user_question"
         ? buildTurnPlanFallback(turnPlan, toneProfile)
@@ -1940,11 +1806,14 @@ export async function POST(request: Request) {
         ? "buildTurnPlanFallback"
         : "buildContinuityRecoveryReply";
     baseResponseHeaders["x-raven-repetition-check"] = `fallback:${repetitionCheck.reason}`;
+  } else if (preserveAnsweredQuestion) {
+    // Keep a valid fresh question answer instead of replacing it with a weaker fallback.
+    baseResponseHeaders["x-raven-repetition-check"] = `kept:${repetitionCheck.reason}`;
   } else {
     baseResponseHeaders["x-raven-repetition-check"] = `pass:${repetitionCheck.reason}`;
   }
 
-  const persisted = await maybePersistTaskFromAssistantText({
+  const persisted = await persistTaskFromAssistantText({
     text: finalAssistantText,
     lastUserText: lastUserMessage?.content ?? "",
     allowedCheckTypes,
@@ -1955,6 +1824,106 @@ export async function POST(request: Request) {
   });
   finalAssistantText = persisted.text;
   const createdTaskId = persisted.createdTaskId;
+  const finalLeakScrub = scrubVisibleInternalLeakText(finalAssistantText);
+  if (finalLeakScrub.changed) {
+    // Final defense-in-depth: never return planner/runtime residue on the normal model path.
+    if (finalLeakScrub.blocked) {
+      finalAssistantText =
+        turnPlan.requiredMove === "answer_user_question"
+          ? buildTurnPlanFallback(turnPlan, toneProfile)
+          : buildContinuityRecoveryReply({
+              strategy: responseStrategy,
+              state: conversationStateSnapshot,
+              lastUserMessage: lastUserMessage?.content ?? "",
+              toneProfile,
+            });
+      finalOutputSource =
+        turnPlan.requiredMove === "answer_user_question"
+          ? "buildTurnPlanFallback"
+          : "buildContinuityRecoveryReply";
+      baseResponseHeaders["x-raven-final-leak-scrub"] = "fallback";
+    } else {
+      finalAssistantText = finalLeakScrub.text;
+      finalOutputSource = "finalLeakScrub";
+      baseResponseHeaders["x-raven-final-leak-scrub"] = "scrubbed";
+    }
+  } else {
+    baseResponseHeaders["x-raven-final-leak-scrub"] = "pass";
+  }
+  const finalGameStartInspection = inspectGameStartContract(
+    finalAssistantText,
+    rawGameStartInspection.templateId,
+  );
+
+  setPromptDebugEntry({
+    ...promptDebugEntry,
+    modelTrace: {
+      rawModelOutput: rawAssistantText,
+      shapedOutput: shaped.text,
+      finalAssistantOutput: finalAssistantText,
+      shapeReason: shaped.reason ?? null,
+      finalOutputSource,
+      preservedModelVoice: shaped.debug?.preservedModelVoice ?? false,
+      criticReasons: postShapeCritic.reasons,
+      appCandidates: [
+        ...appCandidates,
+        {
+          source: "freshGreetingGuard",
+          text: freshGreetingGuard.text,
+          selected: finalOutputSource === "freshGreetingGuard",
+        },
+        {
+          source: "buildTurnPlanFallback",
+          text: buildTurnPlanFallback(turnPlan, toneProfile),
+          selected: finalOutputSource === "buildTurnPlanFallback",
+        },
+        {
+          source: "buildContinuityRecoveryReply",
+          text: buildContinuityRecoveryReply({
+            strategy: responseStrategy,
+            state: conversationStateSnapshot,
+            lastUserMessage: lastUserMessage?.content ?? "",
+            toneProfile,
+          }),
+          selected: finalOutputSource === "buildContinuityRecoveryReply",
+        },
+        {
+          source: "final_displayed_output",
+          text: finalAssistantText,
+          selected: true,
+        },
+      ],
+    },
+  });
+
+  if (sessionReplayDebugContext && lastUserMessage) {
+    logSessionRouteDebug({
+      stage: "session_final",
+      latest_user_message: sessionReplayDebugContext.latestUserMessage,
+      detected_user_act: sessionReplayDebugContext.detectedUserAct,
+      current_session_mode: sessionReplayDebugContext.currentSessionMode,
+      replayed_scene_state: sessionReplayDebugContext.replayedSceneStateSummary,
+      scene_scope: sessionReplayDebugContext.sceneScope,
+      deterministic_bypass_triggered: sessionReplayDebugContext.deterministicBypassTriggered,
+      deterministic_bypass_reason: sessionReplayDebugContext.deterministicBypassReason,
+      model_called: true,
+      chosen_response_source:
+        finalOutputSource === "buildTurnPlanFallback"
+          ? "turn-plan fallback"
+          : finalOutputSource === "freshGreetingGuard"
+            ? "fresh-greeting guard"
+            : "model",
+      direct_question: sessionReplayDebugContext.directQuestion,
+      answered_direct_question_first: answeredDirectQuestionFirst(
+        lastUserMessage.content,
+        finalAssistantText,
+        sessionReplayDebugContext.detectedUserAct,
+      ),
+      pre_model_candidate_source: sessionReplayDebugContext.preModelCandidateSource,
+      final_output_source: finalOutputSource,
+      turn_plan_check: baseResponseHeaders["x-raven-turn-plan-check"] ?? "none",
+    });
+  }
 
   await appendChatHistory("assistant", finalAssistantText, sessionId);
   await persistSessionTurnSummary(
@@ -1972,6 +1941,13 @@ export async function POST(request: Request) {
     "x-raven-task-create-source": persisted.taskCreateSource,
     "x-raven-task-create-kind": persisted.taskCreateKind,
     "x-raven-task-origin-turn-id": turnId,
+    "x-raven-game-start-detected": rawGameStartInspection.detected ? "1" : "0",
+    "x-raven-game-start-raw-question-present": rawGameStartInspection.hasPlayablePrompt
+      ? "1"
+      : "0",
+    "x-raven-game-start-final-question-present": finalGameStartInspection.hasPlayablePrompt
+      ? "1"
+      : "0",
     ...(createdTaskId
       ? {
           "x-raven-task-created": "1",

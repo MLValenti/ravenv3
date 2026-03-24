@@ -1,0 +1,62 @@
+[
+  {
+    "input": "hi",
+    "finalText": "There you are. You have my attention.",
+    "finalOutputSource": "freshGreetingGuard",
+    "freshGreetingGuard": "ownership_or_control_claim",
+    "turnPlanCheck": "pass:greeting_opened",
+    "turnPlanFallbackTriggered": false,
+    "firstLine": "There you are.",
+    "flags": {
+      "ownershipClaim": false,
+      "stackedCommands": false,
+      "immediateCorrection": false,
+      "harshWeakInputOpener": false
+    }
+  },
+  {
+    "input": "hello",
+    "finalText": "Pet, I heard you say hello. Fine. Eyes on me and stay sharp, good pet.",
+    "finalOutputSource": "model",
+    "freshGreetingGuard": "pass",
+    "turnPlanCheck": "pass:greeting_opened",
+    "turnPlanFallbackTriggered": false,
+    "firstLine": "Pet, I heard you say hello.",
+    "flags": {
+      "ownershipClaim": false,
+      "stackedCommands": false,
+      "immediateCorrection": false,
+      "harshWeakInputOpener": false
+    }
+  },
+  {
+    "input": "hey",
+    "finalText": "Hey. Speak.",
+    "finalOutputSource": "freshGreetingGuard",
+    "freshGreetingGuard": "ownership_or_control_claim",
+    "turnPlanCheck": "pass:greeting_opened",
+    "turnPlanFallbackTriggered": false,
+    "firstLine": "Hey.",
+    "flags": {
+      "ownershipClaim": false,
+      "stackedCommands": false,
+      "immediateCorrection": false,
+      "harshWeakInputOpener": false
+    }
+  },
+  {
+    "input": "good evening",
+    "finalText": "Good evening. You have my attention.",
+    "finalOutputSource": "freshGreetingGuard",
+    "freshGreetingGuard": "ownership_or_control_claim",
+    "turnPlanCheck": "pass:greeting_opened",
+    "turnPlanFallbackTriggered": false,
+    "firstLine": "Good evening.",
+    "flags": {
+      "ownershipClaim": false,
+      "stackedCommands": false,
+      "immediateCorrection": false,
+      "harshWeakInputOpener": false
+    }
+  }
+]

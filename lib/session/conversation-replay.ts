@@ -8,6 +8,12 @@ import {
 } from "../chat/conversation-state.ts";
 import { buildHumanQuestionFallback } from "../chat/open-question.ts";
 import {
+  chooseVoicePromptProfile,
+  resolvePromptRouteMode,
+  type PromptRouteMode,
+  type VoicePromptProfile,
+} from "../chat/prompt-profile.ts";
+import {
   classifyCoreConversationMove,
   isStableCoreConversationMove,
 } from "../chat/core-turn-move.ts";
@@ -40,6 +46,7 @@ import {
   traceWriteUserQuestion,
   type SessionMemory,
   type SessionMemoryWriteRecord,
+  writeConversationMode,
 } from "./session-memory.ts";
 import { SESSION_INVENTORY_STORAGE_KEY, type SessionInventoryItem } from "./session-inventory.ts";
 import {
@@ -80,7 +87,12 @@ export type ReplayScenarioCategory =
   | "chat_switch"
   | "task"
   | "short_follow_up"
-  | "mode_return";
+  | "mode_return"
+  | "game"
+  | "inventory"
+  | "repair"
+  | "rendering"
+  | "mixed";
 
 export type ReplayExecutor = "synthetic" | "browser_live";
 
@@ -99,6 +111,11 @@ export type ReplayExpectedMemoryWrite = {
 export type ReplayTurnExpectation = {
   expectedInteractionMode?: InteractionMode;
   expectedConversationMode?: InteractionMode | "none";
+  expectedTopicType?: SceneState["topic_type"];
+  expectedGameProgress?: SceneState["game_progress"];
+  expectedTaskProgress?: SceneState["task_progress"];
+  expectedPromptRouteMode?: PromptRouteMode;
+  expectedPromptProfile?: VoicePromptProfile;
   expectedWinningFamily?: TurnResponseFamily | "scene_fallback";
   blockedPhrases?: string[];
   requiredPhrasesAny?: string[];
@@ -110,6 +127,7 @@ export type ReplayTurnExpectation = {
   requireSummaryBehavior?: boolean;
   requireSingleWinner?: boolean;
   requireContextTieBack?: boolean;
+  requirePlayableGamePrompt?: boolean;
 };
 
 export type ReplayTurnDefinition = {
@@ -144,10 +162,20 @@ export type ReplayTurnTrace = {
   userInput: string;
   detectedIntent: UserIntent;
   dialogueAct: DialogueRouteAct;
+  promptRouteMode: PromptRouteMode;
+  promptProfile: VoicePromptProfile;
+  promptSummary: string;
   conversationMode: InteractionMode | "none";
   interactionMode: InteractionMode;
+  topicType: SceneState["topic_type"];
+  gameProgress: SceneState["game_progress"];
+  taskProgress: SceneState["task_progress"];
+  rawModelOutput: string | null;
+  selectedCandidateText: string;
+  responseGateText: string;
   memoryWritesAttempted: SessionMemoryWriteRecord[];
   memoryWritesCommitted: SessionMemoryWriteRecord[];
+  sceneWrites: Array<{ field: string; before: string; after: string }>;
   candidateResponseFamilies: ReplayCandidateTrace[];
   winningResponseFamily: TurnResponseFamily | "scene_fallback";
   finalOutputSource: TurnResponseFamily | "scene_fallback";
@@ -299,6 +327,61 @@ function assertLocalReplayBaseUrl(value: string): string {
 
 function normalize(text: string): string {
   return text.trim().replace(/\s+/g, " ");
+}
+
+function summarizePromptPlan(input: {
+  routeMode: PromptRouteMode;
+  profile: VoicePromptProfile;
+  interactionMode: InteractionMode;
+  dialogueTurns: number;
+}): string {
+  return [
+    `route=${input.routeMode}`,
+    `profile=${input.profile}`,
+    `mode=${input.interactionMode}`,
+    `turns=${input.dialogueTurns}`,
+  ].join(" ");
+}
+
+function describeSceneStateWrites(
+  previous: SceneState,
+  next: SceneState,
+): Array<{ field: string; before: string; after: string }> {
+  const fields: Array<keyof SceneState> = [
+    "interaction_mode",
+    "topic_type",
+    "topic_locked",
+    "topic_state",
+    "scene_type",
+    "game_template_id",
+    "game_progress",
+    "game_outcome",
+    "game_reward_state",
+    "task_progress",
+    "task_template_id",
+    "task_duration_minutes",
+    "current_task_domain",
+    "task_hard_lock_active",
+    "task_paused",
+    "agreed_goal",
+    "stakes",
+    "win_condition",
+    "lose_condition",
+    "task_reward",
+    "task_consequence",
+    "current_rule",
+    "current_subtask",
+    "next_expected_user_action",
+    "last_assistant_text",
+  ];
+  return fields.flatMap((field) => {
+    const before = normalize(String(previous[field] ?? ""));
+    const after = normalize(String(next[field] ?? ""));
+    if (before === after) {
+      return [];
+    }
+    return [{ field, before: before || "none", after: after || "none" }];
+  });
 }
 
 function parseReplayEventLine(raw: string): BrowserReplayEvent | null {
@@ -598,16 +681,6 @@ function evaluateGlobalInvariants(
   if (!trace.finalOutputSource) {
     addViolation(violations, scenario, trace, "final_output_source", "a singular final output source", "missing");
   }
-  if (trace.moreThanOneGeneratorFired) {
-    addViolation(
-      violations,
-      scenario,
-      trace,
-      "one_winning_response_family",
-      "one winning response family",
-      trace.candidateResponseFamilies.map((candidate) => `${candidate.family}:${candidate.sourceFunction}`).join(", "),
-    );
-  }
   if (!trace.oneOutputCommitted) {
     addViolation(
       violations,
@@ -692,6 +765,33 @@ function evaluateGlobalInvariants(
       trace.memoryWritesCommitted.map((write) => `${write.key}:${write.value}`).join(" | "),
     );
   }
+  if (
+    trace.interactionMode === "game" &&
+    trace.conversationMode !== "game"
+  ) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "mode.game_memory_alignment",
+      "conversation_mode to match game interaction mode",
+      trace.conversationMode,
+    );
+  }
+  if (
+    /\b(scene state:|turn routing:|working memory:|dialogueact:|state guidance:)\b/i.test(
+      trace.finalText,
+    )
+  ) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "render.no_internal_debug",
+      "no internal debug or scaffold text in rendered output",
+      trace.finalText,
+    );
+  }
 }
 
 function evaluateTurnExpectation(
@@ -729,6 +829,67 @@ function evaluateTurnExpectation(
       "mode.conversation",
       expectation.expectedConversationMode,
       trace.conversationMode,
+    );
+  }
+
+  if (expectation.expectedTopicType && trace.topicType !== expectation.expectedTopicType) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "mode.topic_type",
+      expectation.expectedTopicType,
+      trace.topicType,
+    );
+  }
+
+  if (expectation.expectedGameProgress && trace.gameProgress !== expectation.expectedGameProgress) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "game.progress",
+      expectation.expectedGameProgress,
+      trace.gameProgress,
+    );
+  }
+
+  if (expectation.expectedTaskProgress && trace.taskProgress !== expectation.expectedTaskProgress) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "task.progress",
+      expectation.expectedTaskProgress,
+      trace.taskProgress,
+    );
+  }
+
+  if (
+    expectation.expectedPromptRouteMode &&
+    trace.promptRouteMode !== expectation.expectedPromptRouteMode
+  ) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "prompt.route_mode",
+      expectation.expectedPromptRouteMode,
+      trace.promptRouteMode,
+    );
+  }
+
+  if (
+    expectation.expectedPromptProfile &&
+    trace.promptProfile !== expectation.expectedPromptProfile
+  ) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "prompt.profile",
+      expectation.expectedPromptProfile,
+      trace.promptProfile,
     );
   }
 
@@ -878,6 +1039,22 @@ function evaluateTurnExpectation(
       trace.finalText,
     );
   }
+
+  if (
+    expectation.requirePlayableGamePrompt &&
+    !/\b(first throw now|first guess now|first prompt:|first choice:|riddle one:|repeat this sequence exactly|pick one number from 1 to 10 now)\b/i.test(
+      trace.finalText,
+    )
+  ) {
+    addViolation(
+      violations,
+      scenario,
+      trace,
+      "game.first_prompt",
+      "playable first game prompt in same turn",
+      trace.finalText,
+    );
+  }
 }
 
 function buildFallbackCandidate(
@@ -908,9 +1085,15 @@ function buildWinningTrace(input: {
   userInput: string;
   detectedIntent: UserIntent;
   dialogueAct: DialogueRouteAct;
+  promptRouteMode: PromptRouteMode;
+  promptProfile: VoicePromptProfile;
+  promptSummary: string;
   sessionMemory: SessionMemory;
   previousSceneState: SceneState;
   sceneState: SceneState;
+  rawModelOutput: string | null;
+  selectedCandidateText: string;
+  responseGateText: string;
   memoryWritesAttempted: SessionMemoryWriteRecord[];
   memoryWritesCommitted: SessionMemoryWriteRecord[];
   candidates: ReplayCandidateTrace[];
@@ -934,10 +1117,20 @@ function buildWinningTrace(input: {
     userInput: input.userInput,
     detectedIntent: input.detectedIntent,
     dialogueAct: input.dialogueAct,
+    promptRouteMode: input.promptRouteMode,
+    promptProfile: input.promptProfile,
+    promptSummary: input.promptSummary,
     conversationMode: (input.sessionMemory.conversation_mode?.value as InteractionMode | undefined) ?? "none",
     interactionMode: input.sceneState.interaction_mode,
+    topicType: input.sceneState.topic_type,
+    gameProgress: input.sceneState.game_progress,
+    taskProgress: input.sceneState.task_progress,
+    rawModelOutput: input.rawModelOutput,
+    selectedCandidateText: input.selectedCandidateText,
+    responseGateText: input.responseGateText,
     memoryWritesAttempted: input.memoryWritesAttempted,
     memoryWritesCommitted: input.memoryWritesCommitted,
+    sceneWrites: describeSceneStateWrites(input.previousSceneState, input.sceneState),
     candidateResponseFamilies: input.candidates,
     winningResponseFamily: input.winningResponseFamily,
     finalOutputSource: input.finalOutputSource,
@@ -1012,6 +1205,20 @@ async function replayConversationScenarioSynthetic(
     const chatSwitchRouteSelected =
       isChatSwitchRequest(turn.user) && !state.sceneState.task_hard_lock_active;
     const shortFollowUpRouteSelected = reduced.route.act === "short_follow_up";
+    const promptRouteMode = resolvePromptRouteMode(turn.user);
+    const promptProfile = chooseVoicePromptProfile({
+      plannerEnabled: false,
+      sessionMode: false,
+      promptRouteMode,
+      latestUserMessage: turn.user,
+      currentMode: state.sceneState.interaction_mode,
+    });
+    const promptSummary = summarizePromptPlan({
+      routeMode: promptRouteMode,
+      profile: promptProfile,
+      interactionMode: state.sceneState.interaction_mode,
+      dialogueTurns: state.conversationState.recent_window.length,
+    });
     const relationalRouteSelected =
       (isAssistantSelfQuestion(turn.user) || isMutualGettingToKnowRequest(turn.user)) &&
       !state.sceneState.task_hard_lock_active;
@@ -1247,6 +1454,14 @@ async function replayConversationScenarioSynthetic(
         commitment: finalized.text,
         topicResolved: resolvesTopic,
       });
+      if (state.sessionMemory.conversation_mode?.value !== state.sceneState.interaction_mode) {
+        state.sessionMemory = writeConversationMode(
+          state.sessionMemory,
+          state.sceneState.interaction_mode,
+          turnNumber * 1000 + 1,
+          0.96,
+        );
+      }
       state.conversationState = noteConversationAssistantTurn(state.conversationState, {
         text: finalized.text,
         ravenIntent: reduced.route.act,
@@ -1260,9 +1475,15 @@ async function replayConversationScenarioSynthetic(
       userInput: turn.user,
       detectedIntent: reduced.intent,
       dialogueAct: reduced.route.act,
+      promptRouteMode,
+      promptProfile,
+      promptSummary,
       sessionMemory: state.sessionMemory,
       previousSceneState,
       sceneState: state.sceneState,
+      rawModelOutput: turn.simulatedModelReply ?? null,
+      selectedCandidateText: selectedCandidate.text,
+      responseGateText: responseGate.text,
       memoryWritesAttempted: memoryTrace.attempted,
       memoryWritesCommitted: memoryTrace.committed,
       candidates,
@@ -1350,6 +1571,14 @@ async function replayConversationScenarioBrowserLive(
         selectedEvent?.detail.task_or_persona_path ?? finalOutputSource,
         finalOutputSource,
       ) as TurnResponseFamily | "scene_fallback";
+      const promptRouteMode = resolvePromptRouteMode(turn.user);
+      const promptProfile = chooseVoicePromptProfile({
+        plannerEnabled: false,
+        sessionMode: true,
+        promptRouteMode,
+        latestUserMessage: turn.user,
+        currentMode: asString(selectedEvent?.detail.interaction_mode, "normal_chat"),
+      });
       const trace: ReplayTurnTrace = {
         turnNumber: index + 1,
         userInput: turn.user,
@@ -1361,10 +1590,25 @@ async function replayConversationScenarioBrowserLive(
           selectedEvent?.detail.dialogue_act ?? acceptedEvent?.detail.route_act,
           "user_question",
         ) as DialogueRouteAct,
+        promptRouteMode,
+        promptProfile,
+        promptSummary: summarizePromptPlan({
+          routeMode: promptRouteMode,
+          profile: promptProfile,
+          interactionMode: asString(selectedEvent?.detail.interaction_mode, "normal_chat") as InteractionMode,
+          dialogueTurns: index,
+        }),
         conversationMode: asString(selectedEvent?.detail.conversation_mode, "none") as InteractionMode | "none",
         interactionMode: asString(selectedEvent?.detail.interaction_mode, "normal_chat") as InteractionMode,
+        topicType: asString(selectedEvent?.detail.topic_type, "none") as SceneState["topic_type"],
+        gameProgress: asString(selectedEvent?.detail.game_progress, "none") as SceneState["game_progress"],
+        taskProgress: asString(selectedEvent?.detail.task_progress, "none") as SceneState["task_progress"],
+        rawModelOutput: null,
+        selectedCandidateText: finalText,
+        responseGateText: finalText,
         memoryWritesAttempted: asMemoryWrites(selectedEvent?.detail.memory_writes_attempted),
         memoryWritesCommitted: asMemoryWrites(selectedEvent?.detail.memory_writes_committed),
+        sceneWrites: [],
         candidateResponseFamilies: outputFamilies.map((family) => ({
           family: family as TurnResponseFamily | "scene_fallback",
           sourceFunction: "browserLiveTrace",

@@ -356,7 +356,7 @@ function deriveRewardWindowPreference(
 function buildGameRulesReply(sceneState: SceneState): string {
   const template = resolveDeterministicGameTemplateById(sceneState.game_template_id);
   if (template.id === "rps_streak") {
-    return "Listen carefully, pet. We stay with rock paper scissors streak. I throw first and you answer with one word. Beat both throws to win.";
+    return "Listen carefully, pet. We stay with rock paper scissors streak. Two throws. You answer each one with rock, paper, or scissors. Beat both throws to win.";
   }
   if (template.id === "number_hunt") {
     return "Listen carefully, pet. We stay with number hunt. You guess one number from 1 to 10. I give a hint, then you make one final guess.";
@@ -1301,15 +1301,19 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
       ) {
         // Keep short task replies inside the active negotiation instead of dropping to generic clarification.
       } else {
-      return buildShortClarificationReply({
-        userText: input.userText,
-        interactionMode: input.sceneState.interaction_mode,
-        topicType: input.sceneState.topic_type,
-        lastAssistantText: input.sceneState.last_assistant_text || input.sceneState.last_profile_prompt || null,
-        lastQuestion: input.sessionMemory?.last_user_question?.value ?? null,
-        lastUserAnswer: input.sessionMemory?.last_user_answer?.value ?? null,
-        currentTopic: input.sceneState.agreed_goal || null,
-      });
+    return buildShortClarificationReply({
+      userText: input.userText,
+      interactionMode: input.sceneState.interaction_mode,
+      topicType: input.sceneState.topic_type,
+      lastAssistantText: input.sceneState.last_assistant_text || input.sceneState.last_profile_prompt || null,
+      lastUserText:
+        input.sessionMemory?.last_user_answer?.value ??
+        input.sessionMemory?.last_user_question?.value ??
+        null,
+      lastQuestion: input.sessionMemory?.last_user_question?.value ?? null,
+      lastUserAnswer: input.sessionMemory?.last_user_answer?.value ?? null,
+      currentTopic: input.sceneState.agreed_goal || null,
+    });
       }
     }
 

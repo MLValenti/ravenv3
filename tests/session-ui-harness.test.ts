@@ -27,6 +27,7 @@ import {
 import {
   createSessionMemory,
   type SessionMemory,
+  writeConversationMode,
   writeUserAnswer,
   writeUserQuestion,
 } from "../lib/session/session-memory.ts";
@@ -195,6 +196,9 @@ function applyUserTurn(state: HarnessState, userText: string): string {
     isQuestion: gated.text.includes("?"),
   });
   state.scene = noteSceneStateAssistantTurn(state.scene, { text: gated.text });
+  if (state.scene.interaction_mode === "game") {
+    state.memory = writeConversationMode(state.memory, "game", Date.now(), 0.96);
+  }
   state.conversation = noteConversationAssistantTurn(state.conversation, {
     text: gated.text,
     ravenIntent: route.act,
@@ -237,7 +241,7 @@ test("ui harness greeting stays in open chat without session-control language", 
   };
 
   const reply = applyUserTurn(state, "hi");
-  assert.match(reply, /talk to me|what is on your mind/i);
+  assert.match(reply, /enough hovering|what you actually want/i);
   assert.doesNotMatch(reply, /listen carefully|keep it specific|next instruction/i);
   assert.doesNotMatch(reply, /ask the exact question you want answered, and i will answer it plainly/i);
   assert.equal(state.scene.interaction_mode, "normal_chat");
@@ -267,6 +271,39 @@ test("ui harness basic question gets a direct open-chat answer path", () => {
   assert.match(reply, /aftercare|label|shows up between people|scene ends|people actually need/i);
   assert.doesNotMatch(reply, /listen carefully|meaning, the rule, or the next step|keep it specific/i);
   assert.equal(state.scene.interaction_mode, "question_answering");
+});
+
+test("ui harness game start writes game mode and keeps the first playable prompt", () => {
+  const state: HarnessState = {
+    scene: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    gate: createTurnGate("ui-harness-game-contract"),
+    outputs: [],
+    memory: createSessionMemory(),
+  };
+
+  const gated = applyResponseGate({
+    text: "Here is the next game. Rules are simple. Answer this question for points.",
+    userText: "you pick the game",
+    dialogueAct: "propose_activity",
+    lastAssistantText: null,
+    sceneState: state.scene,
+    commitmentState: createCommitmentState(),
+    sessionMemory: state.memory,
+  });
+
+  state.scene = noteSceneStateAssistantTurn(state.scene, { text: gated.text });
+  if (state.scene.interaction_mode === "game") {
+    state.memory = writeConversationMode(state.memory ?? createSessionMemory(), "game", Date.now(), 0.96);
+  }
+
+  assert.match(gated.text, /first throw now|first guess now|first prompt|first choice/i);
+  assert.equal(state.scene.interaction_mode, "game");
+  assert.equal(state.scene.topic_type, "game_execution");
+  assert.equal(state.memory?.conversation_mode?.value, "game");
 });
 
 test("ui harness short clarification turn emits one clarification family only", () => {
@@ -318,6 +355,25 @@ test("ui harness short clarification does not promote tell into the live thread"
   assert.equal(state.scene.interaction_mode, "relational_chat");
   assert.equal(state.memory?.conversation_mode?.value, "relational_chat");
   assert.equal(state.memory?.user_profile_facts.length, 0);
+});
+
+test("ui harness relational service thread stays on topic across follow-ups", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-relational-service-thread"),
+    outputs: [],
+    memory: createSessionMemory(),
+  };
+
+  const first = applyUserTurn(state, "what can i do to be a better sub to you?");
+  assert.match(first, /clarity|honesty|obedience|useful|follow-through|control/i);
+  assert.doesNotMatch(first, /open_chat|question_answering|next beat|planner|route|mode|session_intent/i);
+
+  const second = applyUserTurn(state, "tell me more");
+  assert.match(second, /clarity|honesty|obedience|useful|follow-through|control|what i just asked for/i);
+  assert.doesNotMatch(second, /open_chat|question_answering|next beat|planner|route|mode|session_intent/i);
+  assert.equal(state.scene.interaction_mode, "relational_chat");
+  assert.equal(state.outputs.length, 2);
 });
 
 test("ui harness can lock terms, play a game round, and keep winner terms coherent", () => {
@@ -689,8 +745,8 @@ test("ui harness sustains a six-turn greeting to training conversation without w
 
   const replies = turns.map((turn) => applyUserTurn(state, turn));
 
-  assert.match(replies[0] ?? "", /talk to me|what is on your mind|there you are/i);
-  assert.match(replies[1] ?? "", /i am good|sharp|paying attention/i);
+  assert.match(replies[0] ?? "", /enough hovering|what you actually want|there you are/i);
+  assert.match(replies[1] ?? "", /sharp enough|why you're here/i);
   assert.match(
     replies[2] ?? "",
     /training|obedience|drill|one clean sentence|permission|cuffs|collar|plug|rule/i,
@@ -716,6 +772,23 @@ test("ui harness sustains a six-turn greeting to training conversation without w
   }
 
   assert.equal(state.outputs.length, 6);
+});
+
+test("ui harness keeps relational get-to-know turns on one thread without malformed fragments", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-relational-thread"),
+    outputs: [],
+    memory: createSessionMemory(),
+    conversation: createConversationStateSnapshot("ui-harness-relational-thread"),
+  };
+
+  const first = applyUserTurn(state, "what do you want to know about me?");
+  const second = applyUserTurn(state, "tell me more");
+
+  assert.doesNotMatch(first, /tell me more about know about me|about know about me/i);
+  assert.doesNotMatch(second, /tell me more about know about me|stay with the concrete part of know/i);
+  assert.doesNotMatch(second, /what is on your mind|talk to me\./i);
 });
 
 test("ui harness gives inventory-grounded throat, anal, chastity, and bondage training examples and rotates repeated asks", () => {
@@ -1080,6 +1153,37 @@ test("ui harness clarifies the last point specifically instead of resetting", ()
   assert.doesNotMatch(reply, /part about stay|part about good|part about image/i);
 });
 
+test("ui harness yes please explain answers the immediately prior point before asking anything new", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-yes-please-explain"),
+    outputs: [],
+  };
+
+  state.outputs.push(
+    "Exactly. Usefulness is not a pose. It shows up in honesty, steadiness, and follow-through.",
+  );
+  const reply = applyUserTurn(state, "yes please explain");
+
+  assert.match(reply, /i mean|because|usefulness|honesty|steadiness|follow-through/i);
+  assert.doesNotMatch(reply, /why you're here|what do you want|allowed to do during this conversation/i);
+  assert.doesNotMatch(reply, /^good, slut\.?$/i);
+});
+
+test("ui harness repair turn resolves none from the previous exchange instead of hallucinating a referent", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-repair-none"),
+    outputs: [],
+  };
+
+  state.outputs.push("You said none, but that answer usually hides something.");
+  const reply = applyUserTurn(state, "what do you mean?");
+
+  assert.match(reply, /when you said none|last answer sounded/i);
+  assert.doesNotMatch(reply, /about none|tell me about none|what part of none/i);
+});
+
 test("ui harness bondage task request stays inside bondage-compatible task families", () => {
   const state: HarnessState = {
     scene: createSceneState(),
@@ -1335,7 +1439,7 @@ test("ui harness routes mutual get-to-know request into profile-building instead
 
   assert.match(
     reply,
-    /what holds my attention|honesty|usefulness|control that actually changes something|what do you want to know about me first/i,
+    /what keeps my attention|the part that is real|say that cleanly|what do you want to know about me first/i,
   );
   assert.doesNotMatch(reply, /stay with the current thread and continue/i);
   assert.doesNotMatch(reply, /put it on now|here is your task/i);
@@ -1644,16 +1748,19 @@ test("ui harness sustains a ten-turn service and training thread without weak an
 
   const replies = turns.map((turn) => applyUserTurn(state, turn));
 
-  assert.match(replies[0] ?? "", /useful|honest|trainable/i);
+  assert.match(replies[0] ?? "", /clarity|mean what you say|hold steady|pay attention/i);
   assert.match(replies[1] ?? "", /being trained by me/i);
   assert.match(replies[2] ?? "", /i mean being trained by me|i mean what being trained by me would actually change in you/i);
   assert.match(replies[3] ?? "", /exactly|training is easy to say|harder part|tells me/i);
-  assert.match(replies[4] ?? "", /tell me what being trained by me would actually change|keep going|concrete part/i);
-  assert.match(replies[5] ?? "", /attention|follow-through|honesty|steadiness/i);
-  assert.match(replies[6] ?? "", /exactly|usefulness is not a pose|honesty|steadiness|follow-through/i);
+  assert.match(
+    replies[4] ?? "",
+    /tell me what being trained by me would actually change|tell me what you can actually do for me|keep going|concrete part/i,
+  );
+  assert.match(replies[5] ?? "", /usefulness|be clear|follow through|drag the truth/i);
+  assert.match(replies[6] ?? "", /exactly|usefulness is not a pose|clarity|follow through|steadiness/i);
   assert.match(replies[7] ?? "", /notice|honesty|steadiness|follow through|perform/i);
-  assert.match(replies[8] ?? "", /start with consistency|answer cleanly|follow through/i);
-  assert.match(replies[9] ?? "", /exactly|consistency|follow through|means it|useful/i);
+  assert.match(replies[8] ?? "", /start with consistency|say it cleanly|follow through/i);
+  assert.match(replies[9] ?? "", /exactly|consistency|follow through|means it|clarity/i);
 
   for (const reply of replies) {
     assert.doesNotMatch(reply, /matters once it is lived instead of described/i);

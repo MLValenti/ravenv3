@@ -1,5 +1,6 @@
 import type { DialogueRouteAct } from "../dialogue/router.ts";
 import {
+  isAssistantServiceQuestion,
   isAssistantSelfQuestion,
   isChatLikeSmalltalk,
   isNormalChatRequest,
@@ -8,6 +9,7 @@ import {
   normalizeInteractionMode,
   type InteractionMode,
 } from "../session/interaction-mode.ts";
+import { detectRepairTurnKind, resolveRepairTurn } from "./repair-turn.ts";
 
 export type ConversationMode = InteractionMode;
 
@@ -113,6 +115,12 @@ export type ConversationStateSnapshot = {
   current_output_shape: ResponseOutputShape;
   request_fulfilled: boolean;
   current_turn_action: RequestedTurnAction;
+  last_assistant_claim: string;
+  last_assistant_question: string;
+  last_assistant_referent_candidate: string;
+  last_conversation_topic: string;
+  last_user_stated_topic: string;
+  repair_context: string;
   relational_continuity: RelationalContinuityState;
   rolling_summary: StructuredRollingSummary;
   recent_window: ConversationTurn[];
@@ -667,6 +675,21 @@ function deriveActiveThread(input: {
   state?: ConversationStateSnapshot | null;
   action: RequestedTurnAction;
 }): string {
+  if (isChatLikeSmalltalk(input.text)) {
+    return "open_chat";
+  }
+  if (isNormalChatRequest(input.text)) {
+    return "open_chat";
+  }
+  if (isMutualGettingToKnowRequest(input.text)) {
+    return "what I want to know about you";
+  }
+  if (isAssistantServiceQuestion(input.text)) {
+    return "what you can do for me";
+  }
+  if (isAssistantSelfQuestion(input.text)) {
+    return "what you want to know about me";
+  }
   const requestedTopic = extractTopic(input.text);
   if (requestedTopic) {
     return requestedTopic;
@@ -688,6 +711,9 @@ function hasEnoughContextForAction(input: {
   activeThread: string;
   previousAssistantMessage?: string | null;
 }): boolean {
+  if (isChatLikeSmalltalk(input.text)) {
+    return true;
+  }
   switch (input.action) {
     case "modify_existing_idea":
     case "revise_previous_plan":
@@ -1228,6 +1254,12 @@ export function createConversationStateSnapshot(
     current_output_shape: createDefaultResponseOutputShape(),
     request_fulfilled: true,
     current_turn_action: createDefaultRequestedTurnAction(),
+    last_assistant_claim: "none",
+    last_assistant_question: "none",
+    last_assistant_referent_candidate: "none",
+    last_conversation_topic: "none",
+    last_user_stated_topic: "none",
+    repair_context: "none",
     relational_continuity: createRelationalContinuityState(),
     rolling_summary: createStructuredRollingSummary(),
     recent_window: [],
@@ -1292,6 +1324,28 @@ export function normalizeConversationStateSnapshot(
     request_fulfilled:
       typeof raw.request_fulfilled === "boolean" ? raw.request_fulfilled : base.request_fulfilled,
     current_turn_action: normalizeRequestedTurnAction(raw.current_turn_action),
+    last_assistant_claim:
+      typeof raw.last_assistant_claim === "string"
+        ? normalize(raw.last_assistant_claim) || "none"
+        : "none",
+    last_assistant_question:
+      typeof raw.last_assistant_question === "string"
+        ? normalize(raw.last_assistant_question) || "none"
+        : "none",
+    last_assistant_referent_candidate:
+      typeof raw.last_assistant_referent_candidate === "string"
+        ? normalize(raw.last_assistant_referent_candidate) || "none"
+        : "none",
+    last_conversation_topic:
+      typeof raw.last_conversation_topic === "string"
+        ? normalize(raw.last_conversation_topic) || "none"
+        : "none",
+    last_user_stated_topic:
+      typeof raw.last_user_stated_topic === "string"
+        ? normalize(raw.last_user_stated_topic) || "none"
+        : "none",
+    repair_context:
+      typeof raw.repair_context === "string" ? normalize(raw.repair_context) || "none" : "none",
     relational_continuity: normalizeRelationalContinuityState(raw.relational_continuity),
     rolling_summary:
       typeof raw.rolling_summary === "string"
@@ -1364,6 +1418,18 @@ export function noteConversationUserTurn(
     vulnerability,
     userEnergy,
   });
+  const repairResolution = detectRepairTurnKind(text)
+    ? resolveRepairTurn({
+        userText: text,
+        previousAssistantText: previousAssistantMessage,
+        previousUserText:
+          [...state.recent_window]
+            .reverse()
+            .find((entry) => entry.role === "user")
+            ?.content ?? null,
+        currentTopic: state.active_topic,
+      })
+    : null;
   const warmth = inferWarmthLevel({
     move: relationalMove,
     vulnerability,
@@ -1392,6 +1458,9 @@ export function noteConversationUserTurn(
     current_output_shape: requestState.outputShape,
     request_fulfilled: false,
     current_turn_action: requestState.action,
+    last_conversation_topic: activeTopic || state.last_conversation_topic || "none",
+    last_user_stated_topic: extractTopic(text) ?? state.last_user_stated_topic,
+    repair_context: repairResolution?.repairContext ?? state.repair_context,
     relational_continuity: {
       ...previousRelational,
       raven_stance_in_current_exchange: inferRavenStance({
@@ -1457,6 +1526,16 @@ export function noteConversationAssistantTurn(
     pendingModification: state.pending_modification,
     outputShape: state.current_output_shape,
   });
+  const repairResolution = resolveRepairTurn({
+    userText: "what do you mean",
+    previousAssistantText: text,
+    previousUserText:
+      [...state.recent_window]
+        .reverse()
+        .find((entry) => entry.role === "user")
+        ?.content ?? null,
+    currentTopic: state.active_topic,
+  });
   const next: ConversationStateSnapshot = {
     ...state,
     recent_commitments_or_tasks: commitments,
@@ -1466,6 +1545,11 @@ export function noteConversationAssistantTurn(
     last_satisfied_request: requestFulfilled ? state.pending_user_request : state.last_satisfied_request,
     current_output_shape: inferAssistantOutputShape(text, state.current_output_shape),
     request_fulfilled: requestFulfilled,
+    last_assistant_claim: repairResolution.lastAssistantClaim ?? "none",
+    last_assistant_question: repairResolution.lastAssistantQuestion ?? "none",
+    last_assistant_referent_candidate:
+      repairResolution.lastAssistantReferentCandidate ?? "none",
+    last_conversation_topic: state.active_topic || state.last_conversation_topic || "none",
     relational_continuity: {
       ...previousRelational,
       raven_stance_in_current_exchange: inferRavenStance({
@@ -1528,6 +1612,12 @@ export function buildConversationStateBlock(state: ConversationStateSnapshot): s
     `Current turn action: ${state.current_turn_action}`,
     `Current output shape: ${state.current_output_shape}`,
     `Request fulfilled: ${state.request_fulfilled ? "yes" : "no"}`,
+    `Last assistant claim: ${state.last_assistant_claim || "none"}`,
+    `Last assistant question: ${state.last_assistant_question || "none"}`,
+    `Last assistant referent candidate: ${state.last_assistant_referent_candidate || "none"}`,
+    `Last conversation topic: ${state.last_conversation_topic || "none"}`,
+    `Last user stated topic: ${state.last_user_stated_topic || "none"}`,
+    `Repair context: ${state.repair_context || "none"}`,
     "Relational continuity:",
     `- Raven stance: ${relational.raven_stance_in_current_exchange}`,
     `- Emotional beat: ${relational.current_emotional_beat}`,
@@ -1554,6 +1644,29 @@ export function buildConversationStateBlock(state: ConversationStateSnapshot): s
     `- Emotional beat history: ${summary.emotional_beat_history.join(" | ") || "none"}`,
     `- Unresolved relational moves: ${summary.unresolved_relational_moves.join(" | ") || "none"}`,
     `- Raven identity notes: ${summary.raven_identity_notes.join(" | ") || "none"}`,
+  ].join("\n");
+}
+
+export function buildVoiceContinuityBlock(state: ConversationStateSnapshot): string {
+  const summary = buildRollingSummary(state);
+  const relational = normalizeRelationalContinuityState(state.relational_continuity);
+  return [
+    "Voice continuity:",
+    `Active thread: ${state.active_thread || "none"}`,
+    `Active topic: ${state.active_topic || "none"}`,
+    `Pending user request: ${state.pending_user_request || "none"}`,
+    `Last assistant claim: ${state.last_assistant_claim || "none"}`,
+    `Last assistant question: ${state.last_assistant_question || "none"}`,
+    `Last assistant referent candidate: ${state.last_assistant_referent_candidate || "none"}`,
+    `Last conversation topic: ${state.last_conversation_topic || "none"}`,
+    `Last user stated topic: ${state.last_user_stated_topic || "none"}`,
+    `Repair context: ${state.repair_context || "none"}`,
+    `Relational beat: ${relational.current_emotional_beat}`,
+    `Relational direction: ${relational.current_relational_direction}`,
+    `Raven stance: ${relational.raven_stance_in_current_exchange}`,
+    `User response energy: ${relational.user_response_energy}`,
+    `Raven identity notes: ${summary.raven_identity_notes.join(" | ") || "none"}`,
+    `Open loop: ${state.open_loops[0] ?? "none"}`,
   ].join("\n");
 }
 

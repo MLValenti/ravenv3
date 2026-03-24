@@ -45,6 +45,18 @@ test("short clarification takes priority over unresolved topic", () => {
   assert.equal(routed.act, "short_follow_up");
 });
 
+test("router classifies repair-style clarification variants as short follow-up", () => {
+  for (const text of ["about what?", "what part?", "which part?", "what are you talking about?", "huh?"]) {
+    const routed = classifyDialogueRoute({
+      text,
+      awaitingUser: false,
+      currentTopic: null,
+      nowMs: 2_500,
+    });
+    assert.equal(routed.act, "short_follow_up");
+  }
+});
+
 test("task request and duration request are classified directly", () => {
   const task = classifyDialogueRoute({
     text: "give me a task",

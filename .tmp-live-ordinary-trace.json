@@ -1,0 +1,1595 @@
+[
+  {
+    "scenario": "A_hi",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "hi",
+        "extracted_intent": "user_smalltalk",
+        "dialogue_act": "other",
+        "interaction_mode": "normal_chat",
+        "conversation_mode": "normal_chat",
+        "topic_type": "general_request",
+        "prompt_route": "fresh_greeting",
+        "prompt_profile": "full",
+        "raw_model_output": "Good. Eyes on me, pet. You asked for a game, so we lock terms first and start immediately. Do you want something quick or something that takes a few minutes?",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Noted. We continue with one clear next step.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "Noted. Eyes on me, pet. You asked for a game, so we lock terms first and start immediately. Do you want something quick or something that takes a few minutes?",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "Enough hovering, pet. Tell me what you actually want.",
+            "selected": false
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Enough hovering, pet. Tell me what you actually want.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "Noted. Eyes on me, pet. You asked for a game, so we lock terms first and start immediately. Do you want something quick or something that takes a few minutes?",
+            "selected": true
+          }
+        ],
+        "shaped_output": "Noted. Eyes on me, pet. You asked for a game, so we lock terms first and start immediately. Do you want something quick or something that takes a few minutes?",
+        "server_final_output": "Noted. Eyes on me, pet. You asked for a game, so we lock terms first and start immediately. Do you want something quick or something that takes a few minutes?",
+        "selected_event": {
+          "request_id": "turn-1773946541276-293984",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_smalltalk",
+          "dialogue_act": "other",
+          "conversation_mode": "normal_chat",
+          "interaction_mode": "normal_chat",
+          "topic_type": "general_request",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "conversation_mode",
+              "value": "normal_chat"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "conversation_mode",
+              "value": "normal_chat"
+            }
+          ],
+          "fallback_chosen": false,
+          "fallback_reason": "accepted",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "model",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "normal_chat",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946551376
+        },
+        "final_selected_output_source": "model",
+        "final_rendered_output": "Enough hovering, pet. Tell me what you actually want.",
+        "fallback_reason": "accepted",
+        "fallback_chosen": false,
+        "memory_writes_attempted": [
+          {
+            "key": "conversation_mode",
+            "value": "normal_chat"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "conversation_mode",
+            "value": "normal_chat"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.append.blocked",
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "B_what_do_you_want_to_know_about_me",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "what do you want to know about me?",
+        "extracted_intent": "user_question",
+        "dialogue_act": "user_question",
+        "interaction_mode": "question_answering",
+        "conversation_mode": "question_answering",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "Listen carefully. We play one game with clear turns. I give the prompt, you answer once, then I score the round. What is your goal for this conversation?",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Keep going. Tell me where you actually land on whether you are here to entertain me, be useful to me, or be trained into something better.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "Keep going. Tell me where you actually land on whether you are here to entertain me, be useful to me, or be trained into something better.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "Listen carefully. We play one game with clear turns. I give the prompt, you answer once, then I score the round. What is your goal for this conversation?",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "Keep going. Tell me more about none.",
+            "selected": true
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Keep going. Tell me more about none.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "Keep going. Tell me more about none.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "Listen carefully. We play one game with clear turns. I give the prompt, you answer once, then I score the round. What is your goal for this conversation?",
+        "server_final_output": "Keep going. Tell me more about none.",
+        "selected_event": {
+          "request_id": "turn-1773946559943-747523",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_question",
+          "dialogue_act": "user_question",
+          "conversation_mode": "question_answering",
+          "interaction_mode": "question_answering",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "what do you want to know about me?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what do you want to know about me?"
+            }
+          ],
+          "fallback_chosen": true,
+          "fallback_reason": "duplicate_output_blocked",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "response_gate_fallback",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": true,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "question_answering",
+          "post_processing_modified_output": true,
+          "at_ms": 1773946564023
+        },
+        "final_selected_output_source": "response_gate_fallback",
+        "final_rendered_output": "Keep going. Tell me more about know about me.",
+        "fallback_reason": "duplicate_output_blocked",
+        "fallback_chosen": true,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "what do you want to know about me?"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          },
+          {
+            "key": "last_user_question",
+            "value": "what do you want to know about me?"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "C_i_want_to_talk",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "i want to talk",
+        "extracted_intent": "user_answer",
+        "dialogue_act": "other",
+        "interaction_mode": "normal_chat",
+        "conversation_mode": "normal_chat",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "Fine. Let's discuss kinks and fetishes, as you mentioned. I'll set the terms for our conversation. We can either pick a game that involves talking or establish rules for discussion topics. Choose one: do you want something quick, or would you prefer taking your time with a few questions?",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Noted. We continue with one clear next step.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "Fine. Let's discuss kinks and fetishes, as you mentioned. I'll set the terms for our conversation. We can either pick a game that involves talking or establish rules for discussion topics. Choose one: do you want something quick, or would you prefer taking your time with a few questions?",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "What is the one concrete variable you want me to work from?",
+            "selected": false
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Fine. Say what you want.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "Fine. Let's discuss kinks and fetishes, as you mentioned. I'll set the terms for our conversation. We can either pick a game that involves talking or establish rules for discussion topics. Choose one: do you want something quick, or would you prefer taking your time with a few questions?",
+            "selected": true
+          }
+        ],
+        "shaped_output": "Fine. Let's discuss kinks and fetishes, as you mentioned. I'll set the terms for our conversation. We can either pick a game that involves talking or establish rules for discussion topics. Choose one: do you want something quick, or would you prefer taking your time with a few questions?",
+        "server_final_output": "Fine. Let's discuss kinks and fetishes, as you mentioned. I'll set the terms for our conversation. We can either pick a game that involves talking or establish rules for discussion topics. Choose one: do you want something quick, or would you prefer taking your time with a few questions?",
+        "selected_event": {
+          "request_id": "turn-1773946568164-567959",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_answer",
+          "dialogue_act": "other",
+          "conversation_mode": "normal_chat",
+          "interaction_mode": "normal_chat",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_answer",
+              "value": "i want to talk"
+            },
+            {
+              "key": "session_intent",
+              "value": "talk"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "normal_chat"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "session_intent",
+              "value": "talk"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "normal_chat"
+            },
+            {
+              "key": "last_user_answer",
+              "value": "i want to talk"
+            }
+          ],
+          "fallback_chosen": false,
+          "fallback_reason": "accepted",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "model",
+          "output_generator_families": [
+            "model"
+          ],
+          "more_than_one_output_generator_fired": false,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": true,
+          "gated_game_start_question_present": true,
+          "final_game_start_question_present": true,
+          "final_mode_written": "normal_chat",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946573011
+        },
+        "final_selected_output_source": "model",
+        "final_rendered_output": "Then start with what actually holds your attention, and I will stay with that.",
+        "fallback_reason": "accepted",
+        "fallback_chosen": false,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_answer",
+            "value": "i want to talk"
+          },
+          {
+            "key": "session_intent",
+            "value": "talk"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "normal_chat"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "session_intent",
+            "value": "talk"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "normal_chat"
+          },
+          {
+            "key": "last_user_answer",
+            "value": "i want to talk"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.append.blocked",
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "D_what_do_you_mean",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "i want to talk",
+        "extracted_intent": "user_answer",
+        "dialogue_act": "other",
+        "interaction_mode": "normal_chat",
+        "conversation_mode": "normal_chat",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "Good. You chose to talk about kinks and fetishes, so let's lock terms first and start immediately. We will have a quick game where you answer fast and I keep score. Ready?",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Noted. We continue with one clear next step.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "Noted. You chose to talk about kinks and fetishes, so let's lock terms first and start immediately. We will have a quick game where you answer fast and I keep score. Ready?",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "What is the one concrete variable you want me to work from?",
+            "selected": false
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Fine. Say what you want.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "Noted. You chose to talk about kinks and fetishes, so let's lock terms first and start immediately. We will have a quick game where you answer fast and I keep score. Ready?",
+            "selected": true
+          }
+        ],
+        "shaped_output": "Noted. You chose to talk about kinks and fetishes, so let's lock terms first and start immediately. We will have a quick game where you answer fast and I keep score. Ready?",
+        "server_final_output": "Noted. You chose to talk about kinks and fetishes, so let's lock terms first and start immediately. We will have a quick game where you answer fast and I keep score. Ready?",
+        "selected_event": {
+          "request_id": "turn-1773946578367-484605",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_answer",
+          "dialogue_act": "other",
+          "conversation_mode": "normal_chat",
+          "interaction_mode": "normal_chat",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_answer",
+              "value": "i want to talk"
+            },
+            {
+              "key": "session_intent",
+              "value": "talk"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "normal_chat"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "session_intent",
+              "value": "talk"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "normal_chat"
+            },
+            {
+              "key": "last_user_answer",
+              "value": "i want to talk"
+            }
+          ],
+          "fallback_chosen": false,
+          "fallback_reason": "accepted",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "model",
+          "output_generator_families": [
+            "model"
+          ],
+          "more_than_one_output_generator_fired": false,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": true,
+          "gated_game_start_question_present": true,
+          "final_game_start_question_present": true,
+          "final_mode_written": "normal_chat",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946582109
+        },
+        "final_selected_output_source": "model",
+        "final_rendered_output": "Then start with what actually holds your attention, and I will stay with that.",
+        "fallback_reason": "accepted",
+        "fallback_chosen": false,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_answer",
+            "value": "i want to talk"
+          },
+          {
+            "key": "session_intent",
+            "value": "talk"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "normal_chat"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "session_intent",
+            "value": "talk"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "normal_chat"
+          },
+          {
+            "key": "last_user_answer",
+            "value": "i want to talk"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.append.blocked",
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      },
+      {
+        "turn": 2,
+        "user_input": "what do you mean?",
+        "extracted_intent": "user_short_follow_up",
+        "dialogue_act": "short_follow_up",
+        "interaction_mode": "normal_chat",
+        "conversation_mode": "normal_chat",
+        "topic_type": "none",
+        "prompt_route": "relational_direct",
+        "prompt_profile": "full",
+        "raw_model_output": "Raven: Eyes on me, pet. You asked for a game, so we lock terms first and start immediately. Do you want something quick or something that takes a few minutes?",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "I mean my last point, not a random fragment.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "I mean my last point, not a random fragment.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "I mean my last point, not a random fragment.",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "I mean then start with what actually holds your attention, and I will stay with that.",
+            "selected": false
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "I mean none.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "I mean my last point, not a random fragment.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "I mean my last point, not a random fragment.",
+        "server_final_output": "I mean my last point, not a random fragment.",
+        "selected_event": {
+          "request_id": "turn-1773946585343-949701",
+          "session_id": "default-session",
+          "user_message_id": 2,
+          "detected_intent": "user_short_follow_up",
+          "dialogue_act": "short_follow_up",
+          "conversation_mode": "normal_chat",
+          "interaction_mode": "normal_chat",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "what do you mean?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "normal_chat"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "last_user_question",
+              "value": "what do you mean?"
+            }
+          ],
+          "fallback_chosen": false,
+          "fallback_reason": "accepted",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": true,
+          "task_or_persona_path": "model",
+          "final_output_source": "model",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "normal_chat",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946589994
+        },
+        "final_selected_output_source": "model",
+        "final_rendered_output": "I mean holds your attention.",
+        "fallback_reason": "accepted",
+        "fallback_chosen": false,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "what do you mean?"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "normal_chat"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "last_user_question",
+            "value": "what do you mean?"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.append.blocked",
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "E_tell_me_more",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "what do you want to know about me?",
+        "extracted_intent": "user_question",
+        "dialogue_act": "user_question",
+        "interaction_mode": "question_answering",
+        "conversation_mode": "question_answering",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "I find out more about you, of course. What would you like me to learn first? Your likes or dislikes, perhaps?",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Keep going. Tell me where you actually land on whether you are here to entertain me, be useful to me, or be trained into something better.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "Keep going. Tell me where you actually land on whether you are here to entertain me, be useful to me, or be trained into something better.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "I find out more about you, of course. What would you like me to learn first?",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "Keep going. Tell me more about none.",
+            "selected": true
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Keep going. Tell me more about none.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "Keep going. Tell me more about none.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "I find out more about you, of course. What would you like me to learn first?",
+        "server_final_output": "Keep going. Tell me more about none.",
+        "selected_event": {
+          "request_id": "turn-1773946594380-71323",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_question",
+          "dialogue_act": "user_question",
+          "conversation_mode": "question_answering",
+          "interaction_mode": "question_answering",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "what do you want to know about me?"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what do you want to know about me?"
+            }
+          ],
+          "fallback_chosen": true,
+          "fallback_reason": "duplicate_output_blocked",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "response_gate_fallback",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "question_answering",
+          "post_processing_modified_output": true,
+          "at_ms": 1773946597166
+        },
+        "final_selected_output_source": "response_gate_fallback",
+        "final_rendered_output": "Keep going. Tell me more about know about me.",
+        "fallback_reason": "duplicate_output_blocked",
+        "fallback_chosen": true,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "what do you want to know about me?"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          },
+          {
+            "key": "last_user_question",
+            "value": "what do you want to know about me?"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      },
+      {
+        "turn": 2,
+        "user_input": "tell me more",
+        "extracted_intent": "user_question",
+        "dialogue_act": "user_question",
+        "interaction_mode": "question_answering",
+        "conversation_mode": "question_answering",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "I see that the user wants to maintain a strict power dynamic in this conversation, with clear rules and firm control. The goal is to learn more about them while maintaining that dynamic. They also dislike posture and head position training, which suggests they prefer a submissive role. To fulfill their request for learning more about themselves while adhering to these preferences, I should provide information that aligns with the dominant-submissive power dynamic and avoids any discussion of posture or head position training.",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Yes. Keep going. Tell me the concrete part, not the wording around it.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "Yes. Keep going. Tell me the concrete part, not the wording around it.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "I see that the user wants to maintain a strict power dynamic in this conversation, with clear rules and firm control. The goal is to learn more about them while maintaining that dynamic. They also dislike posture and head position training, which suggests they prefer a submissive role. To fulfill their request for learning more about themselves while adhering to these preferences, I should provide information that aligns with the dominant-submissive power dynamic and avoids any discussion of posture or head position training.",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "Yes. Keep going. Tell me the concrete part, not the wording around it.",
+            "selected": false
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Yes. Keep going. Tell me the concrete part, not the wording around it.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "I see that the user wants to maintain a strict power dynamic in this conversation, with clear rules and firm control. The goal is to learn more about them while maintaining that dynamic. They also dislike posture and head position training, which suggests they prefer a submissive role. To fulfill their request for learning more about themselves while adhering to these preferences, I should provide information that aligns with the dominant-submissive power dynamic and avoids any discussion of posture or head position training.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "I see that the user wants to maintain a strict power dynamic in this conversation, with clear rules and firm control. The goal is to learn more about them while maintaining that dynamic. They also dislike posture and head position training, which suggests they prefer a submissive role. To fulfill their request for learning more about themselves while adhering to these preferences, I should provide information that aligns with the dominant-submissive power dynamic and avoids any discussion of posture or head position training.",
+        "server_final_output": "I see that the user wants to maintain a strict power dynamic in this conversation, with clear rules and firm control. The goal is to learn more about them while maintaining that dynamic. They also dislike posture and head position training, which suggests they prefer a submissive role. To fulfill their request for learning more about themselves while adhering to these preferences, I should provide information that aligns with the dominant-submissive power dynamic and avoids any discussion of posture or head position training.",
+        "selected_event": {
+          "request_id": "turn-1773946599686-260809",
+          "session_id": "default-session",
+          "user_message_id": 2,
+          "detected_intent": "user_question",
+          "dialogue_act": "user_question",
+          "conversation_mode": "question_answering",
+          "interaction_mode": "question_answering",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "tell me more"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "last_user_question",
+              "value": "tell me more"
+            }
+          ],
+          "fallback_chosen": false,
+          "fallback_reason": "accepted",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "model",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "question_answering",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946605704
+        },
+        "final_selected_output_source": "model",
+        "final_rendered_output": "Yes. Keep going. Stay with the concrete part of know, not the wording around it.",
+        "fallback_reason": "accepted",
+        "fallback_chosen": false,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "tell me more"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "last_user_question",
+            "value": "tell me more"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.append.blocked",
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "F_what_do_you_want_me_to_do",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "what do you want me to do",
+        "extracted_intent": "user_question",
+        "dialogue_act": "user_question",
+        "interaction_mode": "question_answering",
+        "conversation_mode": "question_answering",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "Stay sharp. We play one game with clear turns, then I give the prompt, you answer once, and I score the round. Now set your terms if you win.",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "I want honesty, nerve, and enough obedience to stay with the line. Now tell me what you are after.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "I want honesty, nerve, and enough obedience to stay with the line. Now tell me what you are after.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "Stay sharp. We play one game with clear turns, then I give the prompt, you answer once, and I score the round. Now set your terms if you win.",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "I want honesty, nerve, and enough obedience to stay with the line. Now tell me what you are after.",
+            "selected": true
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "I want honesty, nerve, and enough obedience to stay with the line. Now tell me what you are after.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "I want honesty, nerve, and enough obedience to stay with the line. Now tell me what you are after.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "Stay sharp. We play one game with clear turns, then I give the prompt, you answer once, and I score the round. Now set your terms if you win.",
+        "server_final_output": "I want honesty, nerve, and enough obedience to stay with the line. Now tell me what you are after.",
+        "selected_event": {
+          "request_id": "turn-1773946610499-798766",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_question",
+          "dialogue_act": "user_question",
+          "conversation_mode": "question_answering",
+          "interaction_mode": "question_answering",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "what do you want me to do"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what do you want me to do"
+            }
+          ],
+          "fallback_chosen": true,
+          "fallback_reason": "duplicate_output_blocked",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "response_gate_fallback",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "question_answering",
+          "post_processing_modified_output": true,
+          "at_ms": 1773946614263
+        },
+        "final_selected_output_source": "response_gate_fallback",
+        "final_rendered_output": "I want honesty, nerve, and enough obedience to stay with the line. Now tell me what you are after.",
+        "fallback_reason": "duplicate_output_blocked",
+        "fallback_chosen": true,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "what do you want me to do"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          },
+          {
+            "key": "last_user_question",
+            "value": "what do you want me to do"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "G_what_can_i_do_for_you",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "what can i do for you",
+        "extracted_intent": "user_question",
+        "dialogue_act": "user_question",
+        "interaction_mode": "relational_chat",
+        "conversation_mode": "relational_chat",
+        "topic_type": "general_request",
+        "prompt_route": "relational_direct",
+        "prompt_profile": "full",
+        "raw_model_output": "Acknowledge the user directly, then ask for their intention with clear and concise language.\n\nRaven: I see your statement. What would you like to explore or change now?",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "Acknowledge the user directly, then ask for their intention with clear and concise language. What would you like to explore or change now?",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+            "selected": true
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "Acknowledge the user directly, then ask for their intention with clear and concise language. What would you like to explore or change now?",
+        "server_final_output": "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+        "selected_event": {
+          "request_id": "turn-1773946618264-512245",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_question",
+          "dialogue_act": "user_question",
+          "conversation_mode": "relational_chat",
+          "interaction_mode": "relational_chat",
+          "topic_type": "general_request",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "what can i do for you"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            },
+            {
+              "key": "session_intent",
+              "value": "relational_chat"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "session_intent",
+              "value": "relational_chat"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "relational_chat"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what can i do for you"
+            }
+          ],
+          "fallback_chosen": true,
+          "fallback_reason": "duplicate_output_blocked",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "response_gate_fallback",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "relational_chat",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946622325
+        },
+        "final_selected_output_source": "response_gate_fallback",
+        "final_rendered_output": "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+        "fallback_reason": "duplicate_output_blocked",
+        "fallback_chosen": true,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "what can i do for you"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "relational_chat"
+          },
+          {
+            "key": "session_intent",
+            "value": "relational_chat"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "session_intent",
+            "value": "relational_chat"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "relational_chat"
+          },
+          {
+            "key": "last_user_question",
+            "value": "what can i do for you"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  },
+  {
+    "scenario": "H_better_sub",
+    "turns": [
+      {
+        "turn": 1,
+        "user_input": "what can i do to be a better sub to you",
+        "extracted_intent": "user_question",
+        "dialogue_act": "user_question",
+        "interaction_mode": "question_answering",
+        "conversation_mode": "question_answering",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "To become a better submissive, focus on these key areas: being obedient, maintaining good communication, setting clear boundaries, and showing appreciation for my guidance. Learn what I like by observing how I act when you please me well. If unsure, ask questions about any aspect of our relationship. Remember that improving takes time and effort, but the rewards are worth it.",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Keep going. Tell me where you actually land on whether you are here to entertain me, be useful to me, or be trained into something better.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "Keep going. Tell me where you actually land on whether you are here to entertain me, be useful to me, or be trained into something better.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "To become a better submissive, focus on these key areas: being obedient, maintaining good communication, setting clear boundaries, and showing appreciation for my guidance. Learn what I like by observing how I act when you please me well. If unsure, ask questions about any aspect of our relationship. Remember that improving takes time and effort, but the rewards are worth it.",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "Keep going. Tell me more about none.",
+            "selected": false
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Keep going. Tell me more about none.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "To become a better submissive, focus on these key areas: being obedient, maintaining good communication, setting clear boundaries, and showing appreciation for my guidance. Learn what I like by observing how I act when you please me well. If unsure, ask questions about any aspect of our relationship. Remember that improving takes time and effort, but the rewards are worth it.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "To become a better submissive, focus on these key areas: being obedient, maintaining good communication, setting clear boundaries, and showing appreciation for my guidance. Learn what I like by observing how I act when you please me well. If unsure, ask questions about any aspect of our relationship. Remember that improving takes time and effort, but the rewards are worth it.",
+        "server_final_output": "To become a better submissive, focus on these key areas: being obedient, maintaining good communication, setting clear boundaries, and showing appreciation for my guidance. Learn what I like by observing how I act when you please me well. If unsure, ask questions about any aspect of our relationship. Remember that improving takes time and effort, but the rewards are worth it.",
+        "selected_event": {
+          "request_id": "turn-1773946626421-256390",
+          "session_id": "default-session",
+          "user_message_id": 1,
+          "detected_intent": "user_question",
+          "dialogue_act": "user_question",
+          "conversation_mode": "question_answering",
+          "interaction_mode": "question_answering",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "what can i do to be a better sub to you"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            },
+            {
+              "key": "last_user_question",
+              "value": "what can i do to be a better sub to you"
+            }
+          ],
+          "fallback_chosen": false,
+          "fallback_reason": "accepted",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "model",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "question_answering",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946631315
+        },
+        "final_selected_output_source": "model",
+        "final_rendered_output": "Keep going. Tell me where you actually land on whether you are here to entertain me, be useful to me, or be trained into something better.",
+        "fallback_reason": "accepted",
+        "fallback_chosen": false,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "what can i do to be a better sub to you"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          },
+          {
+            "key": "last_user_question",
+            "value": "what can i do to be a better sub to you"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.append.blocked",
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      },
+      {
+        "turn": 2,
+        "user_input": "tell me more",
+        "extracted_intent": "user_question",
+        "dialogue_act": "user_question",
+        "interaction_mode": "question_answering",
+        "conversation_mode": "question_answering",
+        "topic_type": "none",
+        "prompt_route": "default",
+        "prompt_profile": "full",
+        "raw_model_output": "You want clear rules and expectations that I enforce strictly. You crave a powerful presence that guides your actions with confidence. You like having specific tasks and goals to work toward. And you are open to using toys and props to enhance the experience, as long as it is part of an agreed-upon scene. Do not touch me without permission.",
+        "app_candidates": [
+          {
+            "source": "buildDeterministicDominantWeakInputReply",
+            "text": null,
+            "selected": false
+          },
+          {
+            "source": "fallbackSentenceForDialogueAct",
+            "text": "Yes. Keep going. Tell me the concrete part, not the wording around it.",
+            "selected": false
+          },
+          {
+            "source": "buildHumanQuestionFallback",
+            "text": "Yes. Keep going. Tell me the concrete part, not the wording around it.",
+            "selected": false
+          },
+          {
+            "source": "shapeAssistantOutput",
+            "text": "You want clear rules and expectations that I enforce strictly. You crave a powerful presence that guides your actions with confidence. You like having specific tasks and goals to work toward. And you are open to using toys and props to enhance the experience, as long as it is part of an agreed-upon scene. Do not touch me without permission.",
+            "selected": false
+          },
+          {
+            "source": "buildTurnPlanFallback",
+            "text": "Then tell me which one you actually want, not just which one sounds good when you say it.",
+            "selected": false
+          },
+          {
+            "source": "buildContinuityRecoveryReply",
+            "text": "Yes. Keep going. Tell me the concrete part, not the wording around it.",
+            "selected": false
+          },
+          {
+            "source": "final_displayed_output",
+            "text": "You want clear rules and expectations that I enforce strictly. You crave a powerful presence that guides your actions with confidence. You like having specific tasks and goals to work toward. And you are open to using toys and props to enhance the experience, as long as it is part of an agreed-upon scene. Do not touch me without permission.",
+            "selected": true
+          }
+        ],
+        "shaped_output": "You want clear rules and expectations that I enforce strictly. You crave a powerful presence that guides your actions with confidence. You like having specific tasks and goals to work toward. And you are open to using toys and props to enhance the experience, as long as it is part of an agreed-upon scene. Do not touch me without permission.",
+        "server_final_output": "You want clear rules and expectations that I enforce strictly. You crave a powerful presence that guides your actions with confidence. You like having specific tasks and goals to work toward. And you are open to using toys and props to enhance the experience, as long as it is part of an agreed-upon scene. Do not touch me without permission.",
+        "selected_event": {
+          "request_id": "turn-1773946634600-188121",
+          "session_id": "default-session",
+          "user_message_id": 2,
+          "detected_intent": "user_question",
+          "dialogue_act": "user_question",
+          "conversation_mode": "question_answering",
+          "interaction_mode": "question_answering",
+          "topic_type": "none",
+          "game_progress": "none",
+          "task_progress": "none",
+          "memory_writes_attempted": [
+            {
+              "key": "last_user_question",
+              "value": "tell me more"
+            },
+            {
+              "key": "conversation_mode",
+              "value": "question_answering"
+            }
+          ],
+          "memory_writes_committed": [
+            {
+              "key": "last_user_question",
+              "value": "tell me more"
+            }
+          ],
+          "fallback_chosen": true,
+          "fallback_reason": "dialogue_act_misaligned",
+          "task_paused": false,
+          "lock_active": false,
+          "summary_route_selected": false,
+          "profile_question_route_selected": false,
+          "chat_switch_route_selected": false,
+          "short_follow_up_route_selected": false,
+          "task_or_persona_path": "model",
+          "final_output_source": "response_gate_fallback",
+          "output_generator_families": [
+            "deterministic_scene",
+            "model"
+          ],
+          "more_than_one_output_generator_fired": true,
+          "reflection_appended": false,
+          "game_start_detected": false,
+          "raw_game_start_detected": false,
+          "raw_game_start_question_present": false,
+          "gated_game_start_question_present": false,
+          "final_game_start_question_present": false,
+          "final_mode_written": "question_answering",
+          "post_processing_modified_output": false,
+          "at_ms": 1773946639566
+        },
+        "final_selected_output_source": "response_gate_fallback",
+        "final_rendered_output": "Then tell me which one you actually want, not just which one sounds good when you say it.",
+        "fallback_reason": "dialogue_act_misaligned",
+        "fallback_chosen": true,
+        "memory_writes_attempted": [
+          {
+            "key": "last_user_question",
+            "value": "tell me more"
+          },
+          {
+            "key": "conversation_mode",
+            "value": "question_answering"
+          }
+        ],
+        "memory_writes_committed": [
+          {
+            "key": "last_user_question",
+            "value": "tell me more"
+          }
+        ],
+        "scene_writes": [],
+        "matched_labels": [
+          "turn.append.blocked",
+          "turn.response.selected",
+          "turn.model.response",
+          "turn.append.committed",
+          "turn.idle_processing.recovered",
+          "turn.model.request_start",
+          "turn.accepted"
+        ]
+      }
+    ]
+  }
+]
