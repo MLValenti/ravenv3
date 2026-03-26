@@ -1,5 +1,7 @@
 import type { DialogueRouteAct } from "../dialogue/router.ts";
+import type { InteractionMode } from "./interaction-mode.ts";
 import { scrubVisibleInternalLeakText } from "./response-gate.ts";
+import type { SceneTopicType } from "./scene-state.ts";
 
 export function chooseDeliveredAssistantText(input: {
   responseText: string;
@@ -55,6 +57,58 @@ export function sanitizeSessionVisibleAssistantText(text: string): {
   blocked: boolean;
 } {
   return scrubVisibleInternalLeakText(text);
+}
+
+function isThreadScopedContinuationCue(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return (
+    normalized === "you pick" ||
+    normalized === "keep going" ||
+    normalized === "go on" ||
+    normalized === "ok" ||
+    normalized === "okay" ||
+    normalized === "different game" ||
+    normalized === "explain the game" ||
+    normalized === "what do you mean"
+  );
+}
+
+function isScopedContinuationTopic(topicType: SceneTopicType, interactionMode: InteractionMode): boolean {
+  return (
+    interactionMode === "game" ||
+    interactionMode === "task_planning" ||
+    interactionMode === "locked_task_execution" ||
+    topicType === "game_setup" ||
+    topicType === "game_execution" ||
+    topicType === "reward_negotiation" ||
+    topicType === "reward_window" ||
+    topicType === "task_negotiation" ||
+    topicType === "task_execution" ||
+    topicType === "duration_negotiation" ||
+    topicType === "task_terms_negotiation"
+  );
+}
+
+export function shouldPreferServerTurnContract(input: {
+  userText: string;
+  dialogueAct: DialogueRouteAct;
+  hasDeterministicCandidate: boolean;
+  interactionMode: InteractionMode;
+  topicType: SceneTopicType;
+}): boolean {
+  if (!input.hasDeterministicCandidate) {
+    return false;
+  }
+  if (input.dialogueAct === "propose_activity") {
+    return true;
+  }
+  if (!isScopedContinuationTopic(input.topicType, input.interactionMode)) {
+    return false;
+  }
+  if (input.dialogueAct === "answer_activity_choice" || input.dialogueAct === "short_follow_up") {
+    return true;
+  }
+  return isThreadScopedContinuationCue(input.userText);
 }
 
 export function shouldAllowVisibleAssistantCommit(input: {

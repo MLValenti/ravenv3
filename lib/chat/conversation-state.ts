@@ -580,6 +580,13 @@ function deriveRequestedAction(input: {
   if (hasTopicShiftCue(normalized) && extractTopic(normalized)) {
     return "shift_topic";
   }
+  if (
+    isAssistantSelfQuestion(normalized) ||
+    isAssistantServiceQuestion(normalized) ||
+    isMutualGettingToKnowRequest(normalized)
+  ) {
+    return "answer_direct_question";
+  }
   if (hasRevisionCue(normalized) && existingThread !== "none") {
     return "revise_previous_plan";
   }

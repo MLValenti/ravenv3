@@ -1,0 +1,15 @@
+⨯ Error: UNKNOWN: unknown error, open 'C:\Users\mk0\raven\raven-memory.sqlite'
+    at saveDatabase (lib\db.ts:610:6)
+    at run (lib\db.ts:617:5)
+  608 |
+  609 | function saveDatabase(db: Database) {
+> 610 |   fs.writeFileSync(DB_FILE, Buffer.from(db.export()));
+      |      ^
+  611 | }
+  612 |
+  613 | async function withWrite<T>(operation: (db: Database) => T | Promise<T>): Promise<T> { {
+  errno: -4094,
+  code: 'UNKNOWN',
+  syscall: 'open',
+  path: 'C:\\Users\\mk0\\raven\\raven-memory.sqlite'
+}

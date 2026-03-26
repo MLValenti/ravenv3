@@ -193,7 +193,7 @@ export function isAssistantSelfQuestion(text: string): boolean {
   if (isAssistantPreferenceQuestion(normalized)) {
     return true;
   }
-  return /\b(what(?:'s| is) your favorite thing to talk about|what do you like|what are you into|what should i know about you|tell me about yourself|what do you enjoy talking about|what kinds of things do you like talking about|what matters to you|what are you like|what kinks do you like|what fetishes do you like|what toys do you like|what kind of kinks are you into|what kind of fetishes are you into|what kind of toys are you into|which kinks do you like|which toys do you like)\b/i.test(
+  return /\b(tell me more about you|what(?:'s| is) your favorite thing to talk about|what do you like|what are you into|what should i know about you|tell me about yourself|what do you enjoy talking about|what kinds of things do you like talking about|what matters to you|what are you like|what kinks do you like|what fetishes do you like|what toys do you like|what kind of kinks are you into|what kind of fetishes are you into|what kind of toys are you into|which kinks do you like|which toys do you like)\b/i.test(
     normalized,
   );
 }

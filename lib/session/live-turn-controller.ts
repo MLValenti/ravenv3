@@ -317,6 +317,7 @@ export async function maybeHandleSessionReplayDeterministicBypass(
   const lastAssistantOutput =
     input.lastAssistantOutput ?? previousAssistantText(input.messages);
   const workingMemoryContinuityTopic = resolveWorkingMemoryContinuityTopic(input.workingMemory);
+  const sceneScope = classifyReplaySceneScope(replayed.sceneState);
   const preferFreshWorkingMemoryContinuity = shouldPreferFreshWorkingMemoryContinuity({
     memory: input.workingMemory,
     latestUserText: input.lastUserMessage.content,
@@ -371,8 +372,8 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       })
     : null;
   const shouldSkipScaffoldCompetition =
-    effectiveSceneAct === "short_follow_up" ||
-    relationalRouteSelected;
+    (relationalRouteSelected && replayed.sceneState.interaction_mode !== "relational_chat") ||
+    (effectiveSceneAct === "short_follow_up" && sceneScope === "open_conversation");
   const scaffolded = shouldSkipScaffoldCompetition
     ? null
     : buildSceneScaffoldReply({
@@ -402,26 +403,40 @@ export async function maybeHandleSessionReplayDeterministicBypass(
   const sceneFallbackSource = sceneFallbackFromState
     ? "buildSceneFallback"
     : "buildHumanQuestionFallback";
-  const deterministicCandidate =
-    shortFollowUpReply ??
-    deterministicCoreConversationReply ??
-    deterministicGreetingReply ??
-    deterministicRelationalReply ??
-    scaffolded ??
-    deterministicWeakReply;
-  const deterministicCandidateSource = shortFollowUpReply
-    ? "short_follow_up"
-    : deterministicCoreConversationReply
-      ? "core_conversation"
+  const shouldPreferSceneScaffold =
+    Boolean(scaffolded) &&
+    (
+      sceneScope !== "open_conversation" ||
+      replayed.sceneState.interaction_mode === "relational_chat"
+    );
+  const deterministicCandidate = shouldPreferSceneScaffold
+    ? scaffolded ??
+      shortFollowUpReply ??
+      deterministicGreetingReply ??
+      deterministicRelationalReply ??
+      deterministicCoreConversationReply ??
+      deterministicWeakReply
+    : shortFollowUpReply ??
+      deterministicGreetingReply ??
+      deterministicRelationalReply ??
+      deterministicCoreConversationReply ??
+      scaffolded ??
+      deterministicWeakReply;
+  const deterministicCandidateSource = shouldPreferSceneScaffold && scaffolded
+    ? "scene_scaffold"
+    : shortFollowUpReply
+      ? "short_follow_up"
       : deterministicGreetingReply
         ? "greeting"
         : deterministicRelationalReply
           ? "relational"
-          : scaffolded
-            ? "scene_scaffold"
-            : deterministicWeakReply
-              ? "deterministic_weak"
-              : sceneFallbackSource;
+          : deterministicCoreConversationReply
+            ? "core_conversation"
+            : scaffolded
+              ? "scene_scaffold"
+              : deterministicWeakReply
+                ? "deterministic_weak"
+                : sceneFallbackSource;
   const bypassDecision =
     preferFreshWorkingMemoryContinuity && !replayed.sceneState.task_hard_lock_active
       ? {
@@ -441,7 +456,7 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     detectedUserAct: effectiveSceneAct,
     currentSessionMode: input.conversationStateSnapshot.current_mode,
     replayedSceneStateSummary: summarizeReplaySceneState(replayed.sceneState),
-    sceneScope: classifyReplaySceneScope(replayed.sceneState),
+    sceneScope,
     sceneTopicLocked: replayed.sceneState.topic_locked,
     taskHardLockActive: replayed.sceneState.task_hard_lock_active,
     deterministicBypassTriggered: bypassModel,
@@ -453,9 +468,9 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     stage: "session_replay",
     latest_user_message: sessionReplayDebugContext.latestUserMessage,
     detected_user_act: sessionReplayDebugContext.detectedUserAct,
-    current_session_mode: sessionReplayDebugContext.currentSessionMode,
-    replayed_scene_state: sessionReplayDebugContext.replayedSceneStateSummary,
-    scene_scope: sessionReplayDebugContext.sceneScope,
+      current_session_mode: sessionReplayDebugContext.currentSessionMode,
+      replayed_scene_state: sessionReplayDebugContext.replayedSceneStateSummary,
+      scene_scope: sessionReplayDebugContext.sceneScope,
     deterministic_bypass_triggered: sessionReplayDebugContext.deterministicBypassTriggered,
     deterministic_bypass_reason: sessionReplayDebugContext.deterministicBypassReason,
     model_called: false,
@@ -498,7 +513,7 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     detected_user_act: effectiveSceneAct,
     current_session_mode: input.conversationStateSnapshot.current_mode,
     replayed_scene_state: summarizeReplaySceneState(replayed.sceneState),
-    scene_scope: classifyReplaySceneScope(replayed.sceneState),
+    scene_scope: sceneScope,
     deterministic_bypass_triggered: true,
     deterministic_bypass_reason: bypassDecision.reason,
     model_called: false,

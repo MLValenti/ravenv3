@@ -75,7 +75,7 @@ export function isCoherentAssistantSelfAnswer(
     return false;
   }
   const normalized = normalize(responseText);
-  return /\b(i like|i enjoy|i pay attention|what matters|what pulls you in|ask me|question on me)\b/.test(
+  return /\b(i like|i enjoy|i pay attention|what matters|what pulls you in|what keeps my attention|the part that is real|ask me|question on me)\b/.test(
     normalized,
   );
 }

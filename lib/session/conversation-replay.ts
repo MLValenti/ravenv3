@@ -1255,19 +1255,17 @@ async function replayConversationScenarioSynthetic(
       });
     }
 
-    const scaffolded = relationalRouteSelected
-      ? null
-      : buildSceneScaffoldReply({
-          act: reduced.route.act,
-          userText: turn.user,
-          sceneState: state.sceneState,
-          sessionMemory: state.sessionMemory,
-          inventory: scenario.inventory,
-          recentTaskTemplates:
-            state.sceneState.task_progress !== "none"
-              ? [state.sceneState.task_template_id]
-              : [],
-        });
+    const scaffolded = buildSceneScaffoldReply({
+      act: reduced.route.act,
+      userText: turn.user,
+      sceneState: state.sceneState,
+      sessionMemory: state.sessionMemory,
+      inventory: scenario.inventory,
+      recentTaskTemplates:
+        state.sceneState.task_progress !== "none"
+          ? [state.sceneState.task_template_id]
+          : [],
+    });
     if (scaffolded) {
       pushUniqueCandidate(candidates, {
         family: "deterministic_scene",
@@ -1324,6 +1322,7 @@ async function replayConversationScenarioSynthetic(
     const forceDeterministicConversationReply =
       summaryRouteSelected ||
       chatSwitchRouteSelected ||
+      relationalRouteSelected ||
       shortFollowUpRouteSelected ||
       Boolean(deterministicQuestionReply) ||
       isStableCoreConversationMove(conversationMove);

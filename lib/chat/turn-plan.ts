@@ -379,8 +379,17 @@ export function buildTurnPlan(
     latestUserMessage,
     previousAssistantMessage,
   });
+  const requestState = resolveTurnRequestState({
+    text: latestUserMessage,
+    currentMode,
+    state: input?.conversationState ?? null,
+    previousAssistantMessage,
+  });
+  const requiresDirectAnswer =
+    requestState.action === "answer_direct_question" &&
+    !clarificationTurn;
 
-  const requiredMove: TurnPlanRequiredMove = clarificationTurn || isQuestion(latestUserMessage)
+  const requiredMove: TurnPlanRequiredMove = clarificationTurn || isQuestion(latestUserMessage) || requiresDirectAnswer
     ? "answer_user_question"
     : previousAssistantMessage &&
         previousAssistantMessage.includes("?") &&
@@ -402,12 +411,6 @@ export function buildTurnPlan(
         : requiredMove === "follow_through_previous_commitment"
           ? "user_acknowledged_prior_commitment"
           : "default_continue";
-  const requestState = resolveTurnRequestState({
-    text: latestUserMessage,
-    currentMode,
-    state: input?.conversationState ?? null,
-    previousAssistantMessage,
-  });
   const userResponseEnergy = inferUserResponseEnergy(latestUserMessage);
   const conversationMove = classifyCoreConversationMove({
     userText: latestUserMessage,

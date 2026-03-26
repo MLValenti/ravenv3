@@ -530,6 +530,18 @@ function containsThinConversationReply(text: string): boolean {
   return /^(?:good|yes|exactly|keep going)\.?$/i.test(normalize(text));
 }
 
+function shouldAllowRepeatedGamePrompt(input: ResponseGateInput, text: string): boolean {
+  if (
+    input.sceneState.topic_type !== "game_execution" ||
+    input.dialogueAct !== "short_follow_up"
+  ) {
+    return false;
+  }
+  return /\b(first throw|first guess|second throw|second and final guess|choose rock, paper, or scissors|one number from 1 to 10|reply with digits only|riddle one|riddle two)\b/i.test(
+    normalize(text),
+  );
+}
+
 function isExplicitActivityDelegation(text: string): boolean {
   return /\b(you pick|you choose|pick for me|dealer'?s choice|let'?s play a game|wanna run a game)\b/i.test(
     normalize(text),
@@ -574,11 +586,11 @@ function repeatsCurrentTaskFamily(input: ResponseGateInput, text: string): boole
   if (input.sceneState.task_spec.request_kind !== "replacement") {
     return false;
   }
-  const family = input.sceneState.task_spec.current_task_family;
-  if (!family) {
-    return false;
-  }
   const normalized = normalize(text);
+  return matchesCurrentTaskFamily(input.sceneState.task_spec.current_task_family, normalized);
+}
+
+function matchesCurrentTaskFamily(family: string, normalized: string): boolean {
   if (family === "stillness_focus") {
     return /\b(stillness|hold still|stay still)\b/i.test(normalized);
   }
@@ -614,6 +626,12 @@ function repeatsCurrentTaskFamily(input: ResponseGateInput, text: string): boole
 
 function shouldEnforceTurnPlan(input: ResponseGateInput): boolean {
   if (!input.turnPlan || !input.turnPlan.hasSufficientContextToAct) {
+    return false;
+  }
+  if (
+    input.dialogueAct === "duration_request" &&
+    input.sceneState.topic_type === "game_execution"
+  ) {
     return false;
   }
   if (
@@ -690,6 +708,21 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
   }
 
   if (act === "duration_request") {
+    if (input.sceneState.topic_type === "game_execution") {
+      return /\b(task timing|not this game|want a task|stay with the current move|current move|round)\b/i.test(
+        normalized,
+      );
+    }
+    if (
+      input.sceneState.topic_type === "task_execution" &&
+      input.sceneState.task_spec.request_kind === "revision" &&
+      input.sceneState.task_spec.current_task_family
+    ) {
+      return (
+        /\b\d+\s*(hour|hours|minute|minutes)\b/.test(normalized) &&
+        matchesCurrentTaskFamily(input.sceneState.task_spec.current_task_family, normalized)
+      );
+    }
     return /\b\d+\s*(hour|hours|minute|minutes)\b/.test(normalized);
   }
   if (act === "task_request") {
@@ -714,6 +747,11 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
     return /\b(i mean|to clarify|this means|simple)\b/.test(normalized);
   }
   if (act === "short_follow_up") {
+    if (input.sceneState.topic_type === "game_execution") {
+      return /\b(game|round|throw|guess|prompt|rock|paper|scissors|number|riddle|equation|first throw|first guess|second throw|second and final guess|current move)\b/i.test(
+        normalized,
+      );
+    }
     const kind = detectShortFollowUpKind(input.userText);
     if (kind === "go_on") {
       return /\b(keep going|tell me|because|concrete part|being trained by me|useful to me|what people usually|get wrong|what would make you useful|what you could actually do)\b/i.test(
@@ -1215,10 +1253,12 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     /\b(what would that prove|what does that prove|what is that meant to prove|do i need proof|what proof|how deep|what depth|how far|what do you mean|what else|different one|another one|make it stricter|make it softer)\b/i.test(
       normalize(input.userText),
     );
+  const shouldAllowGamePromptSimilarity = shouldAllowRepeatedGamePrompt(input, text);
   if (
     input.lastAssistantText &&
     !shouldAllowReplacementTaskSimilarity &&
     !shouldAllowTrainingFollowUpSimilarity &&
+    !shouldAllowGamePromptSimilarity &&
     isSemanticallyRepeated(text, input.lastAssistantText)
   ) {
     if (isShortClarificationTurn(input.userText)) {

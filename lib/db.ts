@@ -607,7 +607,30 @@ async function loadDatabase(): Promise<Database> {
 }
 
 function saveDatabase(db: Database) {
-  fs.writeFileSync(DB_FILE, Buffer.from(db.export()));
+  const buffer = Buffer.from(db.export());
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      fs.writeFileSync(DB_FILE, buffer);
+      return;
+    } catch (error) {
+      lastError = error;
+      const code =
+        typeof error === "object" && error && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : "";
+      if (!["UNKNOWN", "EBUSY", "EPERM", "EACCES"].includes(code) || attempt === 3) {
+        throw error;
+      }
+      const waitUntil = Date.now() + 25 * (attempt + 1);
+      while (Date.now() < waitUntil) {
+        // Retry transient Windows file-open failures instead of hard-failing the route.
+      }
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("Failed to save database.");
 }
 
 async function withWrite<T>(operation: (db: Database) => T | Promise<T>): Promise<T> {

@@ -1,5 +1,10 @@
 import type { SceneState, SceneTopicType } from "./scene-state.ts";
 import type { DialogueRouteAct } from "../dialogue/router.ts";
+import {
+  isAssistantSelfQuestion,
+  isChatSwitchRequest,
+  isMutualGettingToKnowRequest,
+} from "./interaction-mode.ts";
 
 const DETERMINISTIC_TOPIC_TYPES = new Set<SceneTopicType>([
   "game_setup",
@@ -79,8 +84,21 @@ export function explainBypassModelForSceneTurn(input: {
     interactionMode === "task_planning" ||
     interactionMode === "locked_task_execution" ||
     interactionMode === "game";
+  const isHighConfidenceOpenConversationTurn =
+    latestUserText.length > 0 &&
+    (
+      isChatSwitchRequest(latestUserText) ||
+      isAssistantSelfQuestion(latestUserText) ||
+      isMutualGettingToKnowRequest(latestUserText)
+    );
 
   if (input.hasDeterministicCandidate) {
+    if (isHighConfidenceOpenConversationTurn) {
+      return {
+        bypass: true,
+        reason: "high_confidence_open_conversation_candidate",
+      };
+    }
     return {
       bypass: isExplicitDeterministicMode,
       reason: isExplicitDeterministicMode

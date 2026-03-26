@@ -375,6 +375,7 @@ function inferSessionIntentValue(text: string): string | null {
 function extractProfileFacts(text: string, slotHint: SessionMemorySlotKey | null): UserProfileFact[] {
   const normalized = text.trim().toLowerCase().replace(/\s+/g, " ");
   const isTaskUtilityAnswer =
+    /^\d+\s*(minutes?|hours?)$/.test(normalized) ||
     /^(anal|oral|prop|external)$/.test(normalized) ||
     /^(different task|different kind of task|another one|something else|not that)$/.test(
       normalized,

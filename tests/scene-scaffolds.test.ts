@@ -2277,7 +2277,7 @@ test("mutual get-to-know request gets a natural conversational reply", () => {
   assert.equal(typeof reply, "string");
   assert.match(
     reply ?? "",
-    /what holds my attention|honesty|usefulness|control that actually changes something|what do you want to know about me first/i,
+    /what holds my attention|what keeps my attention|the part that is real|honesty|usefulness|control that actually changes something|what do you want to know about me first/i,
   );
   assert.doesNotMatch(reply ?? "", /stay with the current thread and continue/i);
   assert.doesNotMatch(reply ?? "", /put it on now|here is your task/i);

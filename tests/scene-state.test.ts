@@ -554,6 +554,40 @@ test("chat-switch request pauses an unlocked task and switches to normal chat", 
   assert.equal(state.topic_locked, false);
 });
 
+test("chat-switch request releases task negotiation before blockers are complete", () => {
+  let state = noteSceneStateUserTurn(createSceneState(), {
+    text: "give me a task",
+    act: "task_request",
+    sessionTopic: null,
+  });
+
+  state = noteSceneStateAssistantTurn(state, {
+    text: "What kind of task do you want this to be: device, frame, posture, stillness?",
+  });
+
+  state = noteSceneStateUserTurn(state, {
+    text: "frame",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  state = noteSceneStateAssistantTurn(state, {
+    text: "How long should I make it run?",
+  });
+
+  state = noteSceneStateUserTurn(state, {
+    text: "let's just chat for a minute",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  assert.equal(state.interaction_mode, "normal_chat");
+  assert.equal(state.topic_type, "general_request");
+  assert.equal(state.topic_locked, false);
+  assert.equal(state.task_paused, false);
+  assert.equal(state.task_spec.request_stage, "collecting_blockers");
+});
+
 test("scene fallback answers profile summary request instead of asking another profile question", () => {
   let memory = createSessionMemory();
   memory = writeUserAnswer(memory, "Call me Mara", 1_000, "profile_fact");

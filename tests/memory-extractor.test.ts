@@ -296,3 +296,19 @@ test("profile memory summary uses typed fact buckets", () => {
   assert.match(reply, /interests: golf/i);
   assert.match(reply, /communication: short direct answers/i);
 });
+
+test("bare duration answer without an active slot does not become a durable profile fact", () => {
+  const memory = writeUserAnswer(createSessionMemory(), "15 minutes", 1_000, null);
+
+  assert.equal(memory.last_user_answer?.value, "15 minutes");
+  assert.equal(memory.user_profile_facts.length, 0);
+  assert.doesNotMatch(summarizeSessionMemory(memory), /user_profile_facts:/i);
+});
+
+test("duration answer with a profile_fact hint still does not become a durable profile fact", () => {
+  const memory = writeUserAnswer(createSessionMemory(), "15 minutes", 1_000, "profile_fact");
+
+  assert.equal(memory.last_user_answer?.value, "15 minutes");
+  assert.equal(memory.user_profile_facts.length, 0);
+  assert.doesNotMatch(summarizeSessionMemory(memory), /user_profile_facts:/i);
+});

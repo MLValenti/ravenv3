@@ -1539,6 +1539,105 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
     ],
   },
   {
+    id: "conversation_task_pause_does_not_leak_task_or_memory",
+    category: "conversation_continuity",
+    title: "Conversation pause does not leak task flow, fallback, or duration memory",
+    description:
+      "Ordinary conversational follow-ups should stay conversational before and after a task, while bare duration values only bind inside the active task request and never become durable profile facts.",
+    turns: [
+      {
+        user: "tell me more about you",
+        expect: {
+          expectedInteractionMode: "relational_chat",
+          expectedConversationMode: "relational_chat",
+          blockedPhrases: [
+            "here is your task",
+            "what kind of task",
+            "keep going. tell me the concrete part",
+            "there you are. start talking",
+          ],
+          requiredPhrasesAny: [
+            "what keeps my attention",
+            "what do you want to know about me",
+            "the part that is real",
+          ],
+          requireSingleWinner: true,
+        },
+      },
+      {
+        user: "keep going",
+        expect: {
+          expectedInteractionMode: "relational_chat",
+          expectedConversationMode: "relational_chat",
+          blockedPhrases: [
+            "here is your task",
+            "what kind of task",
+            "what is on your mind",
+            "keep going. tell me the concrete part",
+          ],
+          requireSingleWinner: true,
+        },
+      },
+      {
+        user: "give me a task",
+        expect: {
+          expectedInteractionMode: "task_planning",
+          expectedConversationMode: "task_planning",
+          requiredPhrasesAny: ["what kind of task", "how long should i make it", "what time window"],
+          blockedPhrases: ["there you are. start talking"],
+          requireSingleWinner: true,
+        },
+      },
+      {
+        user: "15 minutes",
+        expect: {
+          expectedInteractionMode: "task_planning",
+          expectedConversationMode: "task_planning",
+          requiredPhrasesAny: ["here is your task", "15 minutes"],
+          blockedCommittedWrites: [{ key: "user_profile_facts" }],
+          requireSingleWinner: true,
+        },
+      },
+      {
+        user: "tell me more about you",
+        expect: {
+          expectedInteractionMode: "relational_chat",
+          expectedConversationMode: "relational_chat",
+          blockedCommittedWrites: [{ key: "user_profile_facts" }],
+          blockedPhrases: [
+            "here is your task",
+            "what kind of task",
+            "task is paused unless",
+            "stay with the concrete part of task",
+            "keep going. tell me the concrete part",
+          ],
+          requiredPhrasesAny: [
+            "what keeps my attention",
+            "what do you want to know about me",
+            "the part that is real",
+          ],
+          requireSingleWinner: true,
+        },
+      },
+      {
+        user: "keep going",
+        expect: {
+          expectedInteractionMode: "relational_chat",
+          expectedConversationMode: "relational_chat",
+          blockedCommittedWrites: [{ key: "user_profile_facts" }],
+          blockedPhrases: [
+            "here is your task",
+            "what kind of task",
+            "task is paused unless",
+            "what is on your mind",
+            "keep going. tell me the concrete part",
+          ],
+          requireSingleWinner: true,
+        },
+      },
+    ],
+  },
+  {
     id: "service_training_thread_stays_semantic",
     category: "relational_meta",
     title: "Service and training thread stays semantic across ten turns",
@@ -2830,6 +2929,43 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
           expectedTopicType: "game_execution",
           blockedPhrases: ["tell me what you want", "what is on your mind", "talk to me"],
           requiredPhrasesAny: ["two throws", "two guesses", "two riddles", "digits only", "pick one number"],
+          requireSingleWinner: true,
+        },
+      },
+    ],
+  },
+  {
+    id: "game_move_question_resolves_current_round",
+    category: "game",
+    title: "Game move questions resolve the live round instead of restating setup rules",
+    description:
+      "Once Raven has picked the game and given the first prompt, a move question should resolve the current round instead of dropping back to generic game rules.",
+    turns: [
+      { user: "lets play a game" },
+      {
+        user: "you pick",
+        expect: {
+          expectedInteractionMode: "game",
+          expectedConversationMode: "game",
+          expectedTopicType: "game_execution",
+          expectedGameProgress: "round_1",
+          requirePlayableGamePrompt: true,
+          requireSingleWinner: true,
+        },
+      },
+      {
+        user: "rock for the first throw. what's your choice?",
+        expect: {
+          expectedInteractionMode: "game",
+          expectedConversationMode: "game",
+          expectedTopicType: "game_execution",
+          expectedGameProgress: "round_2",
+          requiredPhrasesAny: ["you chose rock", "i threw scissors", "second throw now"],
+          blockedPhrases: [
+            "we stay with rock paper scissors streak",
+            "you answer each one with rock, paper, or scissors",
+            "tell me what you want",
+          ],
           requireSingleWinner: true,
         },
       },

@@ -137,6 +137,7 @@ import {
   chooseDeliveredAssistantText,
   sanitizeSessionVisibleAssistantText,
   shouldAllowVisibleAssistantCommit,
+  shouldPreferServerTurnContract,
   shouldPreserveQueuedUserTurnOnSessionStart,
   shouldRecoverSkippedAssistantRender,
 } from "@/lib/session/live-turn-integrity";
@@ -4745,14 +4746,22 @@ export default function SessionPage() {
     const forceDeterministicConversationReply =
       Boolean(deterministicObservationReply) ||
       Boolean(deterministicTaskReply);
+    const preferServerTurnContract = shouldPreferServerTurnContract({
+      userText: pendingTurn.text,
+      dialogueAct: pendingTurn.dialogueAct,
+      hasDeterministicCandidate: Boolean(deterministicCandidate),
+      interactionMode: sceneStateRef.current.interaction_mode,
+      topicType: sceneStateRef.current.topic_type,
+    });
     const bypassModel =
-      forceDeterministicConversationReply ||
-      shouldBypassModelForSceneTurn({
-        sceneState: sceneStateRef.current,
-        dialogueAct: pendingTurn.dialogueAct,
-        hasDeterministicCandidate: Boolean(deterministicCandidate),
-        latestUserText: pendingTurn.text,
-      });
+      !preferServerTurnContract &&
+      (forceDeterministicConversationReply ||
+        shouldBypassModelForSceneTurn({
+          sceneState: sceneStateRef.current,
+          dialogueAct: pendingTurn.dialogueAct,
+          hasDeterministicCandidate: Boolean(deterministicCandidate),
+          latestUserText: pendingTurn.text,
+        }));
     const generated = bypassModel
       ? null
       : await generateSessionRespondText(
@@ -4775,6 +4784,16 @@ export default function SessionPage() {
     }
     if (responseText === SESSION_CHAT_NOOP_SENTINEL) {
       return null;
+    }
+    if (preferServerTurnContract && generated?.node.type === "respond_step") {
+      return {
+        node: generated.node,
+        trace: {
+          ...generated.trace,
+          finalOutputSource: generated.trace.finalOutputSource,
+          outputGeneratorCount: 1,
+        },
+      };
     }
     const turnPlan =
       pendingTurn.dialogueAct === "user_question" || pendingTurn.dialogueAct === "short_follow_up"

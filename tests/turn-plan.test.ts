@@ -169,6 +169,31 @@ test("turn plan fallback uses wager-specific follow-up for bet cues", () => {
   assert.match(fallback, /\b(wager|stakes|win terms)\b/i);
 });
 
+test("turn plan rejects a rules recap when the user asked for Raven's move in the current game round", () => {
+  const plan = buildTurnPlan([
+    {
+      role: "assistant",
+      content:
+        "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    },
+    { role: "user", content: "rock for the first throw. what's your choice?" },
+  ]);
+
+  const bad = isTurnPlanSatisfied(
+    plan,
+    "Listen carefully, pet. We stay with rock paper scissors streak. Two throws. You answer each one with rock, paper, or scissors. Beat both throws to win.",
+  );
+  const good = isTurnPlanSatisfied(
+    plan,
+    "Good. You chose rock. I threw scissors. Rock beats scissors. Clean. You take the first throw. Keep up, pet. Second throw now. Choose rock, paper, or scissors.",
+  );
+
+  assert.equal(bad.ok, false);
+  assert.equal(bad.reason, "missing_game_answer");
+  assert.equal(good.ok, true);
+  assert.equal(good.reason, "game_answered");
+});
+
 test("turn plan fallback answers expectation question without meta narration", () => {
   const plan = buildTurnPlan([
     { role: "assistant", content: "State what you want." },
@@ -190,6 +215,24 @@ test("turn plan accepts coherent mutual get-to-know answers without forcing fall
   ]);
 
   const result = isTurnPlanSatisfied(plan, "Tell me where your submission started. Be specific.");
+
+  assert.equal(result.ok, true);
+  assert.equal(result.reason, "relational_question_answered");
+});
+
+test("turn plan treats implicit assistant-self questions as direct answers, not modifications", () => {
+  const plan = buildTurnPlan([
+    { role: "assistant", content: "I am here." },
+    { role: "user", content: "tell me more about you" },
+  ]);
+
+  assert.equal(plan.requiredMove, "answer_user_question");
+  assert.equal(plan.requestedAction, "answer_direct_question");
+
+  const result = isTurnPlanSatisfied(
+    plan,
+    "What keeps my attention is the part that is real. Say that cleanly, and I will stay with it.",
+  );
 
   assert.equal(result.ok, true);
   assert.equal(result.reason, "relational_question_answered");

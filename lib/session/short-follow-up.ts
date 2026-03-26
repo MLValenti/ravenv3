@@ -326,8 +326,34 @@ function buildQuestionClarificationLead(text: string | null | undefined): string
   if (/\bconsistency, honesty, and follow[- ]through\b/i.test(normalized)) {
     return "I mean consistency, honesty, and follow-through";
   }
+  if (
+    /\bhonest enough for me to see where you hold\b/i.test(normalized) ||
+    /\bconsistent enough that i can actually shape something\b/i.test(normalized) ||
+    /\bbe trainable\b/i.test(normalized)
+  ) {
+    return "I mean honesty, consistency, and trainability";
+  }
   if (/\battention, follow[- ]through, honesty, and enough steadiness\b/i.test(normalized)) {
     return "I mean attention, follow-through, honesty, and steadiness";
+  }
+  if (/\bwhether you want attention, usefulness, or real change\b/i.test(normalized)) {
+    return "I mean whether you want attention, usefulness, or real change";
+  }
+  if (
+    /\bi do not usually say this out loud\b/i.test(normalized) ||
+    /\btrying not to say\b/i.test(normalized)
+  ) {
+    return "I mean the part you were trying not to say out loud";
+  }
+  if (
+    /\bmean what you say\b/i.test(normalized) ||
+    /\bhold steady\b/i.test(normalized) ||
+    /\blong enough for it to count\b/i.test(normalized)
+  ) {
+    return "I mean whether you mean what you say and can hold steady long enough for it to count";
+  }
+  if (/\bwhether i am dealing with a person or a performance\b/i.test(normalized)) {
+    return "I mean whether I am dealing with a person or a performance";
   }
   if (/\busefulness is not a pose\b/i.test(normalized)) {
     return "I mean what would make you useful to me";
@@ -349,6 +375,13 @@ function buildQuestionClarificationLead(text: string | null | undefined): string
   }
   if (/\bi mean the part about you that people usually miss\b/i.test(normalized)) {
     return "I mean the part about you that people usually miss";
+  }
+  if (
+    /\bwhat keeps my attention is the part that is real\b/i.test(normalized) ||
+    /\bask me something real\b/i.test(normalized) ||
+    /\bwhat do you want to know about me\b/i.test(normalized)
+  ) {
+    return "I mean the part that is real enough to hold my attention";
   }
   const definitionQuestion = normalized.match(/^(?:what is|what's|whats)\s+([^?.!,]{2,80})$/i)?.[1];
   if (definitionQuestion) {
@@ -436,6 +469,9 @@ function buildGoOnReply(questionLead: string | null, contextToken: string | null
   }
   if (/\bconsistency\b|\bfollow-through\b|\bhonesty\b|\bsteadiness\b/.test(focus)) {
     return "Good. Then tell me which part of that would be hardest for you to hold.";
+  }
+  if (/\bpart that is real enough to hold my attention\b/.test(focus)) {
+    return "Good. Then ask me about the patterns, pressure, or motive that actually keep me interested.";
   }
   if (contextToken) {
     return `Good. Keep going. Stay with the concrete part of ${contextToken}, not the wording around it.`;
@@ -593,6 +629,14 @@ export function buildShortClarificationReply(input: {
   }
 
   if (kind === "go_on") {
+    if (
+      questionLead &&
+      (/\bbeing trained by me\b/i.test(questionLead) ||
+        /\bperson or a performance\b/i.test(questionLead) ||
+        /\bpart that is real enough to hold my attention\b/i.test(questionLead))
+    ) {
+      return buildGoOnReply(questionLead, contextToken);
+    }
     const semanticContinuation = buildCoreConversationReply({
       userText: input.userText,
       previousAssistantText: input.lastAssistantText,

@@ -390,6 +390,16 @@ function hasExplicitGameSwitchCue(text: string): boolean {
   );
 }
 
+function isCurrentGameMoveResolutionQuestion(text: string): boolean {
+  return /\b(what('?s| is) your (choice|move)|your move|what did you throw|what was your throw|what did you pick|what was your pick)\b/i.test(
+    text,
+  );
+}
+
+function isExplicitAnotherRoundRequest(text: string): boolean {
+  return wantsAnotherRound(text) && !isGameRulesQuestion(text);
+}
+
 function isFreePassWinCondition(winCondition: string): boolean {
   return /\bfree pass\b|\bbank(?:ed)?\b.*\bpass\b/i.test(winCondition);
 }
@@ -415,6 +425,43 @@ function shouldTreatQuestionAsGameAnswer(
     return false;
   }
   return isValidDeterministicGameAnswer(templateId, progress, text);
+}
+
+function shouldAdvanceGameProgressFromTurn(input: {
+  state: SceneState;
+  turn: SceneUserTurnInput;
+  explicitStakeSignal: boolean;
+}): boolean {
+  if (!(input.state.topic_locked && input.state.topic_type === "game_execution")) {
+    return false;
+  }
+  if (input.explicitStakeSignal) {
+    return false;
+  }
+  if (
+    input.turn.act === "confusion" ||
+    input.turn.act === "short_follow_up" ||
+    input.turn.act === "task_request" ||
+    input.turn.act === "duration_request"
+  ) {
+    return false;
+  }
+  if (
+    hasExplicitGameSwitchCue(input.turn.text) ||
+    isExplicitAnotherRoundRequest(input.turn.text) ||
+    input.turn.act === "propose_activity" ||
+    input.turn.act === "answer_activity_choice"
+  ) {
+    return false;
+  }
+  if (input.turn.act === "user_question") {
+    return shouldTreatQuestionAsGameAnswer(
+      input.state.game_template_id,
+      input.state.game_progress,
+      input.turn.text,
+    );
+  }
+  return true;
 }
 
 function isGameProgressQuestion(text: string): boolean {
@@ -793,7 +840,7 @@ function shouldReopenGameSetupFromContext(
     input.act === "answer_activity_choice" ||
     isGameChoiceDelegation(input.text) ||
     isGameStartCue(input.text) ||
-    wantsAnotherRound(input.text)
+    isExplicitAnotherRoundRequest(input.text)
   );
 }
 
@@ -1141,11 +1188,11 @@ export function noteSceneStateUserTurn(
   const nextTaskReward = inferTaskReward(input.text, state.task_reward);
   const nextTaskConsequence = inferTaskConsequence(input.text, state.task_consequence);
   const nextGameProgress =
-    state.topic_locked &&
-    state.topic_type === "game_execution" &&
-    input.act !== "confusion" &&
-    (input.act !== "user_question" ||
-      shouldTreatQuestionAsGameAnswer(state.game_template_id, state.game_progress, input.text))
+    shouldAdvanceGameProgressFromTurn({
+      state,
+      turn: input,
+      explicitStakeSignal,
+    })
       ? deriveGameProgressFromUserText(state.game_template_id, state.game_progress, input.text)
       : state.game_progress;
   const nextTaskProgress =
@@ -1172,9 +1219,17 @@ export function noteSceneStateUserTurn(
   const chatSwitchRequested = isChatSwitchRequest(input.text);
   const assistantSelfRequested =
     isAssistantSelfQuestion(input.text) || isMutualGettingToKnowRequest(input.text);
+  const shouldReleaseTaskNegotiationToConversation =
+    chatSwitchRequested ||
+    assistantSelfRequested ||
+    profileBuildingRequested ||
+    profileSummaryRequested ||
+    isNormalChatRequest(input.text) ||
+    isChatLikeSmalltalk(input.text);
   const shouldCarryTaskNegotiation =
     hasLiveTaskNegotiation(state) &&
     !shouldPauseActiveTask &&
+    !shouldReleaseTaskNegotiationToConversation &&
     !explicitStakeSignal &&
     input.act !== "propose_activity" &&
     input.act !== "answer_activity_choice";
@@ -1195,7 +1250,7 @@ export function noteSceneStateUserTurn(
     state.topic_locked &&
     state.topic_type === "reward_window" &&
     (
-      wantsAnotherRound(input.text) ||
+      isExplicitAnotherRoundRequest(input.text) ||
       (
         state.game_outcome !== "raven_win" &&
         isGameStartCue(input.text)
@@ -1227,6 +1282,20 @@ export function noteSceneStateUserTurn(
       input.act === "answer_activity_choice" ||
       isGameChoiceDelegation(input.text)
     );
+  const gameExecutionEscalatesToTask =
+    state.topic_locked &&
+    state.topic_type === "game_execution" &&
+    input.act === "task_request";
+  const gameExecutionEscalatesToGameSetup =
+    state.topic_locked &&
+    state.topic_type === "game_execution" &&
+    (
+      hasExplicitGameSwitchCue(input.text) ||
+      isExplicitAnotherRoundRequest(input.text) ||
+      input.act === "propose_activity" ||
+      input.act === "answer_activity_choice" ||
+      (isGameChoiceDelegation(input.text) && !isCurrentGameMoveResolutionQuestion(input.text))
+    );
   const taskExecutionEscalatesToGeneral =
     shouldPauseActiveTask ||
     (
@@ -1252,6 +1321,8 @@ export function noteSceneStateUserTurn(
     taskExecutionEscalatesToTask,
     taskExecutionEscalatesToGame,
     taskExecutionEscalatesToGeneral,
+    gameExecutionEscalatesToTask,
+    gameExecutionEscalatesToGameSetup,
     gameExecutionEscalatesToGeneral,
     rewardWindowEscalatesToTask,
     rewardWindowEscalatesToGameSetup,
@@ -1544,7 +1615,10 @@ export function noteSceneStateUserTurn(
         lockedTaskDomain: taskSpecSceneFields.locked_task_domain,
         canReplanTask,
         reasonForLock,
-        currentUserGoal: inferGoal(input.text, state.agreed_goal),
+        currentUserGoal:
+          gameExecutionEscalatesToTask && effectiveTopicType === "task_negotiation"
+            ? ""
+            : inferGoal(input.text, state.agreed_goal),
       })
     : syncTaskSpecSceneFields(state.task_spec, taskSpecSceneFields);
   const currentRule =
@@ -1635,7 +1709,10 @@ export function noteSceneStateUserTurn(
     game_outcome: effectiveGameOutcome,
     game_reward_state: effectiveGameRewardState,
     free_pass_count: effectiveFreePassCount,
-    agreed_goal: inferGoal(input.text, state.agreed_goal),
+    agreed_goal:
+      gameExecutionEscalatesToTask && effectiveTopicType === "task_negotiation"
+        ? ""
+        : inferGoal(input.text, state.agreed_goal),
     stakes: nextStakes,
     win_condition: nextWinCondition,
     lose_condition: nextLoseCondition,
@@ -2280,7 +2357,11 @@ export function buildSceneFallback(
     thread: state.active_training_thread,
     inventory,
   });
-  if (isShortClarificationTurn(userText)) {
+  const profilePromptNotStarted =
+    state.interaction_mode === "profile_building" &&
+    !state.last_assistant_text &&
+    !state.last_profile_prompt;
+  if (isShortClarificationTurn(userText) && !profilePromptNotStarted) {
     if (trainingFollowUp) {
       return trainingFollowUp;
     }

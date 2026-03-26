@@ -30,6 +30,7 @@ import {
   buildShortClarificationReply,
   isShortClarificationTurn,
 } from "./short-follow-up.ts";
+import { buildSceneScaffoldReply } from "./scene-scaffolds.ts";
 import { buildTurnPlanFallback } from "../chat/turn-plan.ts";
 import type { ResponseGateInput } from "./response-gate.ts";
 
@@ -203,6 +204,22 @@ export function createResponseGateCandidateBuilder(
     const commitmentFallback = buildCommitmentFallback(gateInput.commitmentState, gateInput.userText);
     if (commitmentFallback) {
       return commitmentFallback;
+    }
+    if (
+      gateInput.dialogueAct === "duration_request" &&
+      gateInput.sceneState.topic_type === "task_execution" &&
+      gateInput.sceneState.task_spec.request_kind === "revision"
+    ) {
+      const durationRevisionFallback = buildSceneScaffoldReply({
+        act: gateInput.dialogueAct,
+        userText: gateInput.userText,
+        sceneState: gateInput.sceneState,
+        sessionMemory: gateInput.sessionMemory ?? undefined,
+        inventory: gateInput.inventory ?? undefined,
+      });
+      if (durationRevisionFallback) {
+        return durationRevisionFallback;
+      }
     }
     if (isAssistantSelfQuestion(gateInput.userText)) {
       return buildOpenConversationFallback();

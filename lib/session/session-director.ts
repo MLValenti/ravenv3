@@ -24,6 +24,8 @@ export type SessionDirectorInput = {
   taskExecutionEscalatesToTask: boolean;
   taskExecutionEscalatesToGame: boolean;
   taskExecutionEscalatesToGeneral: boolean;
+  gameExecutionEscalatesToTask: boolean;
+  gameExecutionEscalatesToGameSetup: boolean;
   gameExecutionEscalatesToGeneral: boolean;
   rewardWindowEscalatesToTask: boolean;
   rewardWindowEscalatesToGameSetup: boolean;
@@ -50,10 +52,18 @@ export function resolveSessionTopic(input: SessionDirectorInput): SessionDirecto
     if (input.taskExecutionEscalatesToGeneral || input.gameExecutionEscalatesToGeneral) {
       return { topicType: "general_request", topicLocked: false, reason: "general_conversation_requested" };
     }
-    if (input.taskExecutionEscalatesToTask || input.rewardWindowEscalatesToTask) {
+    if (
+      input.taskExecutionEscalatesToTask ||
+      input.gameExecutionEscalatesToTask ||
+      input.rewardWindowEscalatesToTask
+    ) {
       return { topicType: "task_negotiation", topicLocked: true, reason: "task_negotiation_requested" };
     }
-    if (input.taskExecutionEscalatesToGame || input.rewardWindowEscalatesToGameSetup) {
+    if (
+      input.taskExecutionEscalatesToGame ||
+      input.gameExecutionEscalatesToGameSetup ||
+      input.rewardWindowEscalatesToGameSetup
+    ) {
       return { topicType: "game_setup", topicLocked: true, reason: "game_setup_requested" };
     }
     return {

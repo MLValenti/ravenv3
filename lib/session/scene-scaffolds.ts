@@ -23,8 +23,10 @@ import {
   buildDeterministicGameOutcomeLine,
   buildDeterministicGameRewardLine,
   buildDeterministicGameTurnReply,
+  isValidDeterministicGameAnswer,
   isTerminalDeterministicGameProgress,
   parseChosenNumber,
+  type DeterministicGameTemplateId,
   resolveDeterministicGameTemplateById,
 } from "./game-script.ts";
 import { buildNumberCommandPlan } from "./number-command.ts";
@@ -373,6 +375,38 @@ function buildGameRulesReply(sceneState: SceneState): string {
   return "Listen carefully, pet. We stay with number hunt. You guess one number from 1 to 10. I give a hint, then you make one final guess.";
 }
 
+function isExplicitAnotherRoundRequest(text: string): boolean {
+  return wantsAnotherRound(text) && !isGameRulesQuestion(text);
+}
+
+function pickReplacementGameTemplateId(
+  current: DeterministicGameTemplateId,
+): DeterministicGameTemplateId {
+  const rotation: DeterministicGameTemplateId[] = [
+    "rps_streak",
+    "number_hunt",
+    "math_duel",
+    "number_command",
+    "riddle_lock",
+  ];
+  const currentIndex = rotation.indexOf(current);
+  if (currentIndex === -1) {
+    return "number_hunt";
+  }
+  return rotation[(currentIndex + 1) % rotation.length] ?? "number_hunt";
+}
+
+function shouldResolveCurrentGameTurnFromQuestion(sceneState: SceneState, userText: string): boolean {
+  if (isGameRulesQuestion(userText) || isGameNextPromptQuestion(userText)) {
+    return false;
+  }
+  return isValidDeterministicGameAnswer(
+    sceneState.game_template_id,
+    sceneState.last_game_progress === "none" ? sceneState.game_progress : sceneState.last_game_progress,
+    userText,
+  );
+}
+
 function buildNumberCommandExecutionReply(input: SceneScaffoldInput): string | null {
   if (input.sceneState.game_template_id !== "number_command") {
     return null;
@@ -405,6 +439,8 @@ function buildGameSetupReply(input: SceneScaffoldInput): string {
   const hasSpeedChoiceCue = /\b(quick|faster|fast|short|longer|few minutes)\b/i.test(
     normalizedUserText,
   );
+  const hasExplicitGameReplacementCue =
+    /\b(different game|new game|switch game|another game)\b/i.test(normalizedUserText);
   const hasExplicitSupportedGameCue =
     /\b(rock paper scissors|rps|number hunt|math duel|number command|riddle lock)\b/i.test(
       normalizedUserText,
@@ -422,12 +458,17 @@ function buildGameSetupReply(input: SceneScaffoldInput): string {
   if (
     input.act === "answer_activity_choice" ||
     isGameChoiceDelegation(input.userText) ||
-    wantsAnotherRound(input.userText) ||
+    isExplicitAnotherRoundRequest(input.userText) ||
+    hasExplicitGameReplacementCue ||
     isGameStartCue(input.userText) ||
     hasSpeedChoiceCue ||
     hasExplicitSupportedGameCue
   ) {
-    const template = resolveDeterministicGameTemplateById(input.sceneState.game_template_id);
+    const template = hasExplicitGameReplacementCue && !hasExplicitSupportedGameCue
+      ? resolveDeterministicGameTemplateById(
+          pickReplacementGameTemplateId(input.sceneState.game_template_id),
+        )
+      : resolveDeterministicGameTemplateById(input.sceneState.game_template_id);
     const proposalLine =
       hasExplicitSupportedGameCue && input.act === "user_question"
         ? template.id === "rps_streak"
@@ -869,6 +910,19 @@ function isTaskRationaleQuestion(text: string): boolean {
   );
 }
 
+function isTaskReplacementExplanationQuestion(text: string): boolean {
+  return /\b(why this one|why that one|why this instead|why that instead)\b/i.test(text);
+}
+
+function isReplacementTaskExplanationContext(text: string | null | undefined): boolean {
+  if (!text) {
+    return false;
+  }
+  return /\b(different task|different kind of task|another one|not that|something else|changes the activity|without losing control|dropping the same line entirely|not the same thing)\b/i.test(
+    text,
+  );
+}
+
 function isTaskProofQuestion(text: string): boolean {
   return /\b(do i need proof|what proof|how do i prove it|what counts as proof|do you want proof|do i have to prove it)\b/i.test(
     text,
@@ -1006,6 +1060,12 @@ function buildTaskExecutionQuestionReply(
   const halfwayLabel = formatTaskCheckpointLabel(durationMinutes);
   const variant = getSceneTaskVariant(sceneState);
   const variantText = `${variant.description} ${variant.assignedAction} ${variant.activeFollowUp}`.toLowerCase();
+  if (
+    sceneState.task_spec.request_kind === "replacement" &&
+    isTaskReplacementExplanationQuestion(userText)
+  ) {
+    return "Because you asked for a different task, and this one changes the activity without losing control or dropping the same line entirely.";
+  }
   if (isTaskRationaleQuestion(userText)) {
     if (/\banal|dildo|plug\b/.test(variantText)) {
       return "It proves whether you can keep control under pressure without getting greedy, sloppy, or performative. I want patience and steadiness there, not just willingness.";
@@ -1278,6 +1338,15 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
     });
   }
 
+  if (
+    input.sceneState.task_paused &&
+    isTaskReplacementExplanationQuestion(input.userText) &&
+    (input.sceneState.task_spec.request_kind === "replacement" ||
+      isReplacementTaskExplanationContext(input.sceneState.last_assistant_text))
+  ) {
+    return "Because you asked for a different task, and this one changes the activity without losing control or dropping the same line entirely.";
+  }
+
   if (input.act === "short_follow_up") {
     const trainingFollowUp = buildTrainingFollowUpReply({
       userText: input.userText,
@@ -1286,6 +1355,12 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
     });
     if (trainingFollowUp) {
       return trainingFollowUp;
+    }
+    if (input.sceneState.topic_type === "game_execution") {
+      return buildDeterministicGameImmediatePrompt(
+        input.sceneState.game_template_id,
+        input.sceneState.game_progress,
+      );
     }
     if (input.sceneState.topic_type === "task_execution") {
       return buildTaskExecutionQuestionReply(input.sceneState, input.userText, input);
@@ -1459,8 +1534,24 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
   if (
     input.sceneState.topic_locked &&
     input.sceneState.topic_type === "game_execution" &&
+    input.act === "duration_request"
+  ) {
+    return "That changes task timing, not this game. If you want a task, ask for one directly. If you want the round, stay with the current move.";
+  }
+
+  if (
+    input.sceneState.topic_locked &&
+    input.sceneState.topic_type === "game_execution" &&
     (input.act === "user_question" || input.act === "confusion")
   ) {
+    if (input.act === "user_question" && shouldResolveCurrentGameTurnFromQuestion(input.sceneState, input.userText)) {
+      return buildDeterministicGameTurnReply(
+        input.sceneState.game_template_id,
+        input.sceneState.game_progress,
+        input.userText,
+        input.sceneState.last_game_progress,
+      );
+    }
     if (isGameNextPromptQuestion(input.userText) || isGameStartCue(input.userText)) {
       return buildDeterministicGameImmediatePrompt(
         input.sceneState.game_template_id,

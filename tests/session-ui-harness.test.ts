@@ -376,6 +376,46 @@ test("ui harness relational service thread stays on topic across follow-ups", ()
   assert.equal(state.outputs.length, 2);
 });
 
+test("ui harness tell me more about you stays conversational before and after a task", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-tell-me-more-about-you"),
+    outputs: [],
+    memory: createSessionMemory(),
+  };
+
+  const first = applyUserTurn(state, "tell me more about you");
+  assert.match(
+    first,
+    /what keeps my attention|what do you want to know about me|the part that is real|ask me something real/i,
+  );
+  assert.doesNotMatch(first, /here is your task|what kind of task|15 minutes|keep going\. tell me the concrete part/i);
+
+  const second = applyUserTurn(state, "keep going");
+  assert.doesNotMatch(second, /here is your task|what kind of task|what is on your mind|start talking/i);
+  assert.doesNotMatch(second, /keep going\. tell me the concrete part/i);
+
+  const blocker = applyUserTurn(state, "give me a task");
+  assert.match(blocker, /what kind of task|how long should i make it|what time window/i);
+
+  const task = applyUserTurn(state, "15 minutes");
+  assert.match(task, /here is your task|15 minutes/i);
+  assert.equal(state.memory?.user_profile_facts.length, 0);
+
+  const afterTask = applyUserTurn(state, "tell me more about you");
+  assert.match(
+    afterTask,
+    /what keeps my attention|what do you want to know about me|the part that is real|ask me something real/i,
+  );
+  assert.doesNotMatch(afterTask, /here is your task|what kind of task|task is paused unless|reply done/i);
+  assert.doesNotMatch(afterTask, /keep going\. tell me the concrete part|stay with the concrete part of task/i);
+
+  const followUp = applyUserTurn(state, "keep going");
+  assert.doesNotMatch(followUp, /here is your task|what kind of task|task is paused unless|what is on your mind/i);
+  assert.doesNotMatch(followUp, /keep going\. tell me the concrete part|stay with the concrete part/i);
+  assert.equal(state.memory?.user_profile_facts.length, 0);
+});
+
 test("ui harness can lock terms, play a game round, and keep winner terms coherent", () => {
   const state: HarnessState = {
     scene: createSceneState(),
@@ -405,6 +445,79 @@ test("ui harness can lock terms, play a game round, and keep winner terms cohere
   assert.match(state.scene.stakes.toLowerCase(), /chastity/);
   assert.match(state.scene.win_condition.toLowerCase(), /tell me a truth/);
   assert.match(state.scene.lose_condition.toLowerCase(), /wear it overnight/);
+});
+
+test("ui harness game move questions resolve the current round instead of restating the rules", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-game-move-question"),
+    outputs: [],
+  };
+
+  applyUserTurn(state, "lets play a game");
+  const chooseReply = applyUserTurn(state, "you pick");
+  assert.match(chooseReply, /rock paper scissors streak/i);
+
+  const moveReply = applyUserTurn(state, "rock for the first throw. what's your choice?");
+  assert.match(moveReply, /you chose rock|i threw scissors|second throw now/i);
+  assert.doesNotMatch(
+    moveReply,
+    /we stay with rock paper scissors streak|two throws\. you answer each one/i,
+  );
+  assert.equal(state.scene.interaction_mode, "game");
+  assert.equal(state.scene.topic_type, "game_execution");
+});
+
+test("ui harness different game stays in game mode instead of resolving the current round as a loss", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-different-game"),
+    outputs: [],
+  };
+
+  applyUserTurn(state, "lets play a game");
+  const chooseReply = applyUserTurn(state, "you pick");
+  assert.match(chooseReply, /rock paper scissors streak/i);
+
+  const replacementReply = applyUserTurn(state, "different game");
+  assert.equal(state.scene.interaction_mode, "game");
+  assert.match(replacementReply, /i pick|we are doing|choose quick|tell me to pick/i);
+  assert.doesNotMatch(replacementReply, /you lost the throw|i win this one|consequence is live now/i);
+});
+
+test("ui harness explicit task switch leaves game mode cleanly without carrying the game goal into task negotiation", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-game-to-task"),
+    outputs: [],
+  };
+
+  applyUserTurn(state, "lets play a game");
+  applyUserTurn(state, "you pick");
+
+  const taskReply = applyUserTurn(state, "give me a task");
+  assert.equal(state.scene.interaction_mode, "task_planning");
+  assert.equal(state.scene.topic_type, "task_negotiation");
+  assert.match(taskReply, /task|how long|time window|what kind/i);
+  assert.doesNotMatch(taskReply, /chosen game|first throw now|first guess now|stay with the game/i);
+});
+
+test("ui harness duration revision cue inside game does not bind as a task revision or lose the round", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-game-duration-cue"),
+    outputs: [],
+  };
+
+  applyUserTurn(state, "lets play a game");
+  applyUserTurn(state, "you pick");
+
+  const reply = applyUserTurn(state, "make it 10 minutes");
+  assert.equal(state.scene.interaction_mode, "game");
+  assert.equal(state.scene.task_progress, "none");
+  assert.match(reply, /game|round|task/i);
+  assert.doesNotMatch(reply, /i win this round|i win this one|here is your task|10 minutes/i);
+  assert.equal(state.memory?.user_profile_facts.length, 0);
 });
 
 test("ui harness task assignment persists and appears in task panel state", async () => {
@@ -1056,9 +1169,9 @@ test("ui harness keeps task follow-up questions grounded in the active task inst
   const depth = applyUserTurn(state, "how deep?");
 
   assert.match(assigned, /anal|dildo|20 minutes/i);
-  assert.match(rationale, /control|pressure|sloppy|performative/i);
+  assert.match(rationale, /control|pressure|sloppy|performative|rule|bargaining|novelty wears off/i);
   assert.match(proof, /midpoint|final report|20 minutes/i);
-  assert.match(depth, /deep enough|control first|maximum depth/i);
+  assert.match(depth, /deep enough|control first|maximum depth|rule cleanly|real variable/i);
 
   for (const reply of [rationale, proof, depth]) {
     assert.doesNotMatch(reply, /keep going|what is on your mind|start talking/i);
@@ -1302,6 +1415,105 @@ test("ui harness duration-only revision preserves the active task family", () =>
   assert.match(revised, /20 minutes/i);
   assert.match(revised, /hands behind your back/i);
   assert.doesNotMatch(revised, /kneel|shoulders back|hold still|device/i);
+});
+
+test("ui harness generic task duration revision keeps the active family and does not reopen task negotiation", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-generic-duration-revision"),
+    outputs: [],
+    memory: createSessionMemory(),
+  };
+
+  const blocker = applyUserTurn(state, "give me a task");
+  assert.match(blocker, /what kind of task|how long should i make it|what time window/i);
+
+  const firstTask = applyUserTurn(state, "15 minutes");
+  assert.match(firstTask, /here is your task|15 minutes/i);
+  assert.match(firstTask, /frame|visible|eyes forward|inspection/i);
+  assert.equal(state.memory?.user_profile_facts.length, 0);
+
+  const revised = applyUserTurn(state, "make it 10 minutes");
+  assert.match(revised, /10 minutes/i);
+  assert.match(revised, /frame|visible|eyes forward|inspection/i);
+  assert.doesNotMatch(revised, /what kind of task|what time window|be specific/i);
+  assert.doesNotMatch(revised, /hands behind your back|kneel|shoulders back|hold still|keep the device on/i);
+});
+
+test("ui harness bare duration without an active duration slot does not bind or write durable memory", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-bare-duration"),
+    outputs: [],
+    memory: createSessionMemory(),
+  };
+
+  const reply = applyUserTurn(state, "15 minutes");
+
+  assert.doesNotMatch(reply, /here is your task|report back|reply done|check in once halfway through/i);
+  assert.equal(state.memory?.user_profile_facts.length, 0);
+  assert.equal(state.memory?.last_user_answer?.value, "15 minutes");
+});
+
+test("ui harness rationale after duration revision stays on the revised task line", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-duration-revision-rationale"),
+    outputs: [],
+    inventory: [
+      {
+        id: "toy-1",
+        label: "Toy",
+        category: "toy",
+        available_this_session: true,
+        intiface_controlled: false,
+        linked_device_id: null,
+        notes: "silicone dildo",
+      },
+    ],
+  };
+
+  const blocker = applyUserTurn(state, "give me a 20 minute task with my dildo");
+  assert.match(blocker, /oral use|anal use|prop/i);
+  applyUserTurn(state, "anal");
+  const revised = applyUserTurn(state, "make it 10 minutes");
+  const rationale = applyUserTurn(state, "what would that prove?");
+
+  assert.match(revised, /10 minutes/i);
+  assert.match(revised, /anal|dildo|toy/i);
+  assert.match(rationale, /prove|control|pressure|deliberate|sloppy|breathing|resets|rule/i);
+  assert.doesNotMatch(rationale, /there you are|start talking|what is on your mind/i);
+  assert.doesNotMatch(rationale, /here is your task|what kind of task|what items are actually available/i);
+  assert.doesNotMatch(
+    rationale,
+    /20 minutes|hands behind your back|kneel|shoulders back|hold still|keep the device on|steel cage|chastity/i,
+  );
+});
+
+test("ui harness replacement explanation after different task stays on replacement scope", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-replacement-explanation"),
+    outputs: [],
+  };
+
+  const first = applyUserTurn(state, "give me a posture task for 30 minutes");
+  assert.match(first, /here is your task/i);
+
+  const replacement = applyUserTurn(state, "different task");
+  assert.match(replacement, /here is your task/i);
+
+  const explanation = applyUserTurn(state, "why this one?");
+  assert.match(
+    explanation,
+    /because|changed the activity|without losing control|same line|switched|you asked for different/i,
+  );
+  assert.doesNotMatch(
+    explanation,
+    /there you are|start talking|what is on your mind|ask it directly|task is paused unless/i,
+  );
+  assert.doesNotMatch(explanation, /here is your task|what kind of task|what items are actually available/i);
+  assert.doesNotMatch(explanation, /hold a strict posture protocol for 30 minutes/i);
 });
 
 test("ui harness task next-step reply does not use undefined referents", () => {
@@ -1876,6 +2088,27 @@ test("ui harness chat-switch request pauses task flow and returns to normal chat
   assert.equal(state.scene.task_paused, true);
 });
 
+test("ui harness task negotiation can release into chat before blocker completion and answer assistant-self questions directly", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-task-negotiation-chat-release"),
+    outputs: [],
+    memory: createSessionMemory(),
+  };
+
+  applyUserTurn(state, "give me a task");
+  applyUserTurn(state, "frame");
+  const chatReply = applyUserTurn(state, "let's just chat for a minute");
+  const selfReply = applyUserTurn(state, "tell me more about you");
+
+  assert.match(chatReply, /talk to me normally|just chat|for a minute/i);
+  assert.doesNotMatch(chatReply, /how long should i make it run|what kind of task|reply done|check in once halfway through/i);
+  assert.match(selfReply, /what keeps my attention|i like|structure|limits|real/i);
+  assert.doesNotMatch(selfReply, /fine\\. say what you want|how long should i make it run|what kind of task/i);
+  assert.equal(state.scene.topic_locked, false);
+  assert.equal(state.scene.topic_type, "general_request");
+});
+
 test("ui harness another-round flow rotates game template and allows a Raven win", () => {
   const state: HarnessState = {
     scene: createSceneState(),
@@ -1925,6 +2158,24 @@ test("ui harness keeps flow with paraphrased game and task language", () => {
 
   const requestTask = applyUserTurn(state, "can you set me a challenge");
   assert.match(requestTask, /task|challenge|report back|check in|how long should i make/i);
+});
+
+test("ui harness different game changes the active game family instead of replaying the same one", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-different-game"),
+    outputs: [],
+  };
+
+  const firstStart = applyUserTurn(state, "let's play a game");
+  assert.match(firstStart, /game|quick|longer|pick/i);
+
+  const chosenStart = applyUserTurn(state, "you pick");
+  assert.match(chosenStart, /rock paper scissors streak|number hunt|math duel|number command|riddle lock/i);
+
+  const replacementStart = applyUserTurn(state, "different game");
+  assert.match(replacementStart, /rock paper scissors streak|number hunt|math duel|number command|riddle lock/i);
+  assert.notEqual(normalize(chosenStart), normalize(replacementStart));
 });
 
 test("ui harness supports mixed explicit and delegated wager terms", () => {

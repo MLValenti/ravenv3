@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createCommitmentState } from "../lib/session/commitment-engine.ts";
-import { createConversationStateSnapshot } from "../lib/chat/conversation-state.ts";
+import {
+  createConversationStateSnapshot,
+  deriveConversationStateFromMessages,
+} from "../lib/chat/conversation-state.ts";
 import { buildTurnPlan } from "../lib/chat/turn-plan.ts";
 import {
   applyResponseGate,
@@ -766,6 +769,141 @@ test("response gate rejects blocker re-asks once a live task request is ready to
   assert.equal(result.forced, true);
   assert.match(result.text, /here is your task/i);
   assert.doesNotMatch(result.text, /how long should i make it run/i);
+});
+
+test("response gate forced replacement keeps active training clarification on-thread", () => {
+  const baseScene = createSceneState();
+  const scene = {
+    ...baseScene,
+    interaction_mode: "relational_chat" as const,
+    topic_type: "general_request" as const,
+    active_training_thread: {
+      ...baseScene.active_training_thread,
+      subject: "obedience" as const,
+      focus: "consistency and follow-through",
+      rationale: "The line is about becoming trainable in practice.",
+      last_response: "I mean what being trained by me would actually change in you.",
+    },
+  };
+
+  const result = applyResponseGate({
+    text: "There you are. Start talking.",
+    userText: "what do you mean?",
+    dialogueAct: "short_follow_up",
+    lastAssistantText: "I mean what being trained by me would actually change in you.",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /i mean|being trained by me|actually change/i);
+  assert.doesNotMatch(result.text, /there you are|start talking|what is on your mind/i);
+  assert.doesNotMatch(result.text, /here is your task|what items are actually available|what kind of task/i);
+});
+
+test("response gate forced replacement on duration-only revision keeps the active family", () => {
+  const baseScene = createSceneState();
+  const scene = {
+    ...baseScene,
+    topic_type: "task_execution" as const,
+    topic_locked: true,
+    topic_state: "open" as const,
+    current_task_domain: "hands" as const,
+    task_paused: false,
+    task_spec: {
+      ...baseScene.task_spec,
+      request_kind: "revision" as const,
+      requested_domain: "hands" as const,
+      current_task_family: "posture_hands",
+      duration_minutes: 10,
+      request_fulfilled: true,
+    },
+  };
+
+  const result = applyResponseGate({
+    text: "Fine. Here is your task: Kneel for 10 minutes and report back when it is done. Start now.",
+    userText: "make it 10 minutes",
+    dialogueAct: "duration_request",
+    lastAssistantText:
+      "Fine. Here is your task: Keep your hands behind your back for 30 minutes and report back when it is done. Start now.",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /10 minutes/i);
+  assert.match(result.text, /hands behind your back/i);
+  assert.doesNotMatch(result.text, /kneel|shoulders back|hold still|keep the device on/i);
+  assert.doesNotMatch(result.text, /there you are|start talking|what is on your mind/i);
+  assert.doesNotMatch(
+    result.text,
+    /what kind of task do you want|what items are actually available|how long should i make it/i,
+  );
+});
+
+test("response gate accepts game-scoped duration correction even when the turn plan reads it as a revision", () => {
+  const messages = [
+    {
+      role: "user" as const,
+      content: "let's play a game",
+    },
+    {
+      role: "assistant" as const,
+      content:
+        "Good. You want a game. Listen carefully, pet. We are staying with the game, and you will not drift. Choose quick, or choose something that runs for a few minutes. Decide cleanly.",
+    },
+    {
+      role: "user" as const,
+      content: "you pick",
+    },
+    {
+      role: "assistant" as const,
+      content:
+        "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    },
+    {
+      role: "user" as const,
+      content: "make it 10 minutes",
+    },
+  ];
+  const routed = classifyDialogueRoute({
+    text: "make it 10 minutes",
+    awaitingUser: false,
+    currentTopic: null,
+  });
+  const conversationState = deriveConversationStateFromMessages({
+    sessionId: "response-gate-game-duration",
+    messages,
+    classifyUserIntent: (text) =>
+      classifyDialogueRoute({ text, awaitingUser: false, currentTopic: null }).act,
+    classifyRouteAct: (text) =>
+      classifyDialogueRoute({ text, awaitingUser: false, currentTopic: null }).act,
+  });
+  const turnPlan = buildTurnPlan(messages, { conversationState });
+  const scene = {
+    ...createSceneState(),
+    interaction_mode: "game" as const,
+    topic_type: "game_execution" as const,
+    topic_locked: true,
+    topic_state: "open" as const,
+    game_template_id: "rps_streak" as const,
+    game_progress: "round_1" as const,
+  };
+
+  const result = applyResponseGate({
+    text: "That changes task timing, not this game. If you want a task, ask for one directly. If you want the round, stay with the current move.",
+    userText: "make it 10 minutes",
+    dialogueAct: routed.act,
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    turnPlan,
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, false);
+  assert.match(result.text, /not this game|want a task|stay with the current move/i);
+  assert.doesNotMatch(result.text, /keep the same subject|answer this change directly|10 minutes/i);
 });
 
 test("response gate rejects direct assignment when curated options are due", () => {

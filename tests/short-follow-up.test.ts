@@ -132,6 +132,90 @@ test("short go-on reply builds the thread instead of collapsing to a bare acknow
   assert.doesNotMatch(reply, /safe version|costing something|decorative/i);
 });
 
+test("short go-on reply stays on the training thread even when currentTopic is stale", () => {
+  const reply = buildShortClarificationReply({
+    userText: "go on",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    currentTopic: "what you can do for me",
+    lastAssistantText:
+      "Exactly. Wanting training is easy to say. Letting it change you is the harder part.",
+  });
+
+  assert.match(reply, /being trained by me|actually change in you|keep going|concrete part/i);
+  assert.doesNotMatch(reply, /what you can actually do for me/i);
+});
+
+test("why stays on the trainability line even when currentTopic is stale", () => {
+  const reply = buildShortClarificationReply({
+    userText: "why?",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    currentTopic: "what you can do for me",
+    lastAssistantText:
+      "Exactly. I need you honest enough for me to see where you hold and consistent enough that I can actually shape something.",
+  });
+
+  assert.match(reply, /honest enough|consistent enough|shape something|trainability/i);
+  assert.doesNotMatch(reply, /what you can do for me|offer something real|sound eager/i);
+});
+
+test("what-do-you-mean stays on the attention usefulness real-change line", () => {
+  const reply = buildShortClarificationReply({
+    userText: "what do you mean?",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    currentTopic: "what people usually miss about you",
+    lastAssistantText:
+      "Exactly. That question matters because it tells me whether you want attention, usefulness, or real change.",
+  });
+
+  assert.match(reply, /attention|usefulness|real change/i);
+  assert.doesNotMatch(reply, /people usually miss about you/i);
+});
+
+test("go-on stays on person-versus-performance instead of stale usefulness", () => {
+  const reply = buildShortClarificationReply({
+    userText: "go on",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    currentTopic: "what you can do for me",
+    lastAssistantText:
+      "Exactly. That tells me very quickly whether I am dealing with a person or a performance.",
+  });
+
+  assert.match(reply, /person|performance|keep going|concrete part/i);
+  assert.doesNotMatch(reply, /what you can actually do for me/i);
+});
+
+test("why stays on the confession line instead of stale usefulness", () => {
+  const reply = buildShortClarificationReply({
+    userText: "why?",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    currentTopic: "what you can do for me",
+    lastAssistantText:
+      "If you do not usually say this out loud, then it already means something real. Now say the part you were trying not to say.",
+  });
+
+  assert.match(reply, /say this out loud|means something real|trying not to say/i);
+  assert.doesNotMatch(reply, /what you can do for me|sound eager/i);
+});
+
+test("repeat stays on usefulness follow-through instead of stale profile topic", () => {
+  const reply = buildShortClarificationReply({
+    userText: "say that again",
+    interactionMode: "relational_chat",
+    topicType: "general_request",
+    currentTopic: "what people usually miss about you",
+    lastAssistantText:
+      "Exactly. That only matters if you mean what you say and hold steady long enough for it to count.",
+  });
+
+  assert.match(reply, /mean what you say|hold steady|count/i);
+  assert.doesNotMatch(reply, /people usually miss about you/i);
+});
+
 test("short clarification reply keeps semantic focus on training instead of weak modal verbs", () => {
   const reply = buildShortClarificationReply({
     userText: "what do you mean?",
