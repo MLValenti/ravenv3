@@ -300,6 +300,114 @@ function hasTokenOverlap(left: string, right: string): boolean {
   return false;
 }
 
+function isPlanningTurnPlan(turnPlan: TurnPlan): boolean {
+  const combined = normalize(
+    `${turnPlan.latestUserMessage} ${turnPlan.previousAssistantMessage ?? ""} ${turnPlan.activeThread}`,
+  );
+  return (
+    /\b(?:help(?: me)? plan|let'?s plan|plan my|plan tomorrow|plan saturday|figure out my)\b/.test(
+      combined,
+    ) ||
+    /\b(plan|planning|workdays|weekends|errands first|gym first|downtime first|morning plan|morning block|wake time|focused hour|first block|saturday|tomorrow morning)\b/.test(
+      combined,
+    )
+  );
+}
+
+function isPlanningAlignedModelReply(turnPlan: TurnPlan, text: string): boolean {
+  const normalized = normalize(text);
+  const latestUser = normalize(turnPlan.latestUserMessage);
+  if (
+    /\b(fine\. say what you want|enough hovering|tell me why you'?re here|what you actually want|useful to me|trained into something better)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (/\b(go back|back to|return to)\b/.test(latestUser)) {
+    return (
+      /\b(back to|return|morning block|wake time|focused hour|first block|morning plan|tomorrow morning)\b/.test(
+        normalized,
+      ) &&
+      !/\b(first throw|rock|paper|scissors|number hunt|math duel|riddle|current move|round)\b/.test(
+        normalized,
+      )
+    );
+  }
+  if (
+    /\b(?:help(?: me)? plan|let'?s plan|plan my|plan tomorrow|plan saturday|figure out my)\b/.test(
+      latestUser,
+    )
+  ) {
+    return (
+      /\?/.test(text) &&
+      /\b(tomorrow morning|what time|wake time|anchor|first block|workdays|weekends|errands|gym|downtime|evening)\b/.test(
+        normalized,
+      )
+    );
+  }
+  return (
+    hasTokenOverlap(text, turnPlan.previousAssistantMessage ?? "") ||
+    hasTokenOverlap(text, turnPlan.activeThread) ||
+    /\b(plan|planning|morning|wake time|first block|errands|gym|food|evening|week|weekend|saturday|tomorrow)\b/.test(
+      normalized,
+    )
+  );
+}
+
+function isTaskExecutionFollowUpTurn(turnPlan: TurnPlan): boolean {
+  if (
+    turnPlan.currentMode !== "task_execution" &&
+    turnPlan.currentMode !== "locked_task_execution" &&
+    turnPlan.currentMode !== "task_planning"
+  ) {
+    return false;
+  }
+  return (
+    /\b(what counts as done|what counts as complete|what qualifies as done|how do i know it counts|what exactly counts as done)\b/.test(
+      normalize(turnPlan.latestUserMessage),
+    ) ||
+    /\b(why that task|why this task|why that one|why this one)\b/.test(
+      normalize(turnPlan.latestUserMessage),
+    ) ||
+    /\b(set me another one|give me another one|give me the next one|another task|new task|next task|what do you have for me)\b/.test(
+      normalize(turnPlan.latestUserMessage),
+    )
+  );
+}
+
+function isTaskAlignedModelReply(turnPlan: TurnPlan, text: string): boolean {
+  const normalized = normalize(text);
+  const user = normalize(turnPlan.latestUserMessage);
+  if (
+    /\b(fine\. say what you want|enough hovering|tell me why you'?re here|what you actually want)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (/\b(what counts as done|what counts as complete|what qualifies as done)\b/.test(user)) {
+    return /\b(done means|counts as done|complete|full \d+|minutes|halfway|report back|checkpoint)\b/.test(
+      normalized,
+    );
+  }
+  if (/\b(why that task|why this task|why that one|why this one)\b/.test(user)) {
+    return /\b(because|specific|measurable|focus|signal|hard to fake)\b/.test(normalized);
+  }
+  if (
+    /\b(set me another one|give me another one|give me the next one|another task|new task|next task|what do you have for me)\b/.test(
+      user,
+    )
+  ) {
+    return /\b(next task|another one|another task|new task|minutes|report back)\b/.test(normalized);
+  }
+  return (
+    hasTokenOverlap(text, turnPlan.previousAssistantMessage ?? "") ||
+    hasTokenOverlap(text, turnPlan.activeThread) ||
+    /\b(task|challenge|checkpoint|minutes|report back|done|complete)\b/.test(normalized)
+  );
+}
+
 export function shouldKeepCoherentModelReply(input: {
   text: string;
   state: ConversationStateSnapshot;
@@ -313,6 +421,14 @@ export function shouldKeepCoherentModelReply(input: {
 
   if (isCoherentRelationalQuestionAnswer(input.lastUserMessage, input.text)) {
     return true;
+  }
+
+  if (input.turnPlan && isPlanningTurnPlan(input.turnPlan)) {
+    return isPlanningAlignedModelReply(input.turnPlan, input.text);
+  }
+
+  if (input.turnPlan && isTaskExecutionFollowUpTurn(input.turnPlan)) {
+    return isTaskAlignedModelReply(input.turnPlan, input.text);
   }
 
   if (

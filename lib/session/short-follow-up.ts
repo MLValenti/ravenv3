@@ -339,6 +339,18 @@ function buildQuestionClarificationLead(text: string | null | undefined): string
   if (/\bwhether you want attention, usefulness, or real change\b/i.test(normalized)) {
     return "I mean whether you want attention, usefulness, or real change";
   }
+  if (/\bexact part of work that keeps dragging your attention\b/i.test(normalized)) {
+    return "I mean the exact part of work that keeps dragging your attention";
+  }
+  if (/\b(?:is it\s+)?workload,\s*a person,\s*or a decision you keep circling\b/i.test(normalized)) {
+    return "I mean the exact part of work that keeps dragging your attention: the amount, the person, or the choice";
+  }
+  if (
+    /\bkeeps dragging your attention\b/i.test(normalized) &&
+    /\b(?:amount|workload|person|choice|decision)\b/i.test(normalized)
+  ) {
+    return "I mean the exact part of work that keeps dragging your attention";
+  }
   if (
     /\bi do not usually say this out loud\b/i.test(normalized) ||
     /\btrying not to say\b/i.test(normalized)
@@ -466,6 +478,15 @@ function buildGoOnReply(questionLead: string | null, contextToken: string | null
   }
   if (/\bwhat people usually miss about you\b/.test(focus)) {
     return "Good. Then tell me what people usually get wrong about you.";
+  }
+  if (
+    /\bwork that keeps dragging your attention\b/.test(focus) ||
+    /\bpart of work that keeps dragging your attention\b/.test(focus) ||
+    /\bexact part of work that keeps dragging your attention\b/.test(focus) ||
+    /\bworkload\b.*\bperson\b.*\bchoice\b/.test(focus) ||
+    /\bamount\b.*\bperson\b.*\bchoice\b/.test(focus)
+  ) {
+    return "Good. Then pick one of those three and I will keep the thread on it.";
   }
   if (/\bconsistency\b|\bfollow-through\b|\bhonesty\b|\bsteadiness\b/.test(focus)) {
     return "Good. Then tell me which part of that would be hardest for you to hold.";
@@ -633,6 +654,7 @@ export function buildShortClarificationReply(input: {
       questionLead &&
       (/\bbeing trained by me\b/i.test(questionLead) ||
         /\bperson or a performance\b/i.test(questionLead) ||
+        /\bexact part of work that keeps dragging your attention\b/i.test(questionLead) ||
         /\bpart that is real enough to hold my attention\b/i.test(questionLead))
     ) {
       return buildGoOnReply(questionLead, contextToken);

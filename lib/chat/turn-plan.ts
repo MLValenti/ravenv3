@@ -1,5 +1,6 @@
 import {
   buildHumanQuestionFallback,
+  buildPlanningQuestionFallback,
   buildPriorBeatOpinionReply,
   buildTopicInitiationReply,
   isTopicInitiationRequest,
@@ -20,7 +21,7 @@ import {
   type UserResponseEnergy,
 } from "./conversation-state.ts";
 import { isClarificationExpansionRequest } from "./repair-turn.ts";
-import { isChatLikeSmalltalk } from "../session/interaction-mode.ts";
+import { isChatLikeSmalltalk, isProfileBuildingRequest } from "../session/interaction-mode.ts";
 
 type ChatMessageLike = {
   role: "user" | "assistant" | "system";
@@ -238,6 +239,204 @@ function isGreetingLike(text: string): boolean {
   return /^(hi|hello|hey|good (?:morning|afternoon|evening))(?:\s+(mistress|miss|raven|ma'am|mam))?$/i.test(
     normalize(text),
   );
+}
+
+function isPlanningTurnContext(turnPlan: TurnPlan): boolean {
+  const combined = normalize(
+    `${turnPlan.latestUserMessage} ${turnPlan.previousAssistantMessage ?? ""} ${turnPlan.activeThread}`,
+  ).toLowerCase();
+  return (
+    /\b(?:help(?: me)? plan|let'?s plan|plan my|plan tomorrow|plan saturday|figure out my)\b/.test(
+      combined,
+    ) ||
+    /\b(plan|planning|workdays|weekends|errands first|gym first|downtime first|morning plan|morning block|wake time|focused hour|first block|saturday|tomorrow morning)\b/.test(
+      combined,
+    )
+  );
+}
+
+function containsPlanningIntakeReopen(response: string): boolean {
+  return /\b(what are those tasks you need to get done|what tasks do you need to (?:complete|get done)|what do you need to (?:complete|get done)|what are we planning first)\b/i.test(
+    response,
+  );
+}
+
+function containsPlanningDeferral(response: string): boolean {
+  return /\b(focus on structuring your day|we can touch on .* later|we can touch on .* closer to it|closer to it|we will get to that later)\b/i.test(
+    response,
+  );
+}
+
+function isPlanningAlignedResponse(turnPlan: TurnPlan, response: string): boolean {
+  if (!isPlanningTurnContext(turnPlan)) {
+    return false;
+  }
+  const normalizedUser = normalize(turnPlan.latestUserMessage).toLowerCase();
+  const normalizedResponse = normalize(response).toLowerCase();
+  const referencesPlanningThread =
+    hasOverlap(response, turnPlan.previousAssistantKeywords) ||
+    hasOverlap(response, extractKeywords(turnPlan.activeThread, 6)) ||
+    /\b(plan|planning|morning|wake time|first block|errands|gym|downtime|week|weekend|evening|saturday|tomorrow)\b/i.test(
+      response,
+    );
+
+  if (
+    /\b(fine\. say what you want|enough hovering|what you actually want|trained into something|useful to me)\b/.test(
+      normalizedResponse,
+    )
+  ) {
+    return false;
+  }
+
+  if (/\b(?:play a game|game first|let'?s play|lets play)\b/.test(normalizedUser)) {
+    return (
+      /\b(quick|pick|game|round)\b/.test(normalizedResponse) &&
+      /\b(return|back to|morning plan|morning block|tomorrow morning|the week|saturday|evening plan|the plan)\b/.test(
+        normalizedResponse,
+      )
+    );
+  }
+
+  if (/\b(?:help(?: me)? plan|let'?s plan|figure out my)\b/.test(normalizedUser)) {
+    return (
+      /\b(workdays|weekends|what time|wake time|anchor|first block|errands|gym|downtime|evening)\b/.test(
+        normalizedResponse,
+      ) && /\?/.test(response)
+    );
+  }
+  if (/^\s*(?:errands first|gym first|downtime first)\s*$/i.test(normalizedUser)) {
+    return (
+      /\b(errands first|gym first|downtime first)\b/.test(normalizedResponse) &&
+      /\b(then gym|then errands|then the evening|evening stays open|actually awake)\b/.test(
+        normalizedResponse,
+      ) &&
+      !containsPlanningIntakeReopen(response)
+    );
+  }
+  if (/^(?:then what|what next|and then what)\??$/i.test(normalizedUser)) {
+    return (
+      /\b(then|after that|gym|food|evening|next block)\b/.test(normalizedResponse) &&
+      !containsPlanningIntakeReopen(response) &&
+      !containsPlanningDeferral(response)
+    );
+  }
+  if (/^\s*why\??\s*$/i.test(normalizedUser) || /^what do you mean\??$/i.test(normalizedUser)) {
+    return (
+      /\b(because|cleaner|spill|matters because|front-load|keeps the rest)\b/.test(
+        normalizedResponse,
+      ) &&
+      referencesPlanningThread &&
+      !containsPlanningIntakeReopen(response) &&
+      !containsPlanningDeferral(response)
+    );
+  }
+  if (/\bwhat about the evening\b/.test(normalizedUser)) {
+    return (
+      /\b(evening|social|clean stop|light|sprawl)\b/.test(normalizedResponse) &&
+      !/\bwhat it actually changes between people|trained into something|useful to me\b/.test(
+        normalizedResponse,
+      ) &&
+      !containsPlanningIntakeReopen(response)
+    );
+  }
+  if (/\b(?:go back|back to|return to)\b/.test(normalizedUser)) {
+    return (
+      /\b(back to|return|morning block|wake time|focused hour|first block)\b/.test(
+        normalizedResponse,
+      ) &&
+      !/\b(first throw|rock, paper, or scissors|math duel|number hunt|riddle lock)\b/.test(
+        normalizedResponse,
+      )
+    );
+  }
+  if (/\bchange that\b/.test(normalizedUser) && /\bbefore\b/.test(normalizedUser)) {
+    return /\b(first|second|order changes|same thread|same line|evening)\b/.test(normalizedResponse);
+  }
+  return (
+    /\b(plan|morning|week|saturday|errands|gym|downtime|workdays|weekends|evening|wake time|first block)\b/.test(
+      normalizedResponse,
+    ) &&
+    !containsPlanningIntakeReopen(response)
+  );
+}
+
+function isPressureAnswerPrompt(previousAssistantMessage: string | null): boolean {
+  const previous = normalize(previousAssistantMessage ?? "").toLowerCase();
+  return previous.includes("what has the most pressure on you right now");
+}
+
+function isProfileOrDisclosurePrompt(previousAssistantMessage: string | null): boolean {
+  const previous = normalize(previousAssistantMessage ?? "").toLowerCase();
+  return (
+    previous.includes("what is actually on your mind") ||
+    previous.includes("talk to me normally") ||
+    previous.includes("off the clock") ||
+    previous.includes("what do you actually enjoy doing") ||
+    previous.includes("what else should i know about your boundaries") ||
+    previous.includes("what people usually miss about you")
+  );
+}
+
+function isDisclosureLikeAnswer(text: string): boolean {
+  return /\b(call me|my name is|my name's|i like\b|i like to\b|i enjoy\b|my hobbies are\b|my hobby is\b|i prefer\b|you should know that\b)\b/i.test(
+    text,
+  );
+}
+
+function isGroundedAnswerThreadResponse(turnPlan: TurnPlan, response: string): boolean {
+  const normalizedResponse = normalize(response).toLowerCase();
+  if (
+    /\b(noted|understood|i heard your answer|you completed a step|stay focused|you follow my lead now|concrete part of (?:open|profile))\b/i.test(
+      normalizedResponse,
+    )
+  ) {
+    return false;
+  }
+  if (isPressureAnswerPrompt(turnPlan.previousAssistantMessage)) {
+    return (
+      /\b(workload|person|decision)\b/.test(normalizedResponse) &&
+      /\?/.test(response)
+    );
+  }
+  if (isProfileOrDisclosurePrompt(turnPlan.previousAssistantMessage)) {
+    return hasOverlap(response, turnPlan.userKeywords) && /\?/.test(response);
+  }
+  if (
+    turnPlan.previousAssistantMessage?.includes("?") &&
+    isDisclosureLikeAnswer(turnPlan.latestUserMessage)
+  ) {
+    return hasOverlap(response, turnPlan.userKeywords) && /\?/.test(response);
+  }
+  return false;
+}
+
+function isGroundedProfileGatherResponse(turnPlan: TurnPlan, response: string): boolean {
+  const normalizedResponse = normalize(response).toLowerCase();
+  const questionCount = (response.match(/\?/g) ?? []).length;
+  if (questionCount !== 1) {
+    return false;
+  }
+  if (
+    /\b(start the session|our sessions|what do you want out of this session|here is your task|start now|put it on now|reply done|check in once halfway through)\b/i.test(
+      normalizedResponse,
+    )
+  ) {
+    return false;
+  }
+  const safeProfilePrompt =
+    /\b(what do you actually enjoy doing|off the clock|what else should i know|what do you lose track of time doing|what do you like about it|what about it actually keeps you there|what people usually miss about you|what should i call you|what do you want me to understand|what do not want pushed|what boundaries|what actually gets its hooks into you)\b/i.test(
+      normalizedResponse,
+    );
+  if (!safeProfilePrompt) {
+    return false;
+  }
+  if (
+    turnPlan.previousAssistantMessage?.includes("?") &&
+    isDisclosureLikeAnswer(turnPlan.latestUserMessage)
+  ) {
+    return hasOverlap(response, turnPlan.userKeywords);
+  }
+  return true;
 }
 
 function pickFirstDifferent(previousAssistantMessage: string | null, candidates: string[]): string {
@@ -562,6 +761,7 @@ export function isTurnPlanSatisfied(
     return { ok: false, reason: "profile_hijack_during_action" };
   }
   if (
+    turnPlan.requiredMove !== "acknowledge_user_answer" &&
     turnPlan.hasSufficientContextToAct &&
     turnPlan.requestedAction !== "clarify_missing_blocker" &&
     questionCount > 0 &&
@@ -579,6 +779,11 @@ export function isTurnPlanSatisfied(
   }
 
   if (clarificationTurn) {
+    if (isPlanningTurnContext(turnPlan)) {
+      return isPlanningAlignedResponse(turnPlan, response)
+        ? { ok: true, reason: "planning_question_answered" }
+        : { ok: false, reason: "missing_planning_alignment" };
+    }
     if (
       /\b(name the part that lost you|ask the exact question|start talking|tell me why you're here|what do you want|what are you and aren't allowed)\b/i.test(
         response,
@@ -614,6 +819,12 @@ export function isTurnPlanSatisfied(
     return /\b(so far|current thread|already set|still open)\b/i.test(response)
       ? { ok: true, reason: "thread_summarized" }
       : { ok: false, reason: "missing_thread_summary" };
+  }
+
+  if (turnPlan.requestedAction === "gather_profile_only_when_needed") {
+    return isGroundedProfileGatherResponse(turnPlan, response)
+      ? { ok: true, reason: "profile_question_grounded" }
+      : { ok: false, reason: "profile_question_missing" };
   }
 
   if (turnPlan.requestedAction === "generate_structured_output") {
@@ -673,12 +884,22 @@ export function isTurnPlanSatisfied(
   if (
     turnPlan.requestedAction === "continue_active_thread" ||
     turnPlan.requestedAction === "expand_previous_answer" ||
-    turnPlan.requestedAction === "follow_through_commitment" ||
-    turnPlan.requestedAction === "acknowledge_then_act"
+    turnPlan.requestedAction === "follow_through_commitment"
   ) {
+    if (isPlanningTurnContext(turnPlan)) {
+      return isPlanningAlignedResponse(turnPlan, response)
+        ? { ok: true, reason: "planning_thread_kept" }
+        : { ok: false, reason: "planning_thread_missed" };
+    }
     if (isFreshOpenConversationGreetingTurn(turnPlan)) {
-      // A fresh open-chat greeting can land with a brief opener without forcing thread advancement.
-      return { ok: true, reason: "greeting_opened" };
+      const openedConversation =
+        questionCount === 1 ||
+        /\b(what has your attention tonight|what you actually want|worth hearing|what is on your mind|tell me what is actually on your mind|come closer|i am listening)\b/i.test(
+          response,
+        );
+      return openedConversation
+        ? { ok: true, reason: "greeting_opened" }
+        : { ok: false, reason: "greeting_not_opened" };
     }
     const referencesThread =
       hasOverlap(response, extractKeywords(turnPlan.activeThread, 6)) ||
@@ -691,8 +912,10 @@ export function isTurnPlanSatisfied(
   }
 
   if (
+    turnPlan.requiredMove !== "acknowledge_user_answer" &&
     turnPlan.conversationMove === "agree_and_extend" ||
-    turnPlan.conversationMove === "continue_current_thought"
+    (turnPlan.requiredMove !== "acknowledge_user_answer" &&
+      turnPlan.conversationMove === "continue_current_thought")
   ) {
     if (
       /\b(drop the fog and say what you want|name the part that lost you|state the angle cleanly|we can break it down cleanly|start talking)\b/i.test(
@@ -738,6 +961,11 @@ export function isTurnPlanSatisfied(
   }
 
   if (turnPlan.requiredMove === "answer_user_question") {
+    if (isPlanningTurnContext(turnPlan)) {
+      return isPlanningAlignedResponse(turnPlan, response)
+        ? { ok: true, reason: "planning_question_answered" }
+        : { ok: false, reason: "missing_planning_alignment" };
+    }
     if (isDurationQuestion(turnPlan.latestUserMessage)) {
       return /\b\d+\s*(hour|hours|minute|minutes)\b/i.test(response)
         ? { ok: true, reason: "duration_answered" }
@@ -770,6 +998,38 @@ export function isTurnPlanSatisfied(
   }
 
   if (turnPlan.requiredMove === "acknowledge_user_answer") {
+    if (isPlanningTurnContext(turnPlan)) {
+      return isPlanningAlignedResponse(turnPlan, response)
+        ? { ok: true, reason: "planning_answer_continued" }
+        : { ok: false, reason: "planning_answer_missed" };
+    }
+    if (isGroundedAnswerThreadResponse(turnPlan, response)) {
+      return { ok: true, reason: "answer_thread_grounded" };
+    }
+    if (
+      turnPlan.previousAssistantMessage?.includes("?") &&
+      isDisclosureLikeAnswer(turnPlan.latestUserMessage)
+    ) {
+      return { ok: false, reason: "answer_thread_not_grounded" };
+    }
+    if (
+      isPressureAnswerPrompt(turnPlan.previousAssistantMessage) ||
+      isProfileOrDisclosurePrompt(turnPlan.previousAssistantMessage)
+    ) {
+      return { ok: false, reason: "answer_thread_not_grounded" };
+    }
+    const needsFollowUpQuestion =
+      turnPlan.currentMode === "profile_building" ||
+      /\bwhat has your attention tonight\b/i.test(turnPlan.previousAssistantMessage ?? "");
+    if (needsFollowUpQuestion && questionCount !== 1) {
+      return { ok: false, reason: "missing_follow_up_question" };
+    }
+    if (
+      turnPlan.currentMode === "profile_building" &&
+      !hasOverlap(response, turnPlan.userKeywords)
+    ) {
+      return { ok: false, reason: "profile_answer_not_grounded" };
+    }
     if (/\b(noted|good|understood|heard|accepted|lock it in)\b/i.test(response)) {
       return { ok: true, reason: "acknowledged_user_answer" };
     }
@@ -802,15 +1062,26 @@ export function buildTurnPlanFallback(
   turnPlan: TurnPlan,
   toneProfile: "neutral" | "friendly" | "dominant",
 ): string {
+  const planningFallback = buildPlanningQuestionFallback(turnPlan.latestUserMessage, {
+    previousAssistantText: turnPlan.previousAssistantMessage,
+    currentTopic: turnPlan.activeThread || turnPlan.previousUserMessage,
+  });
   const conversationFallback = buildCoreConversationReply({
     userText: turnPlan.latestUserMessage,
     previousAssistantText: turnPlan.previousAssistantMessage,
     currentTopic: turnPlan.activeThread || turnPlan.previousUserMessage,
   });
 
+  if (planningFallback) {
+    return planningFallback;
+  }
+
   if (
     conversationFallback &&
     !hasTaskCue(turnPlan.latestUserMessage) &&
+    turnPlan.currentMode !== "profile_building" &&
+    !isProfileBuildingRequest(turnPlan.latestUserMessage) &&
+    turnPlan.requiredMove !== "acknowledge_user_answer" &&
     turnPlan.requestedAction !== "modify_existing_idea" &&
     turnPlan.requestedAction !== "revise_previous_plan" &&
     (
@@ -978,6 +1249,27 @@ export function buildTurnPlanFallback(
   }
 
   if (turnPlan.requiredMove === "acknowledge_user_answer") {
+    if (
+      turnPlan.previousAssistantMessage?.includes("?") &&
+      turnPlan.currentMode !== "task_execution" &&
+      turnPlan.currentMode !== "locked_task_execution" &&
+      turnPlan.currentMode !== "game"
+    ) {
+      return buildHumanQuestionFallback(turnPlan.latestUserMessage, toneProfile, {
+        previousAssistantText: turnPlan.previousAssistantMessage,
+        currentTopic: turnPlan.activeThread || turnPlan.previousUserMessage,
+      });
+    }
+    if (
+      turnPlan.currentMode === "profile_building" ||
+      isProfileBuildingRequest(turnPlan.latestUserMessage) ||
+      /\bwhat has your attention tonight\b/i.test(turnPlan.previousAssistantMessage ?? "")
+    ) {
+      return buildHumanQuestionFallback(turnPlan.latestUserMessage, toneProfile, {
+        previousAssistantText: turnPlan.previousAssistantMessage,
+        currentTopic: turnPlan.activeThread || turnPlan.previousUserMessage,
+      });
+    }
     return toneProfile === "dominant"
       ? "Noted, pet. I heard your answer and I am continuing from it now."
       : "Noted. I heard your answer and I am continuing from it now.";
@@ -1074,11 +1366,10 @@ export function buildTurnPlanFallback(
   }
 
   if (isGreetingLike(latest)) {
-    const candidates = [
-      "Enough hovering, pet. Tell me what you actually want.",
-      "Good. Tell me what is actually pressing on you.",
-    ];
-    return pickFirstDifferent(turnPlan.previousAssistantMessage, candidates);
+    return buildHumanQuestionFallback(latest, toneProfile, {
+      previousAssistantText: turnPlan.previousAssistantMessage,
+      currentTopic: turnPlan.activeThread || turnPlan.previousUserMessage,
+    });
   }
 
   const candidates =

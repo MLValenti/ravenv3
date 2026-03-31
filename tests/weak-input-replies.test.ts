@@ -10,7 +10,7 @@ test("greeting uses deterministic dominant opener", () => {
   );
   assert.equal(
     buildDeterministicDominantWeakInputReply("hi miss"),
-    "Enough hovering, pet. Tell me what you actually want.",
+    "You're here. What has your attention tonight: chat, a plan, or a game?",
   );
 });
 

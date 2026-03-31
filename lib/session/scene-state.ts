@@ -109,6 +109,7 @@ import { resolveSessionTopic, type SessionTopicType } from "./session-director.t
 import {
   buildAssistantServiceReply,
   buildHumanQuestionFallback,
+  buildPlanningQuestionFallback,
 } from "../chat/open-question.ts";
 import { buildCoreConversationReply } from "../chat/core-turn-move.ts";
 import type { SessionMemory } from "./session-memory.ts";
@@ -390,6 +391,31 @@ function hasExplicitGameSwitchCue(text: string): boolean {
   );
 }
 
+function isPlanningDetourSetup(state: SceneState, text: string): boolean {
+  const normalizedUser = normalize(text).toLowerCase();
+  const previous = normalize(state.last_assistant_text || "").toLowerCase();
+  const planningContext = normalize(`${state.agreed_goal} ${state.last_assistant_text}`).toLowerCase();
+  const explicitPlanningDetourRequest =
+    /\b(play a game|game first|let'?s play|lets play)\b/.test(normalizedUser) &&
+    /\b(tomorrow morning|morning|saturday|week|evening|plan|anchor|first block|wake time)\b/.test(
+      planningContext,
+    );
+  const returnBridgeSelection =
+    /\b(you pick|you choose|tell me to pick)\b/.test(normalizedUser) &&
+    /\bone round\b/.test(previous) &&
+    /\breturn\b/.test(previous) &&
+    /\b(tomorrow morning|morning plan|morning block|saturday|the week|evening plan|the plan)\b/.test(
+      previous,
+    );
+  return (
+    explicitPlanningDetourRequest ||
+    (
+      returnBridgeSelection &&
+      /\b(tomorrow morning|morning|saturday|week|evening|plan)\b/.test(planningContext)
+    )
+  );
+}
+
 function isCurrentGameMoveResolutionQuestion(text: string): boolean {
   return /\b(what('?s| is) your (choice|move)|your move|what did you throw|what was your throw|what did you pick|what was your pick)\b/i.test(
     text,
@@ -427,6 +453,26 @@ function shouldTreatQuestionAsGameAnswer(
   return isValidDeterministicGameAnswer(templateId, progress, text);
 }
 
+function isInlineGameExecutionAnswer(input: {
+  state: SceneState;
+  turn: SceneUserTurnInput;
+}): boolean {
+  if (!(input.state.topic_locked && input.state.topic_type === "game_execution")) {
+    return false;
+  }
+  if (
+    input.turn.act !== "propose_activity" &&
+    input.turn.act !== "answer_activity_choice"
+  ) {
+    return false;
+  }
+  return isValidDeterministicGameAnswer(
+    input.state.game_template_id,
+    input.state.game_progress,
+    input.turn.text,
+  );
+}
+
 function shouldAdvanceGameProgressFromTurn(input: {
   state: SceneState;
   turn: SceneUserTurnInput;
@@ -437,6 +483,9 @@ function shouldAdvanceGameProgressFromTurn(input: {
   }
   if (input.explicitStakeSignal) {
     return false;
+  }
+  if (isInlineGameExecutionAnswer(input)) {
+    return true;
   }
   if (
     input.turn.act === "confusion" ||
@@ -521,6 +570,12 @@ function isFreshNonTaskIntent(input: SceneUserTurnInput): boolean {
     !isTaskProgressQuestion(input.text) &&
     !isTaskNextStepQuestion(input.text) &&
     !isGameProgressQuestion(input.text)
+  );
+}
+
+function looksLikeProfileDisclosure(text: string): boolean {
+  return /\b(call me|my name is|my name's|i like\b|i like to\b|i enjoy\b|my hobbies are\b|my hobby is\b|i prefer\b|what i want you to remember\b|you should know that\b)\b/i.test(
+    text,
   );
 }
 
@@ -1226,6 +1281,10 @@ export function noteSceneStateUserTurn(
     profileSummaryRequested ||
     isNormalChatRequest(input.text) ||
     isChatLikeSmalltalk(input.text);
+  const shouldClearReleasedTaskNegotiation =
+    hasLiveTaskNegotiation(state) &&
+    shouldReleaseTaskNegotiationToConversation &&
+    !hasUnfinishedTask(state, nextTaskProgress);
   const shouldCarryTaskNegotiation =
     hasLiveTaskNegotiation(state) &&
     !shouldPauseActiveTask &&
@@ -1286,9 +1345,14 @@ export function noteSceneStateUserTurn(
     state.topic_locked &&
     state.topic_type === "game_execution" &&
     input.act === "task_request";
+  const inlineGameExecutionAnswer = isInlineGameExecutionAnswer({
+    state,
+    turn: input,
+  });
   const gameExecutionEscalatesToGameSetup =
     state.topic_locked &&
     state.topic_type === "game_execution" &&
+    !inlineGameExecutionAnswer &&
     (
       hasExplicitGameSwitchCue(input.text) ||
       isExplicitAnotherRoundRequest(input.text) ||
@@ -1415,9 +1479,15 @@ export function noteSceneStateUserTurn(
       wantsAnotherRound(input.text)
     );
   const explicitRequestedGameTemplateId = detectRequestedDeterministicGameTemplateId(input.text);
+  const preferredPlanningDetourGameTemplateId =
+    (shouldPickNextGame || shouldRepickGameInSetup) && isPlanningDetourSetup(state, input.text)
+      ? "number_hunt"
+      : null;
   const selectedGameTemplate = shouldPickNextGame
     ? explicitRequestedGameTemplateId
       ? resolveDeterministicGameTemplateById(explicitRequestedGameTemplateId)
+      : preferredPlanningDetourGameTemplateId
+        ? resolveDeterministicGameTemplateById(preferredPlanningDetourGameTemplateId)
       : selectDeterministicGameTemplate({
         userText: input.text,
         hasStakes: Boolean(nextStakes),
@@ -1429,6 +1499,8 @@ export function noteSceneStateUserTurn(
     : shouldRepickGameInSetup
       ? explicitRequestedGameTemplateId
         ? resolveDeterministicGameTemplateById(explicitRequestedGameTemplateId)
+        : preferredPlanningDetourGameTemplateId
+          ? resolveDeterministicGameTemplateById(preferredPlanningDetourGameTemplateId)
         : selectDeterministicGameTemplate({
           userText: input.text,
           hasStakes: Boolean(nextStakes),
@@ -1607,20 +1679,29 @@ export function noteSceneStateUserTurn(
       userRequestedTaskDomain !== "none" &&
       !canReplanTask
     );
-  const nextTaskSpec = shouldUpdateTaskSpecFromUserTurn
-    ? noteTaskSpecUserTurn(state.task_spec, {
-        userText: input.text,
-        inventory: input.inventory,
-        currentTaskDomain: effectiveTaskDomain,
-        lockedTaskDomain: taskSpecSceneFields.locked_task_domain,
-        canReplanTask,
-        reasonForLock,
-        currentUserGoal:
-          gameExecutionEscalatesToTask && effectiveTopicType === "task_negotiation"
-            ? ""
-            : inferGoal(input.text, state.agreed_goal),
+  const nextTaskSpec = shouldClearReleasedTaskNegotiation
+    ? createTaskSpec({
+        current_task_domain: state.current_task_domain,
+        recent_task_families: state.task_spec.recent_task_families,
+        excluded_task_categories: state.task_spec.excluded_task_categories,
+        preferred_task_categories: state.task_spec.preferred_task_categories,
+        available_task_categories: state.task_spec.available_task_categories,
+        novelty_pressure: state.task_spec.novelty_pressure,
       })
-    : syncTaskSpecSceneFields(state.task_spec, taskSpecSceneFields);
+    : shouldUpdateTaskSpecFromUserTurn
+      ? noteTaskSpecUserTurn(state.task_spec, {
+          userText: input.text,
+          inventory: input.inventory,
+          currentTaskDomain: effectiveTaskDomain,
+          lockedTaskDomain: taskSpecSceneFields.locked_task_domain,
+          canReplanTask,
+          reasonForLock,
+          currentUserGoal:
+            gameExecutionEscalatesToTask && effectiveTopicType === "task_negotiation"
+              ? ""
+              : inferGoal(input.text, state.agreed_goal),
+        })
+      : syncTaskSpecSceneFields(state.task_spec, taskSpecSceneFields);
   const currentRule =
     effectiveTopicType === "game_execution"
       ? buildGameExecutionRule(state.game_template_id, effectiveGameProgress)
@@ -1955,7 +2036,16 @@ export function noteSceneStateAssistantTurn(
         can_replan_task: state.can_replan_task,
         reason_for_lock: state.reason_for_lock,
       });
-  const taskSpecWithAskedHistory = noteTaskSpecAssistantText(nextTaskSpec, rawText);
+  const shouldTrackTaskSpecAssistantText =
+    shouldEnterTaskExecution ||
+    shouldEnterTaskExecutionFromGameOutcome ||
+    shouldEnterRewardWindow ||
+    state.topic_type === "task_negotiation" ||
+    state.topic_type === "task_execution" ||
+    state.topic_type === "reward_window";
+  const taskSpecWithAskedHistory = shouldTrackTaskSpecAssistantText
+    ? noteTaskSpecAssistantText(nextTaskSpec, rawText)
+    : nextTaskSpec;
   const shouldTrackProfilePrompt =
     state.interaction_mode === "profile_building" &&
     rawText.includes("?") &&
@@ -2225,6 +2315,28 @@ function gameTextLooksAligned(text: string): boolean {
   );
 }
 
+function planningReturnTextLooksAligned(state: SceneState, text: string): boolean {
+  if (state.topic_type !== "game_execution") {
+    return false;
+  }
+  const previous = normalize(state.last_assistant_text || "");
+  if (!/\b(return to the morning plan|morning plan|morning block|first block)\b/i.test(previous)) {
+    return false;
+  }
+  return /\b(morning plan|morning block|wake time|focused hour|first block)\b/i.test(text);
+}
+
+function extractPlanningDetourPrefix(text: string | null | undefined): string | null {
+  const normalized = normalize(text || "");
+  if (!normalized) {
+    return null;
+  }
+  const match = normalized.match(
+    /(Good\.\s*One round first, then we return to (?:tomorrow morning|the morning plan|the week|saturday|the evening plan)\.)/i,
+  );
+  return match?.[1] ?? null;
+}
+
 function rewardWindowTextLooksAligned(text: string): boolean {
   return /\b(free pass|banked|reserve|another round|protection|winner terms|claim accepted|claim registered|you won)\b/i.test(
     text,
@@ -2311,7 +2423,7 @@ export function isResponseAlignedWithSceneState(state: SceneState, text: string)
     return gameTextLooksAligned(normalized);
   }
   if (state.topic_type === "game_execution") {
-    return gameTextLooksAligned(normalized);
+    return gameTextLooksAligned(normalized) || planningReturnTextLooksAligned(state, normalized);
   }
   if (state.topic_type === "reward_window") {
     return rewardWindowTextLooksAligned(normalized);
@@ -2343,6 +2455,14 @@ export function buildSceneFallback(
   sessionMemory?: SessionMemory | null,
   inventory?: SessionInventoryItem[] | null,
 ): string | null {
+  const previousAssistantText =
+    state.last_assistant_text ||
+    state.last_profile_prompt ||
+    null;
+  const planningFallback = buildPlanningQuestionFallback(userText, {
+    currentTopic: state.agreed_goal || null,
+    previousAssistantText,
+  });
   const conversationFallback = buildCoreConversationReply({
     userText,
     currentTopic: state.agreed_goal || null,
@@ -2391,6 +2511,9 @@ export function buildSceneFallback(
     if (trainingFollowUp) {
       return trainingFollowUp;
     }
+    if (planningFallback) {
+      return planningFallback;
+    }
     if (isAssistantTrainingRequest(userText)) {
       return buildAssistantServiceReply(userText, {
         inventory,
@@ -2425,13 +2548,45 @@ export function buildSceneFallback(
     if (isMutualGettingToKnowRequest(userText)) {
       return "Good. We can play it both ways. Put a clean question on me first, then give me something real back.";
     }
-    return buildProfilePrompt(
-      undefined,
-      state.agreed_goal,
-      state.profile_prompt_count,
-      state.last_profile_prompt,
-      sessionMemory,
+    if (isShortClarificationTurn(userText)) {
+      return buildProfilePrompt(
+        undefined,
+        state.agreed_goal,
+        state.profile_prompt_count,
+        state.last_profile_prompt,
+        sessionMemory,
+      );
+    }
+    return (
+      buildHumanQuestionFallback(userText, "neutral", {
+        currentTopic: state.agreed_goal || null,
+        previousAssistantText: state.last_assistant_text || state.last_profile_prompt || null,
+        inventory,
+        trainingThread: state.active_training_thread,
+      }) ||
+      buildProfilePrompt(
+        undefined,
+        state.agreed_goal,
+        state.profile_prompt_count,
+        state.last_profile_prompt,
+        sessionMemory,
+      )
     );
+  }
+  if (
+    (state.interaction_mode === "normal_chat" || state.interaction_mode === "question_answering") &&
+    (!state.topic_locked || state.topic_type === "none" || state.topic_type === "general_request") &&
+    looksLikeProfileDisclosure(userText)
+  ) {
+    if (state.task_paused && state.last_assistant_text && isTaskAssignmentText(state.last_assistant_text)) {
+      return "Good. We can talk normally. The task stays paused unless you tell me to resume it.";
+    }
+    return buildHumanQuestionFallback(userText, "neutral", {
+      currentTopic: state.agreed_goal || null,
+      previousAssistantText: state.last_assistant_text || state.last_profile_prompt || null,
+      inventory,
+      trainingThread: state.active_training_thread,
+    });
   }
   if (state.interaction_mode === "question_answering" && state.task_paused) {
     return "Ask it directly. The task is paused unless you decide to bring it back into focus.";
@@ -2441,6 +2596,7 @@ export function buildSceneFallback(
     (!state.topic_locked || state.topic_type === "none" || state.topic_type === "general_request")
   ) {
     return (
+      planningFallback ??
       conversationFallback ??
       buildHumanQuestionFallback(userText, "neutral", {
         currentTopic: state.agreed_goal || null,
@@ -2457,11 +2613,12 @@ export function buildSceneFallback(
   if (
     state.interaction_mode === "normal_chat" &&
     (!state.topic_locked || state.topic_type === "none" || state.topic_type === "general_request") &&
-    conversationFallback
+    (planningFallback || conversationFallback)
   ) {
-    return conversationFallback;
+    return planningFallback ?? conversationFallback;
   }
   if (state.topic_type === "game_setup") {
+    const planningDetourPrefix = extractPlanningDetourPrefix(state.last_assistant_text);
     if (isGameRulesQuestion(userText)) {
       return "First we choose the game. Tell me to pick, or choose quick or longer.";
     }
@@ -2470,7 +2627,11 @@ export function buildSceneFallback(
       wantsAnotherRound(userText) ||
       isGameStartCue(userText)
     ) {
-      return buildDeterministicGameStart(state.game_template_id);
+      const gameStart = buildDeterministicGameStart(state.game_template_id);
+      if (planningDetourPrefix) {
+        return `${planningDetourPrefix} ${gameStart}`.trim();
+      }
+      return gameStart;
     }
     const stakesLine = state.stakes ? ` The stakes are ${state.stakes}.` : "";
     return `Fine. We stay with the game.${stakesLine} Choose quick or longer, or tell me to pick.`;

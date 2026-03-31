@@ -127,6 +127,16 @@ export function buildOpenChatGreeting(): string {
   return "Enough hovering, pet. Tell me what you actually want.";
 }
 
+export function buildOpenChatChoiceGreeting(): string {
+  return "You're here. What has your attention tonight: chat, a plan, or a game?";
+}
+
+export function buildOpenChatGreetingForInput(text: string): string {
+  return /\b(mistress|miss|raven|ma'am|mam)\b/i.test(normalize(text))
+    ? buildOpenChatChoiceGreeting()
+    : buildOpenChatGreeting();
+}
+
 export function buildHowAreYouOpenReply(): string {
   return "Sharp enough. Now tell me why you're here.";
 }

@@ -585,7 +585,7 @@ test("chat-switch request releases task negotiation before blockers are complete
   assert.equal(state.topic_type, "general_request");
   assert.equal(state.topic_locked, false);
   assert.equal(state.task_paused, false);
-  assert.equal(state.task_spec.request_stage, "collecting_blockers");
+  assert.equal(state.task_spec.request_stage, "idle");
 });
 
 test("scene fallback answers profile summary request instead of asking another profile question", () => {

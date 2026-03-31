@@ -573,6 +573,29 @@ function deriveRequestedAction(input: {
 }): RequestedTurnAction {
   const normalized = normalize(input.text).toLowerCase();
   const existingThread = resolveExistingThread(input.state);
+  const previousAssistant = normalize(input.previousAssistantMessage ?? "").toLowerCase();
+  const hasConcreteContinuationRequest =
+    /\b(give me|build me|make me|use that and give me|show me|write me)\b/i.test(normalized) ||
+    hasStructuredOutputCue(normalized);
+  const planningTurnWhileProfileMode =
+    /\b(?:help(?: me)? plan|let'?s plan|plan my|plan tomorrow|plan saturday|plan my week|figure out my|go back to|back to|return to)\b/.test(
+      normalized,
+    ) ||
+    ((/^(?:errands first|gym first|downtime first|workdays first|weekends first|why|then what)$/i.test(
+      normalized,
+    ) ||
+      /\b(?:morning block|morning plan|evening)\b/.test(normalized)) &&
+      /\b(?:help(?: me)? plan|let'?s plan|plan my|plan tomorrow|plan saturday|plan my week|figure out my|morning block|morning plan|workdays first|weekends first|errands first|gym first|downtime first|saturday|tomorrow morning)\b/.test(
+        `${existingThread} ${previousAssistant}`,
+      ));
+  const taskTurnWhileProfileMode =
+    (/^(?:ok|okay)$/i.test(normalized) &&
+      /\b(?:here is your task|start now|report back|check in once halfway|that task is complete|ask for the next task)\b/.test(
+        previousAssistant,
+      )) ||
+    /\b(?:what counts as done|why that task|set me another one|different task|make it \d+\s*(?:minutes?|hours?))\b/.test(
+      normalized,
+    );
 
   if (isSummaryRequest(normalized)) {
     return "summarize_current_thread";
@@ -586,6 +609,18 @@ function deriveRequestedAction(input: {
     isMutualGettingToKnowRequest(normalized)
   ) {
     return "answer_direct_question";
+  }
+  if (
+    input.currentMode === "profile_building" &&
+    !isQuestion(normalized) &&
+    !hasConcreteContinuationRequest &&
+    !planningTurnWhileProfileMode &&
+    !taskTurnWhileProfileMode
+  ) {
+    return "gather_profile_only_when_needed";
+  }
+  if (isProfileBuildingRequest(normalized)) {
+    return "gather_profile_only_when_needed";
   }
   if (hasRevisionCue(normalized) && existingThread !== "none") {
     return "revise_previous_plan";
@@ -636,10 +671,10 @@ function deriveRequestedAction(input: {
   if (isQuestion(normalized)) {
     return "answer_direct_question";
   }
-  if (input.currentMode === "profile_building" && !isQuestion(normalized)) {
-    return "gather_profile_only_when_needed";
-  }
   if (input.currentMode === "profile_building") {
+    if (planningTurnWhileProfileMode || taskTurnWhileProfileMode) {
+      return existingThread !== "none" ? "continue_active_thread" : "answer_direct_question";
+    }
     return "gather_profile_only_when_needed";
   }
   if (existingThread !== "none") {

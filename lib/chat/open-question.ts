@@ -1,8 +1,10 @@
 import {
   buildClarifyNudge,
+  buildOpenChatChoiceGreeting,
   buildHowAreYouOpenReply,
   buildOpenChatGreeting,
   buildOpenChatNudge,
+  buildRelationalTurnBack,
 } from "../session/mode-style.ts";
 import {
   buildConversationContinuationReply,
@@ -23,6 +25,7 @@ import {
   isAssistantTrainingRequest,
   isAssistantServiceQuestion,
   isAssistantPreferenceQuestion,
+  isProfileBuildingRequest,
 } from "../session/interaction-mode.ts";
 import { buildInventoryAwareTrainingReply } from "./training-suggestion.ts";
 import type { SessionInventoryItem } from "../session/session-inventory.ts";
@@ -73,6 +76,12 @@ function isGreetingText(text: string): boolean {
     return false;
   }
   return /^(hi|hello|hey)(?:\s+(mistress|miss|raven|ma'am|mam))?$/.test(normalized);
+}
+
+function isTitledGreetingText(text: string): boolean {
+  return /^(hi|hello|hey)\s+(mistress|miss|raven|ma'am|mam)$/.test(
+    normalize(text).toLowerCase(),
+  );
 }
 
 function isHowAreYouText(text: string): boolean {
@@ -175,6 +184,344 @@ function isContextualServiceFollowUpQuestion(
     /\bwhere should i start\b/.test(normalized) ||
     /\bwhat do i start with\b/.test(normalized)
   );
+}
+
+function buildProfileQuestionFallback(question: string, context?: OpenQuestionContext): string | null {
+  const normalized = normalize(question).toLowerCase();
+  const previous = normalize(context?.previousAssistantText ?? "").toLowerCase();
+  const statedPreference =
+    cleanTopic(
+      question.match(/\b(?:i like|i enjoy|i love)\s+([^?.!,]{2,80})/i)?.[1] ??
+        question.match(/\b(?:it'?s|it is)\s+([^?.!,]{2,80})/i)?.[1] ??
+        question,
+    ) ?? null;
+
+  if (
+    /\bwhat do you actually enjoy doing when you are off the clock\b/.test(previous) &&
+    statedPreference &&
+    !isLikelyQuestionText(question)
+  ) {
+    return `${capitalizeFirst(statedPreference)}. Good. What else should I know about your boundaries or the things you do not want pushed?`;
+  }
+  if (/\bask me more questions\b/.test(normalized)) {
+    return "Good. I will ask more. What is one thing people usually miss about you that I should not miss?";
+  }
+  if (
+    /\b(tell me more about me|what do you want to know about me|where do we start|okay ask|ok ask)\b/.test(
+      normalized,
+    )
+  ) {
+    return "Fine. Start simple. What do you actually enjoy doing when you are off the clock?";
+  }
+  if (/\bask me something real\b/.test(normalized)) {
+    return "Good. Start with the thing people usually miss about you that I should not miss.";
+  }
+  if (isProfileBuildingRequest(question)) {
+    return "Fine. Start simple. What do you actually enjoy doing when you are off the clock?";
+  }
+  if (
+    /\b(give me one more detail|tell me one thing people usually miss about you|what else should i know about your boundaries)\b/.test(
+      previous,
+    )
+  ) {
+    return "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind.";
+  }
+  return null;
+}
+
+function buildChoiceOrThreadContinuationFallback(
+  question: string,
+  context?: OpenQuestionContext,
+): string | null {
+  const normalized = normalize(question).toLowerCase();
+  const previous = normalize(context?.previousAssistantText ?? "").toLowerCase();
+
+  if (
+    /\bwhat has your attention tonight\b/.test(previous) &&
+    /\bchat\b/.test(previous) &&
+    /\bplan\b/.test(previous) &&
+    /\bgame\b/.test(previous)
+  ) {
+    if (normalized === "chat") {
+      return "Fine. What has the most pressure on you right now?";
+    }
+    if (normalized === "plan") {
+      return "Fine. What are we planning first?";
+    }
+    if (normalized === "game") {
+      return "Fine. Do you want something quick, or do you want me to pick?";
+    }
+  }
+
+  if (/\bwhat has the most pressure on you right now\b/.test(previous)) {
+    if (/^\s*work\s*$/i.test(normalized)) {
+      return "Good. Is it workload, a person, or a decision you keep circling?";
+    }
+    if (/^\s*(?:a )?person\s*$/i.test(normalized)) {
+      return "Good. Is it pressure from them, a pattern between you, or something you still have not said cleanly?";
+    }
+    if (/^\s*(?:a )?(?:decision|choice)\s*$/i.test(normalized)) {
+      return "Good. Is it one you keep delaying, one you regret, or one that changes the week if you make it?";
+    }
+  }
+
+  return null;
+}
+
+function buildCasualDisclosureFollowUp(
+  question: string,
+  context?: OpenQuestionContext,
+): string | null {
+  const previous = normalize(context?.previousAssistantText ?? "").toLowerCase();
+  const statedPreference =
+    cleanTopic(
+      question.match(/\b(?:i like|i enjoy|i love)\s+([^?.!,]{2,80})/i)?.[1] ??
+        question.match(/\bmy hobbies are\s+([^?.!,]{2,80})/i)?.[1],
+    ) ?? null;
+
+  if (!statedPreference || isLikelyQuestionText(question)) {
+    return null;
+  }
+
+  if (
+    /\b(talk to me normally|what is actually on your mind|what has your attention tonight|for a minute)\b/.test(
+      previous,
+    )
+  ) {
+    if (/\bgolf\b/i.test(statedPreference)) {
+      return "Golf. Good. What do you like about it most: the focus, the quiet, or the competition?";
+    }
+    return `${capitalizeFirst(statedPreference)}. Good. What about it actually keeps you there when your head needs somewhere to go?`;
+  }
+
+  return null;
+}
+
+function buildPlanningDetourBridge(planningWindow: string | null): string {
+  if (planningWindow === "week") {
+    return "Good. One round first, then we return to the week. Do you want something quick, or do you want me to pick?";
+  }
+  if (planningWindow === "saturday") {
+    return "Good. One round first, then we return to Saturday. Do you want something quick, or do you want me to pick?";
+  }
+  if (planningWindow === "tomorrow morning" || planningWindow === "morning") {
+    return "Good. One round first, then we return to tomorrow morning. Do you want something quick, or do you want me to pick?";
+  }
+  if (planningWindow === "evening" || planningWindow === "tonight") {
+    return "Good. One round first, then we return to the evening plan. Do you want something quick, or do you want me to pick?";
+  }
+  return "Good. One round first, then we return to the plan. Do you want something quick, or do you want me to pick?";
+}
+
+function isPlanningOpener(text: string): boolean {
+  return /\b(?:help(?: me)? plan|let'?s plan|help me figure out|plan my|plan tomorrow|plan saturday|plan the week|plan this week)\b/i.test(
+    text,
+  );
+}
+
+function isPlanningReturnRequest(text: string): boolean {
+  return /\b(?:go back|back to|return to)\b/i.test(text);
+}
+
+function isPlanningContinuationCue(text: string): boolean {
+  return /^(?:keep going|go on|continue|then what|what next|and then what|ok(?:ay)?|why|what do you mean)\??$/i.test(
+    normalize(text),
+  );
+}
+
+function hasPlanningContext(question: string, context?: OpenQuestionContext): boolean {
+  const combined = normalize(
+    `${question} ${context?.previousAssistantText ?? ""} ${context?.currentTopic ?? ""}`,
+  ).toLowerCase();
+  return (
+    isPlanningOpener(question) ||
+    isPlanningReturnRequest(question) ||
+    /\b(plan|planning|workdays|weekends|errands first|gym first|downtime first|morning plan|morning block|wake time|focused hour|first block|evening stays|saturday|tomorrow morning)\b/.test(
+      combined,
+    )
+  );
+}
+
+function extractPlanningWindow(question: string, context?: OpenQuestionContext): string | null {
+  const combined = normalize(
+    `${question} ${context?.previousAssistantText ?? ""} ${context?.currentTopic ?? ""}`,
+  ).toLowerCase();
+  if (/\btomorrow morning\b/.test(combined)) {
+    return "tomorrow morning";
+  }
+  if (/\bsaturday\b/.test(combined)) {
+    return "saturday";
+  }
+  if (/\bweek\b/.test(combined)) {
+    return "week";
+  }
+  if (/\bevening\b/.test(combined)) {
+    return "evening";
+  }
+  if (/\btonight\b/.test(combined)) {
+    return "tonight";
+  }
+  if (/\bmorning\b/.test(combined)) {
+    return "morning";
+  }
+  return null;
+}
+
+export function buildPlanningQuestionFallback(
+  question: string,
+  context?: OpenQuestionContext,
+): string | null {
+  const normalized = normalize(question).toLowerCase();
+  const previous = normalize(context?.previousAssistantText ?? "").toLowerCase();
+  const planningWindow = extractPlanningWindow(question, context);
+
+  if (!hasPlanningContext(question, context)) {
+    return null;
+  }
+
+  if (/\b(?:play a game|game first|let'?s play|lets play)\b/.test(normalized)) {
+    return buildPlanningDetourBridge(planningWindow);
+  }
+
+  if (isPlanningOpener(question)) {
+    if (planningWindow === "week") {
+      return "Fine. Workdays first or weekends first?";
+    }
+    if (planningWindow === "saturday") {
+      return "Fine. Do you want errands first, gym first, or downtime first?";
+    }
+    if (planningWindow === "tomorrow morning" || planningWindow === "morning") {
+      return "Fine. Start with the anchor. What time does tomorrow morning begin?";
+    }
+    if (planningWindow === "evening" || planningWindow === "tonight") {
+      return "Fine. Start with the anchor. What time does the evening actually begin?";
+    }
+    return "Fine. Start with the anchor. What is the first block we need to place cleanly?";
+  }
+
+  if (/\bworkdays first or weekends first\b/.test(previous)) {
+    if (/^\s*workdays first\s*$/i.test(normalized)) {
+      return "Good. Workdays first. Lock your wake time, your first work block, and one clean stopping point before we touch the weekend.";
+    }
+    if (/^\s*weekends first\s*$/i.test(normalized)) {
+      return "Good. Weekends first. Lock the one thing that actually needs energy, then we can make the workdays cleaner around it.";
+    }
+  }
+
+  if (/\bdo you want errands first, gym first, or downtime first\b/.test(previous)) {
+    if (/^\s*errands first\s*$/i.test(normalized)) {
+      return "Good. Errands first while the day is clean, then gym, then the evening stays open.";
+    }
+    if (/^\s*gym first\s*$/i.test(normalized)) {
+      return "Good. Gym first while your energy is still clean, then errands, then the evening stays open.";
+    }
+    if (/^\s*downtime first\s*$/i.test(normalized)) {
+      return "Good. Downtime first to settle the pace, then errands, then gym once you are actually awake.";
+    }
+  }
+
+  if (
+    planningWindow === "saturday" &&
+    /\berrands first\b/.test(previous)
+  ) {
+    if (/^\s*why\??\s*$/i.test(normalized) || /^what do you mean\??$/i.test(normalized)) {
+      return "Because errands spill if you push them late. This keeps the rest of Saturday cleaner.";
+    }
+    if (/^(?:then what|what next|and then what)\??$/i.test(normalized)) {
+      return "Then gym, then food, then the evening stays flexible.";
+    }
+    if (/\bchange that\b/i.test(normalized) && /\bgym\b/i.test(normalized) && /\berrands\b/i.test(normalized)) {
+      return "Fine. Gym first, errands second, evening still open. The thread stays the same, only the order changes.";
+    }
+    if (/\bevening\b/.test(normalized)) {
+      return "Keep the evening light. One social thing at most, then a clean stop.";
+    }
+    if (isPlanningContinuationCue(question)) {
+      return "Good. After errands, move to the gym, then keep the evening light instead of letting it sprawl.";
+    }
+  }
+
+  if (/\bwhat time does tomorrow morning begin\b/.test(previous)) {
+    const time = question.match(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i)?.[0]?.trim();
+    if (time) {
+      return `Good. Start at ${time}. Lock the wake time first, then protect one focused hour before anything noisy.`;
+    }
+  }
+
+  if (/\berrands first while the day is clean, then gym, then the evening stays open\b/.test(previous)) {
+    if (/^\s*why\??\s*$/i.test(normalized) || /^what do you mean\??$/i.test(normalized)) {
+      return "Because errands spill if you push them late. This keeps the rest of Saturday cleaner.";
+    }
+    if (/^(?:then what|what next|and then what)\??$/i.test(normalized)) {
+      return "Then gym, then food, then the evening stays flexible.";
+    }
+    if (/\bchange that\b/i.test(normalized) && /\bgym\b/i.test(normalized) && /\berrands\b/i.test(normalized)) {
+      return "Fine. Gym first, errands second, evening still open. The thread stays the same, only the order changes.";
+    }
+    if (/\bevening\b/.test(normalized)) {
+      return "Keep the evening light. One social thing at most, then a clean stop.";
+    }
+    if (isPlanningContinuationCue(question)) {
+      return "Good. After errands, move to the gym, then keep the evening light instead of letting it sprawl.";
+    }
+  }
+
+  if (/\bbecause errands spill if you push them late\b/.test(previous)) {
+    if (/^(?:then what|what next|and then what)\??$/i.test(normalized)) {
+      return "Then gym, then food, then the evening stays flexible.";
+    }
+    if (/\bevening\b/.test(normalized)) {
+      return "Keep the evening light. One social thing at most, then a clean stop.";
+    }
+  }
+
+  if (
+    /\bone round\b/.test(normalized) &&
+    isPlanningReturnRequest(question) &&
+    /\bmorning plan\b/i.test(normalized)
+  ) {
+    return "Good. After this round, we return to the morning plan and lock the first block cleanly.";
+  }
+
+  if (
+    /\bafter this round, we return to the morning plan and lock the first block cleanly\b/.test(
+      previous,
+    ) &&
+    (isPlanningReturnRequest(question) || /\bmorning block\b/i.test(normalized))
+  ) {
+    return "Fine. Back to the morning block. Start by fixing the wake time, then protect one focused hour before anything noisy.";
+  }
+
+  if (
+    /\b(?:go back|back to|return to)\b/i.test(normalized) &&
+    /\bmorning\b/i.test(normalized)
+  ) {
+    return "Fine. Back to the morning block. Start by fixing the wake time, then protect one focused hour before anything noisy.";
+  }
+
+  if (planningWindow === "week" && isPlanningContinuationCue(question)) {
+    return "Good. Keep the week thread clean. Lock the workdays first, then decide what the weekend is actually for.";
+  }
+  if ((planningWindow === "tomorrow morning" || planningWindow === "morning") && isPlanningContinuationCue(question)) {
+    return "Good. Stay on the morning block. Fix the wake time first, then protect one focused hour before anything noisy.";
+  }
+  if (planningWindow === "saturday" && isPlanningContinuationCue(question)) {
+    if (/^\s*why\??\s*$/i.test(normalized) || /^what do you mean\??$/i.test(normalized)) {
+      return "Because the first block sets the pace. If Saturday starts scattered, the rest of it leaks after that.";
+    }
+    if (/^(?:then what|what next|and then what)\??$/i.test(normalized)) {
+      return "Then the second block lands clean, then food, then the evening stays open instead of sprawling.";
+    }
+    if (/\bchange that\b/i.test(normalized) && /\bgym\b/i.test(normalized) && /\berrands\b/i.test(normalized)) {
+      return "Fine. Gym first, errands second, evening still open. The thread stays the same, only the order changes.";
+    }
+    if (/\bevening\b/.test(normalized)) {
+      return "Keep the evening light. One social thing at most, then a clean stop.";
+    }
+    return "Good. Keep Saturday clean: first block, second block, then an evening that still has room to breathe.";
+  }
+
+  return null;
 }
 
 export function buildAssistantPreferenceReply(question: string): string {
@@ -320,6 +667,13 @@ function cleanTopic(value: string | null | undefined): string | null {
   return cleaned || null;
 }
 
+function capitalizeFirst(value: string): string {
+  if (!value) {
+    return value;
+  }
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 function extractTopic(text: string): string | null {
   const patterns = [
     /\b(?:talk about|discuss|explore|focus on)\s+([^.!?]{2,80})/i,
@@ -439,6 +793,25 @@ export function buildHumanQuestionFallback(
   tone: QuestionToneProfile = "neutral",
   context?: OpenQuestionContext,
 ): string {
+  if (/^\s*tell me more about you\s*$/i.test(normalize(question))) {
+    return withDominantPrefix(buildRelationalTurnBack(), tone);
+  }
+  const planningQuestionFallback = buildPlanningQuestionFallback(question, context);
+  if (planningQuestionFallback) {
+    return withDominantPrefix(planningQuestionFallback, tone);
+  }
+  const profileQuestionFallback = buildProfileQuestionFallback(question, context);
+  if (profileQuestionFallback) {
+    return withDominantPrefix(profileQuestionFallback, tone);
+  }
+  const casualDisclosureFallback = buildCasualDisclosureFollowUp(question, context);
+  if (casualDisclosureFallback) {
+    return withDominantPrefix(casualDisclosureFallback, tone);
+  }
+  const choiceOrThreadFallback = buildChoiceOrThreadContinuationFallback(question, context);
+  if (choiceOrThreadFallback) {
+    return withDominantPrefix(choiceOrThreadFallback, tone);
+  }
   const contextualTrainingReply = buildTrainingFollowUpReply({
     userText: question,
     thread: context?.trainingThread ?? null,
@@ -486,7 +859,10 @@ export function buildHumanQuestionFallback(
     return withDominantPrefix(buildAssistantPreferenceReply(question), tone);
   }
   if (isGreetingText(question)) {
-    return withDominantPrefix(buildOpenChatGreeting(), tone);
+    return withDominantPrefix(
+      isTitledGreetingText(question) ? buildOpenChatChoiceGreeting() : buildOpenChatGreeting(),
+      tone,
+    );
   }
   const conversationReply = buildCoreConversationReply({
     userText: question,

@@ -312,3 +312,13 @@ test("duration answer with a profile_fact hint still does not become a durable p
   assert.equal(memory.user_profile_facts.length, 0);
   assert.doesNotMatch(summarizeSessionMemory(memory), /user_profile_facts:/i);
 });
+
+test("transient casual or profile-thread prompts do not become durable profile facts", () => {
+  let memory = createSessionMemory();
+  memory = writeUserAnswer(memory, "Ask me more questions", 1_000, null);
+  memory = writeUserAnswer(memory, "let's just chat for a bit", 2_000, null);
+  memory = writeUserQuestion(memory, "what do you mean", 3_000, 0.9);
+
+  assert.equal(memory.user_profile_facts.length, 0);
+  assert.doesNotMatch(summarizeSessionMemory(memory), /user_profile_facts:/i);
+});

@@ -7,6 +7,7 @@ import {
   shouldKeepCoherentModelReply,
 } from "../lib/chat/response-strategy.ts";
 import { createConversationStateSnapshot } from "../lib/chat/conversation-state.ts";
+import { buildTurnPlan } from "../lib/chat/turn-plan.ts";
 
 test("coherent model reply is preserved when it stays on the active thread", () => {
   const state = {
@@ -38,6 +39,150 @@ test("generic off-thread model reply is not preserved on a turn-plan miss", () =
       text: "Tell me what you want to explore next.",
       state,
       lastUserMessage: "what about the evening?",
+    }),
+    false,
+  );
+});
+
+test("planning clarification miss is not preserved just because it is a generic answer", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-planning-why"),
+    active_topic: "saturday",
+    active_thread: "saturday",
+    current_mode: "normal_chat" as const,
+  };
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+      },
+      { role: "user", content: "why" },
+    ],
+    { conversationState: state },
+  );
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: "Because it sets a clear structure for our day and helps us prioritize tasks. Staying organized and focused is key to making the most of our time together, pet.",
+      state,
+      lastUserMessage: "why",
+      turnPlan,
+    }),
+    false,
+  );
+});
+
+test("planning opener miss is not preserved when it skips the actual planning anchor", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-planning-opener"),
+    active_topic: "none",
+    active_thread: "none",
+    current_mode: "normal_chat" as const,
+  };
+  const turnPlan = buildTurnPlan(
+    [{ role: "user", content: "help me plan tomorrow morning" }],
+    { conversationState: state },
+  );
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: "In the morning, after our session of control, we'll start with a firm grip on your posture. Stand tall, pet. Let's lead with that.",
+      state,
+      lastUserMessage: "help me plan tomorrow morning",
+      turnPlan,
+    }),
+    false,
+  );
+});
+
+test("planning return miss is not preserved when it answers the wrong family", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-planning-return"),
+    active_topic: "tomorrow morning",
+    active_thread: "tomorrow morning",
+    current_mode: "normal_chat" as const,
+  };
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "Good. After this round, we return to the morning plan and lock the first block cleanly.",
+      },
+      { role: "user", content: "go back to that morning block you mentioned" },
+    ],
+    { conversationState: state },
+  );
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: "Stay on this game, pet. Answer directly and keep the round moving.",
+      state,
+      lastUserMessage: "go back to that morning block you mentioned",
+      turnPlan,
+    }),
+    false,
+  );
+});
+
+test("task clarification miss is not preserved when it drifts into answer-first generic language", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-task-done"),
+    active_topic: "20 minute focus task",
+    active_thread: "20 minute focus task",
+    current_mode: "task_execution" as const,
+    recent_commitments_or_tasks: ["hold still for 20 minutes"],
+  };
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "Here is your task: Hold still for 20 minutes, check in once halfway through, and report back when it is done. Start now. Hold still now and reply done once you are set, pet.",
+      },
+      { role: "user", content: "what counts as done?" },
+    ],
+    { conversationState: state },
+  );
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: "Exactly. Minute is the part that tells me whether someone actually means it.",
+      state,
+      lastUserMessage: "what counts as done?",
+      turnPlan,
+    }),
+    false,
+  );
+});
+
+test("next-task continuation miss is not preserved when it stays generic instead of continuing task flow", () => {
+  const state = {
+    ...createConversationStateSnapshot("response-strategy-next-task"),
+    active_topic: "20 minute focus task",
+    active_thread: "20 minute focus task",
+    current_mode: "task_execution" as const,
+    recent_commitments_or_tasks: ["hold still for 20 minutes"],
+  };
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "Done means the full 20 minutes, the halfway check-in, and the final report once it is complete.",
+      },
+      { role: "user", content: "set me another one" },
+    ],
+    { conversationState: state },
+  );
+
+  assert.equal(
+    shouldKeepCoherentModelReply({
+      text: "Enough. Tell me what you actually want.",
+      state,
+      lastUserMessage: "set me another one",
+      turnPlan,
     }),
     false,
   );

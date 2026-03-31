@@ -77,6 +77,7 @@ import { buildShortClarificationReply } from "./short-follow-up.ts";
 import {
   buildAssistantPreferenceReply,
   buildAssistantServiceReply,
+  buildPlanningQuestionFallback,
   buildTopicInitiationReply,
   isTopicInitiationRequest,
 } from "../chat/open-question.ts";
@@ -375,6 +376,26 @@ function buildGameRulesReply(sceneState: SceneState): string {
   return "Listen carefully, pet. We stay with number hunt. You guess one number from 1 to 10. I give a hint, then you make one final guess.";
 }
 
+function buildGameExplanationReply(sceneState: SceneState): string {
+  const template = resolveDeterministicGameTemplateById(sceneState.game_template_id);
+  if (template.id === "rps_streak") {
+    return "Because rock paper scissors streak is quick, clean, and easy to read under pressure. Two throws, no hiding, and the pace stays sharp.";
+  }
+  if (template.id === "number_hunt") {
+    return "Because number hunt is quick and clean. One hidden number, one hint, one final guess, and no room to sprawl.";
+  }
+  if (template.id === "math_duel") {
+    return "Because math duel is fast and unforgiving. One clean answer at a time, and no bluffing your way through it.";
+  }
+  if (template.id === "number_command") {
+    return "Because number command stays simple on the surface, then makes you live inside the instruction you draw.";
+  }
+  if (template.id === "riddle_lock") {
+    return "Because riddle lock forces clean attention. One answer at a time, and you either read it properly or you do not.";
+  }
+  return "Because this game stays quick, clean, and easy to read under pressure.";
+}
+
 function isExplicitAnotherRoundRequest(text: string): boolean {
   return wantsAnotherRound(text) && !isGameRulesQuestion(text);
 }
@@ -436,6 +457,10 @@ function buildNumberCommandExecutionReply(input: SceneScaffoldInput): string | n
 function buildGameSetupReply(input: SceneScaffoldInput): string {
   const stakesLine = buildStakesLine(input.sceneState);
   const normalizedUserText = normalize(input.userText);
+  const planningDetourBridge = buildPlanningQuestionFallback(input.userText, {
+    previousAssistantText: input.sceneState.last_assistant_text || null,
+    currentTopic: input.sceneState.agreed_goal || input.sceneState.summary || null,
+  });
   const hasSpeedChoiceCue = /\b(quick|faster|fast|short|longer|few minutes)\b/i.test(
     normalizedUserText,
   );
@@ -455,6 +480,14 @@ function buildGameSetupReply(input: SceneScaffoldInput): string {
     !/\b(rock paper scissors|rps|number hunt|math duel|number command|riddle lock)\b/i.test(
       normalizedUserText,
     );
+  if (
+    planningDetourBridge &&
+    /\breturn to\b/i.test(planningDetourBridge) &&
+    /\bquick\b/i.test(planningDetourBridge) &&
+    /\bpick\b/i.test(planningDetourBridge)
+  ) {
+    return planningDetourBridge;
+  }
   if (
     input.act === "answer_activity_choice" ||
     isGameChoiceDelegation(input.userText) ||
@@ -910,6 +943,10 @@ function isTaskRationaleQuestion(text: string): boolean {
   );
 }
 
+function isTaskWhyThisQuestion(text: string): boolean {
+  return /\b(why that task|why this task|why that one|why this one)\b/i.test(text);
+}
+
 function isTaskReplacementExplanationQuestion(text: string): boolean {
   return /\b(why this one|why that one|why this instead|why that instead)\b/i.test(text);
 }
@@ -1065,6 +1102,21 @@ function buildTaskExecutionQuestionReply(
     isTaskReplacementExplanationQuestion(userText)
   ) {
     return "Because you asked for a different task, and this one changes the activity without losing control or dropping the same line entirely.";
+  }
+  if (isTaskWhyThisQuestion(userText)) {
+    if (/\banal|dildo|plug\b/.test(variantText)) {
+      return "Because it is specific, measurable, and easy to read under pressure. I can tell quickly whether you keep control there without getting greedy, sloppy, or performative.";
+    }
+    if (/\bthroat|oral|mouth\b/.test(variantText)) {
+      return "Because it is specific, measurable, and hard to fake. I can tell quickly whether you keep control over depth, breathing, and resets once the line stops feeling flattering.";
+    }
+    if (/\bchastity|cage|locked\b/.test(variantText)) {
+      return "Because it is specific, measurable, and easy to read once the novelty wears off. I can tell whether you actually hold a rule instead of bargaining with it.";
+    }
+    if (/\bbondage|cuffs|restrain|hands secured\b/.test(variantText)) {
+      return "Because it is specific, measurable, and easy to read. I can tell quickly whether the restraint changes your behavior instead of just your silhouette.";
+    }
+    return "Because it is specific, measurable, and hard to fake. A clean timer and one clear rule tell me quickly whether your focus holds once it stops feeling flattering.";
   }
   if (isTaskRationaleQuestion(userText)) {
     if (/\banal|dildo|plug\b/.test(variantText)) {
@@ -1318,6 +1370,10 @@ function buildRewardWindowReply(
 
 export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | null {
   const userText = normalize(input.userText);
+  const planningReturnFallback = buildPlanningQuestionFallback(input.userText, {
+    previousAssistantText: input.sceneState.last_assistant_text || null,
+    currentTopic: input.sceneState.agreed_goal || null,
+  });
   const hasWagerCue =
     /\b(stakes? (?:are|were)|if i win|if you win|what('?s| is) on the line|bet(?:ting)? on it|bet on the game|make a bet|make a wager|wager|lets bet on it|let'?s bet on it)\b/i.test(
       userText,
@@ -1345,6 +1401,15 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
       isReplacementTaskExplanationContext(input.sceneState.last_assistant_text))
   ) {
     return "Because you asked for a different task, and this one changes the activity without losing control or dropping the same line entirely.";
+  }
+
+  if (
+    input.sceneState.topic_locked &&
+    input.sceneState.topic_type === "game_execution" &&
+    planningReturnFallback &&
+    /\b(go back|back to|return to)\b/i.test(userText)
+  ) {
+    return planningReturnFallback;
   }
 
   if (input.act === "short_follow_up") {
@@ -1558,6 +1623,9 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
         input.sceneState.game_progress,
       );
     }
+    if (/\b(why that game|why this game|explain the game)\b/i.test(input.userText)) {
+      return buildGameExplanationReply(input.sceneState);
+    }
     return buildGameRulesReply(input.sceneState);
   }
 
@@ -1567,6 +1635,12 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
     input.act !== "user_question" &&
     input.act !== "confusion"
   ) {
+    if (/^(?:go on|keep going|continue|ok|okay)$/i.test(normalize(input.userText))) {
+      return buildDeterministicGameImmediatePrompt(
+        input.sceneState.game_template_id,
+        input.sceneState.game_progress,
+      );
+    }
     const numberCommandReply = buildNumberCommandExecutionReply(input);
     const primaryLine =
       numberCommandReply ??

@@ -29,6 +29,8 @@ const ASSISTANT_PREFERENCE_DOMAIN_PATTERN =
 
 const ASSISTANT_SERVICE_QUESTION_PATTERNS = [
   /\bwhat can i do for you\b/i,
+  /\btell me what you can actually do for me\b/i,
+  /\btell me what you can do for me\b/i,
   /\bwhat do you want me to do(?: for you)?\b/i,
   /\bwhat do you want from me\b/i,
   /\bhow can i (?:serve|help|please|entertain) you\b/i,

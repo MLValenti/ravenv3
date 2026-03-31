@@ -188,6 +188,32 @@ test("go-on stays on person-versus-performance instead of stale usefulness", () 
   assert.doesNotMatch(reply, /what you can actually do for me/i);
 });
 
+test("go-on stays on the work-pressure triad when the clarification used is-it phrasing", () => {
+  const reply = buildShortClarificationReply({
+    userText: "go on",
+    interactionMode: "normal_chat",
+    topicType: "general_request",
+    currentTopic: "work",
+    lastAssistantText: "I mean is it workload, a person, or a decision you keep circling.",
+  });
+
+  assert.match(reply, /pick one|three|workload|person|decision|thread/i);
+  assert.doesNotMatch(reply, /fine\. say what you want|what you actually want|start talking/i);
+});
+
+test("what-do-you-mean stays on the work-pressure triad instead of a generic lead shell", () => {
+  const reply = buildShortClarificationReply({
+    userText: "what do you mean?",
+    interactionMode: "normal_chat",
+    topicType: "general_request",
+    currentTopic: "work",
+    lastAssistantText: "Good. Is it workload, a person, or a decision you keep circling?",
+  });
+
+  assert.match(reply, /workload|person|decision|keep circling/i);
+  assert.doesNotMatch(reply, /fine\. say what you want|follow your lead|concrete part of open/i);
+});
+
 test("why stays on the confession line instead of stale usefulness", () => {
   const reply = buildShortClarificationReply({
     userText: "why?",

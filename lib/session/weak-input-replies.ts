@@ -1,8 +1,8 @@
 import { isSimpleGreeting } from "../dialogue/user-signals.ts";
 import {
   buildClarifyNudge,
+  buildOpenChatGreetingForInput,
   buildHowAreYouOpenReply,
-  buildOpenChatGreeting,
   buildOpenChatNudge,
 } from "./mode-style.ts";
 import {
@@ -116,7 +116,7 @@ function buildDeterministicDominantGreetingReply(lastUserMessage: string): strin
   if (isHowAreYouUserMessage(lastUserMessage)) {
     return buildHowAreYouOpenReply();
   }
-  return buildOpenChatGreeting();
+  return buildOpenChatGreetingForInput(lastUserMessage);
 }
 
 export function buildDeterministicDominantWeakInputReply(lastUserMessage: string): string | null {

@@ -30,6 +30,8 @@ type TrainingFollowUpOperation =
   | "depth"
   | "rationale"
   | "proof"
+  | "expand"
+  | "service_capability"
   | "alternate"
   | "stricter"
   | "softer"
@@ -356,6 +358,18 @@ function classifyOperation(text: string): TrainingFollowUpOperation {
     return "none";
   }
   if (
+    /\btell me what you can actually do for me\b/.test(normalized) ||
+    /\btell me what you can do for me\b/.test(normalized) ||
+    /\bwhat can you actually do for me\b/.test(normalized)
+  ) {
+    return "service_capability";
+  }
+  if (
+    /^(keep going|go on|tell me more|more|the concrete part)\b/.test(normalized)
+  ) {
+    return "expand";
+  }
+  if (
     /\b(what training do you think i need|what do you think i need|what kind of training do you think|what training would be good for me|what would be a good training|what should i train|what would fit me)\b/.test(
       normalized,
     )
@@ -364,6 +378,13 @@ function classifyOperation(text: string): TrainingFollowUpOperation {
   }
   if (/\b(how deep|what depth|how far|how far in)\b/.test(normalized)) {
     return "depth";
+  }
+  if (
+    /\b(?:keep|wear|use)\b/.test(normalized) &&
+    /\b(?:plug|dildo|toy)\b/.test(normalized) &&
+    /\bfor\s+\d+\s*(?:hours?|minutes?)\b/.test(normalized)
+  ) {
+    return "duration";
   }
   if (/\b(what would that prove|what does that prove|what is that meant to prove|what would that change|what is that meant to change)\b/.test(normalized)) {
     return "rationale";
@@ -408,6 +429,49 @@ function classifyOperation(text: string): TrainingFollowUpOperation {
     return "acknowledge";
   }
   return "none";
+}
+
+function buildDurationReply(thread: TrainingThreadState, userText: string): string {
+  const normalized = normalize(userText);
+  const requestedDuration = userText.match(/\b\d+\s*(?:hours?|minutes?)\b/i)?.[0]?.trim() ?? "that long";
+  const item = thread.item_name ?? (thread.subject === "anal" ? "plug" : "line");
+
+  if (thread.subject === "anal" && /\b(?:plug|dildo|toy)\b/.test(normalized)) {
+    return `Not as a default. For anal training, ${thread.recommended_duration} Keep the ${item} secure and comfortable, then remove it after the session instead of forcing ${requestedDuration} straight away.`;
+  }
+
+  return `Not as a default. For this line, ${thread.recommended_duration}`;
+}
+
+function buildExpandReply(thread: TrainingThreadState): string {
+  const item = thread.item_name ? ` with your ${thread.item_name}` : "";
+  switch (thread.subject) {
+    case "anal":
+      return `The concrete part is pace, pressure, and control${item}: ${thread.primary_variant}${item}, clean resets, and no greedy depth chasing. ${thread.rationale}`;
+    case "throat":
+      return `The concrete part is breathing, depth control, and resets${item}: ${thread.primary_variant}${item}, not showmanship. ${thread.rationale}`;
+    case "chastity":
+      return `The concrete part is the rule itself${item}: ${thread.primary_variant}${item}, exact check-ins, and no bargaining once the novelty wears off. ${thread.rationale}`;
+    case "bondage":
+      return `The concrete part is restraint changing your behavior${item}: ${thread.primary_variant}${item}, posture, and exact check-ins instead of decorative gear. ${thread.rationale}`;
+    default:
+      return `The concrete part is clarity, follow-through, and a rule that still holds once the pressure is real: ${thread.primary_variant}. ${thread.rationale}`;
+  }
+}
+
+function buildServiceCapabilityReply(thread: TrainingThreadState): string {
+  switch (thread.subject) {
+    case "anal":
+      return `I can give you a concrete anal training line: ${thread.primary_variant}${thread.item_name ? ` with your ${thread.item_name}` : ""}, ${thread.alternate_variant} if you want a different angle, and a cleaner pressure rule around it so the whole thing stays deliberate instead of decorative.`;
+    case "throat":
+      return `I can give you a concrete throat training line: ${thread.primary_variant}, ${thread.alternate_variant} if you want the other angle, and enough structure that the control stays cleaner than the performance.`;
+    case "chastity":
+      return `I can give you a concrete chastity line: ${thread.primary_variant}, ${thread.alternate_variant} if you want a different pressure shape, and a cleaner accountability rule so it actually costs you something.`;
+    case "bondage":
+      return `I can give you a concrete bondage line: ${thread.primary_variant}, ${thread.alternate_variant} if you want the other angle, and enough structure that the restraint changes your behavior instead of just your silhouette.`;
+    default:
+      return `I can make it concrete: one-rule obedience drills, clean-answer discipline, and enough structure that clarity and follow-through stop being decorative and start meaning something.`;
+  }
 }
 
 function buildRecommendation(thread: TrainingThreadState, inventory?: SessionInventoryItem[] | null): string {
@@ -550,6 +614,10 @@ export function buildTrainingFollowUpReply(input: {
       return thread.rationale;
     case "proof":
       return thread.proof_requirement;
+    case "expand":
+      return buildExpandReply(thread);
+    case "service_capability":
+      return buildServiceCapabilityReply(thread);
     case "alternate":
       if (!thread.alternate_variant) {
         return `I would keep the same line. ${thread.rationale}`;
@@ -576,7 +644,7 @@ export function buildTrainingFollowUpReply(input: {
     case "use_mode":
       return buildUseModeReply(thread);
     case "duration":
-      return `For this line, ${thread.recommended_duration}`;
+      return buildDurationReply(thread, input.userText);
     case "switch_subject": {
       const nextSubject = detectSubject(input.userText);
       if (nextSubject === "none") {

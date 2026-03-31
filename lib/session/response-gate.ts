@@ -7,7 +7,7 @@ import {
   type SceneState,
 } from "./scene-state.ts";
 import type { DialogueRouteAct } from "../dialogue/router.ts";
-import type { QuestionToneProfile } from "../chat/open-question.ts";
+import { buildPlanningQuestionFallback, type QuestionToneProfile } from "../chat/open-question.ts";
 import { isCoherentRelationalQuestionAnswer } from "../chat/relational-answer-alignment.ts";
 import { classifyCoreConversationMove } from "../chat/core-turn-move.ts";
 import {
@@ -37,6 +37,7 @@ import {
   type TurnPlan,
 } from "../chat/turn-plan.ts";
 import { createResponseGateCandidateBuilder } from "./response-gate-candidates.ts";
+import { buildSceneScaffoldReply } from "./scene-scaffolds.ts";
 
 export type ResponseGateInput = {
   text: string;
@@ -263,6 +264,9 @@ function violatesEmbodiedVoice(input: ResponseGateInput, text: string): boolean 
   if (isLockedExecutionMode(input.sceneState.interaction_mode)) {
     return false;
   }
+  if (input.sceneState.topic_type === "task_execution") {
+    return false;
+  }
   if (input.observationTrust && containsVisualClaim(text)) {
     return false;
   }
@@ -325,6 +329,30 @@ function containsWeakClarificationAnchor(text: string): boolean {
   return WEAK_CLARIFICATION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+function isActiveAnswerFirstTrainingFollowUp(input: ResponseGateInput): boolean {
+  if (input.sceneState.active_training_thread.subject === "none") {
+    return false;
+  }
+  const normalized = normalize(input.userText).toLowerCase();
+  return (
+    /\btell me what you can actually do for me\b/.test(normalized) ||
+    /\btell me what you can do for me\b/.test(normalized) ||
+    /^(?:keep going|go on|tell me more|the concrete part)\b/.test(normalized) ||
+    (/^\s*so\b/.test(normalized) && /\b(?:plug|dildo|toy)\b/.test(normalized) && /\b\d+\s*(?:hours?|minutes?)\b/.test(normalized))
+  );
+}
+
+function isQuestionFirstAnswerThreadReset(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /\benough hovering\b/.test(normalized) ||
+    /\bsharp enough\b/.test(normalized) ||
+    /\btell me why you'?re here\b/.test(normalized) ||
+    /\bwhat you actually want\b/.test(normalized) ||
+    /^(?:good|yes|fine|if you want that from me|then)?[,. ]*(?:then )?tell me\b/.test(normalized)
+  );
+}
+
 function isRepairReplyGrounded(
   input: ResponseGateInput,
   text: string,
@@ -370,8 +398,14 @@ function isActiveTaskThread(input: ResponseGateInput): boolean {
 function isSafeProfileQuestion(text: string): boolean {
   return (
     /\?/.test(text) &&
-    !/\b(here is your task|task:|start now|put it on now|reply done|check in once halfway through)\b/i.test(
+    !/\b(here is your task|task:|start now|put it on now|reply done|check in once halfway through|start the session|our sessions|what do you want out of this session)\b/i.test(
       text,
+    ) &&
+    (
+      containsProfileIntakeQuestion(text) ||
+      /\b(what do you actually enjoy doing|off the clock|what else should i know|what do you lose track of time doing|what do you like about it|what about it actually keeps you there|what people usually miss about you|what should i call you|what do you want me to understand|what do not want pushed|what boundaries|what actually gets its hooks into you)\b/i.test(
+        text,
+      )
     )
   );
 }
@@ -462,8 +496,94 @@ function containsVerboseTaskDebugWrapper(text: string): boolean {
 }
 
 function containsStockConversationFallback(text: string): boolean {
-  return /\b(drop the fog and say what you want|say it cleanly\. what is actually on your mind|talk to me\. what is on your mind|all right\. tell me what is on your mind|point to the part you want answered|ask the exact question you want answered|name the part that lost you|tell me which part lost you|state the angle cleanly|we can break it down cleanly|there you are\. start talking|there you are\. tell me what is actually on your mind|start talking\.)\b/i.test(
+  return /\b(drop the fog and say what you want|fine\. say what you want|say it cleanly\. what is actually on your mind|talk to me\. what is on your mind|all right\. tell me what is on your mind|point to the part you want answered|ask the exact question you want answered|name the part that lost you|tell me which part lost you|state the angle cleanly|we can break it down cleanly|there you are\. start talking|there you are\. tell me what is actually on your mind|start talking\.)\b/i.test(
     normalize(text).toLowerCase(),
+  );
+}
+
+function containsWeakCasualProfileShell(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /\b(let'?s have a chat|you can lead the topic|i will steer as long as you participate)\b/.test(
+      normalized,
+    ) ||
+    /\bi'?ll follow your lead\b/.test(normalized) ||
+    /\bconcrete part of open\b/.test(normalized) ||
+    /\bthat sets the tone for this session\b/.test(normalized)
+  );
+}
+
+function containsWeakGameCorrectionShell(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /\banswer the prompt properly\b/.test(normalized) ||
+    /\bno stalling\b/.test(normalized)
+  );
+}
+
+function containsWeakGameContinuationShell(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /^keep going\.?$/i.test(normalize(text)) ||
+    /\bkeep going\. tell me the concrete part\b/.test(normalized) ||
+    /\bconcrete part of open\b/.test(normalized)
+  );
+}
+
+function isTrueActiveGameExecution(input: ResponseGateInput): boolean {
+  return (
+    input.sceneState.interaction_mode === "game" &&
+    input.sceneState.topic_locked &&
+    input.sceneState.topic_type === "game_execution"
+  );
+}
+
+function isWeakGameExplanationDrift(input: ResponseGateInput, text: string): boolean {
+  if (!isTrueActiveGameExecution(input)) {
+    return false;
+  }
+  const user = normalize(input.userText).toLowerCase();
+  if (!/\b(why that game|why this game|explain the game)\b/.test(user)) {
+    return false;
+  }
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /\bwe stay with\b/.test(normalized) &&
+    /\b(two throws|one final guess|digits only|break the command|answer each riddle)\b/.test(normalized)
+  );
+}
+
+function buildGameFollowThroughRepair(input: ResponseGateInput): string | null {
+  return buildSceneScaffoldReply({
+    act: input.dialogueAct ?? "other",
+    userText: input.userText,
+    sceneState: input.sceneState,
+    sessionMemory: input.sessionMemory ?? undefined,
+    inventory: input.inventory ?? undefined,
+  });
+}
+
+function isCasualProfileGateContext(input: ResponseGateInput): boolean {
+  if (isActiveTaskThread(input)) {
+    return false;
+  }
+  if (
+    input.sceneState.topic_type === "game_setup" ||
+    input.sceneState.topic_type === "game_execution" ||
+    input.sceneState.topic_type === "reward_negotiation" ||
+    input.sceneState.topic_type === "reward_window" ||
+    input.sceneState.topic_type === "task_negotiation" ||
+    input.sceneState.topic_type === "task_execution"
+  ) {
+    return false;
+  }
+  return (
+    input.sceneState.interaction_mode === "profile_building" ||
+    input.sceneState.topic_type === "general_request" ||
+    input.sceneState.topic_type === "none" ||
+    isAssistantSelfQuestion(input.userText) ||
+    isMutualGettingToKnowRequest(input.userText) ||
+    isProfileBuildingRequest(input.userText)
   );
 }
 
@@ -490,6 +610,8 @@ function containsWeakLiteralConversationLead(text: string): boolean {
 function containsProceduralConversationTemplate(text: string): boolean {
   const normalized = normalize(text).toLowerCase();
   return (
+    /\bkeep the same subject, but answer this change directly\b/.test(normalized) ||
+    /\bi heard your answer and i am continuing from it now\b/.test(normalized) ||
     /\bgive me the exact live point you want answered\b/.test(normalized) ||
     /\bask the exact question you want answered\b/.test(normalized) ||
     /\bask it plainly, and i will answer (?:it|you) directly\b/.test(normalized) ||
@@ -528,6 +650,338 @@ function containsUnexpectedExecutionScaffold(text: string): boolean {
 
 function containsThinConversationReply(text: string): boolean {
   return /^(?:good|yes|exactly|keep going)\.?$/i.test(normalize(text));
+}
+
+function isWeakAcknowledgementOnly(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /^(?:i mean\s+)?(?:noted|understood|heard|accepted|okay|ok|alright|all right|good)(?:,?\s*(?:pet|good|right|then))?[.!?]*$/.test(
+      normalized,
+    ) ||
+    /^(?:noted|understood)(?:,?\s*(?:pet|good|then))?\.\s*i heard your answer and i am continuing from it now\.$/.test(
+      normalized,
+    )
+  );
+}
+
+function isPlanningTurnPlan(turnPlan: TurnPlan | null | undefined): boolean {
+  if (!turnPlan) {
+    return false;
+  }
+  const combined = normalize(
+    `${turnPlan.latestUserMessage} ${turnPlan.previousAssistantMessage ?? ""} ${turnPlan.activeThread}`,
+  ).toLowerCase();
+  return (
+    /\b(?:help(?: me)? plan|let'?s plan|plan my|plan tomorrow|plan saturday|figure out my)\b/.test(
+      combined,
+    ) ||
+    /\b(plan|planning|workdays|weekends|errands first|gym first|downtime first|morning plan|morning block|wake time|focused hour|first block|saturday|tomorrow morning)\b/.test(
+      combined,
+    )
+  );
+}
+
+function isTaskTurnPlan(turnPlan: TurnPlan | null | undefined): boolean {
+  if (!turnPlan) {
+    return false;
+  }
+  const combined = normalize(
+    `${turnPlan.latestUserMessage} ${turnPlan.previousAssistantMessage ?? ""} ${turnPlan.activeThread}`,
+  ).toLowerCase();
+  return (
+    /\b(?:here is your task|start now|report back|check in once halfway|that task is complete|ask for the next task)\b/.test(
+      combined,
+    ) ||
+    /\b(?:task|check in|report back|what counts as done|why that task|set me another one|different task|make it \d+\s*(?:minutes?|hours?))\b/.test(
+      combined,
+    )
+  );
+}
+
+function hasPlanningContinuationContext(input: ResponseGateInput): boolean {
+  const combined = normalize(
+    `${input.userText} ${input.lastAssistantText ?? ""} ${input.sceneState.last_assistant_text ?? ""} ${input.sceneState.agreed_goal ?? ""}`,
+  ).toLowerCase();
+  return /\b(tomorrow morning|morning plan|morning block|wake time|first block|saturday|errands first|gym first|downtime first|the evening stays open|evening plan|workdays first|weekends first|plan)\b/.test(
+    combined,
+  );
+}
+
+function containsGenericPlanningDrift(input: ResponseGateInput, text: string): boolean {
+  if (!hasPlanningContinuationContext(input)) {
+    return false;
+  }
+  const user = normalize(input.userText).toLowerCase();
+  const normalized = normalize(text).toLowerCase();
+
+  if (
+    /^\s*(?:errands first|gym first|downtime first)\s*$/.test(user) &&
+    /\b(let'?s plan your saturday around|what specific tasks do you need to complete|what specific tasks do you need to get done this weekend|be as detailed as possible)\b/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    (/^\s*why\??\s*$/.test(user) || /^what do you mean\??$/.test(user)) &&
+    /\b(establish a clear schedule|establish a routine|makes everything run smoothly|increases productivity|responsibilities|which errands should we prioritize|let'?s get into the specifics)\b/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /^(?:then what|what next|and then what)\??$/.test(user) &&
+    /\b(how would you like to spend the rest of the day)\b/.test(normalized)
+  ) {
+    return true;
+  }
+
+  if (
+    (/\bchange that\b.*\bgym\b.*\berrands\b/.test(user) ||
+      /\bchange that,\s*put gym before errands\b/.test(user)) &&
+    (
+      /\b(reorganize and plan for a gym visit|specific gym activity|workout routine|start with the gym and then move on to your errands)\b/.test(
+        normalized,
+      ) ||
+      (/\bswap that up\b/.test(normalized) && /\bstart with the gym\b/.test(normalized) && /\berrands\b/.test(normalized))
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    /\bwhat about the evening\b/.test(user) &&
+    /\bwhat it actually changes between people\b/.test(normalized)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasTaskContinuationContext(input: ResponseGateInput): boolean {
+  if (isActiveTaskThread(input)) {
+    return true;
+  }
+  const combined = normalize(
+    `${input.userText} ${input.lastAssistantText ?? ""} ${input.sceneState.last_assistant_text ?? ""} ${input.sceneState.current_task_domain} ${input.sceneState.task_spec.current_task_family} ${input.sceneState.task_spec.requested_domain}`,
+  ).toLowerCase();
+  return /\b(task|report back|check in once halfway|what counts as done|why that task|why this task|set me another one|next task|what else should i do now|start now|reply done)\b/.test(
+    combined,
+  );
+}
+
+function containsGenericTaskDrift(input: ResponseGateInput, text: string): boolean {
+  if (!hasTaskContinuationContext(input)) {
+    return false;
+  }
+  const user = normalize(input.userText).toLowerCase();
+  const normalized = normalize(text).toLowerCase();
+
+  if (
+    /\b(why that task|why this task|why that one|why this one)\b/.test(user) &&
+    /\b(control test|ready for more complex|adjust your next task)\b/.test(normalized)
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(what counts as done|what counts as complete|what exactly counts as done)\b/.test(user) &&
+    /\b(current checkpoint|report back cleanly)\b/.test(normalized) &&
+    !/\b(done means|20 minutes|30 minutes|hour|halfway)\b/.test(normalized)
+  ) {
+    return true;
+  }
+
+  if (
+    /\b(set me another one|give me another one|give me the next one|next task|another task|new task)\b/.test(
+      user,
+    ) &&
+    (
+      containsStockConversationFallback(text) ||
+      /\b(adjust the line after this|missing constraint|time window)\b/.test(normalized)
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function isKnownTaskDomain(
+  value: string,
+): value is SceneState["current_task_domain"] | SceneState["locked_task_domain"] {
+  return /^(general|device|frame|posture|hands|kneeling|shoulders|stillness)$/.test(value);
+}
+
+function resolveTaskRepairDomain(input: ResponseGateInput): SceneState["current_task_domain"] {
+  if (
+    input.sceneState.task_spec.requested_domain !== "none" &&
+    isKnownTaskDomain(input.sceneState.task_spec.requested_domain)
+  ) {
+    return input.sceneState.task_spec.requested_domain;
+  }
+  if (
+    input.sceneState.user_requested_task_domain !== "none" &&
+    isKnownTaskDomain(input.sceneState.user_requested_task_domain)
+  ) {
+    return input.sceneState.user_requested_task_domain;
+  }
+  if (input.sceneState.locked_task_domain !== "none") {
+    return input.sceneState.locked_task_domain;
+  }
+  if (input.sceneState.current_task_domain !== "general") {
+    return input.sceneState.current_task_domain;
+  }
+  if (/\b(stillness|steady|hold)\b/.test(input.sceneState.task_spec.current_task_family)) {
+    return "stillness";
+  }
+  return "general";
+}
+
+function buildTaskFollowThroughRepair(input: ResponseGateInput): string | null {
+  const repairDomain = resolveTaskRepairDomain(input);
+  const explicitNextTaskRequest = /\b(set me another one|give me another one|give me the next one|next task|another task|new task)\b/i.test(
+    normalize(input.userText),
+  );
+  return buildSceneScaffoldReply({
+    act: input.dialogueAct ?? "other",
+    userText: input.userText,
+    sceneState: {
+      ...input.sceneState,
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      topic_state: "open",
+      current_task_domain: repairDomain,
+      locked_task_domain: repairDomain,
+      user_requested_task_domain: explicitNextTaskRequest
+        ? repairDomain
+        : input.sceneState.user_requested_task_domain,
+      task_spec: {
+        ...input.sceneState.task_spec,
+        request_fulfilled: true,
+        requested_domain:
+          input.sceneState.task_spec.requested_domain === "none" ||
+          !isKnownTaskDomain(input.sceneState.task_spec.requested_domain)
+            ? repairDomain
+            : input.sceneState.task_spec.requested_domain,
+        request_kind: explicitNextTaskRequest
+          ? "replacement"
+          : input.sceneState.task_spec.request_kind,
+        next_required_action: explicitNextTaskRequest
+          ? "fulfill_request"
+          : input.sceneState.task_spec.next_required_action,
+        request_stage: explicitNextTaskRequest
+          ? "ready_to_fulfill"
+          : input.sceneState.task_spec.request_stage,
+        selection_mode: explicitNextTaskRequest
+          ? "direct_assignment"
+          : input.sceneState.task_spec.selection_mode,
+      },
+    },
+    sessionMemory: input.sessionMemory ?? undefined,
+    inventory: input.inventory ?? undefined,
+  });
+}
+
+function isMissingPlanningDetourBridge(input: ResponseGateInput, text: string): boolean {
+  const previous = normalize(input.lastAssistantText ?? input.sceneState.last_assistant_text ?? "").toLowerCase();
+  const user = normalize(input.userText).toLowerCase();
+  const normalized = normalize(text).toLowerCase();
+  if (
+    !/\bone round first, then we return to (tomorrow morning|the morning plan|the week|saturday|the evening plan)\b/.test(
+      previous,
+    )
+  ) {
+    return false;
+  }
+  if (
+    input.sceneState.topic_type !== "game_setup" ||
+    input.sceneState.interaction_mode !== "game"
+  ) {
+    return false;
+  }
+  if (!/\b(you pick|you choose|pick for me|surprise me)\b/.test(user)) {
+    return false;
+  }
+  return (
+    /\b(i pick|we are doing|number hunt|rock paper scissors|math duel|riddle lock|number command)\b/.test(
+      normalized,
+    ) &&
+    !/\b(one round|return to)\b/.test(normalized)
+  );
+}
+
+function buildPlanningDriftRepair(input: ResponseGateInput): string | null {
+  const fallback = buildPlanningQuestionFallback(input.userText, {
+    previousAssistantText: input.lastAssistantText ?? input.sceneState.last_assistant_text ?? null,
+    currentTopic: input.sceneState.agreed_goal || null,
+  });
+  if (fallback) {
+    return fallback;
+  }
+  const normalized = normalize(input.userText).toLowerCase();
+  if (/\bchange that\b/i.test(normalized) && /\bgym\b/i.test(normalized) && /\berrands\b/i.test(normalized)) {
+    return "Fine. Gym first, errands second, evening still open. The thread stays the same, only the order changes.";
+  }
+  return null;
+}
+
+function isSoftPlanningReorderDrift(input: ResponseGateInput, text: string): boolean {
+  const user = normalize(input.userText).toLowerCase();
+  const normalized = normalize(text).toLowerCase();
+  return (
+    (/\bchange that\b.*\bgym\b.*\berrands\b/.test(user) ||
+      /\bchange that,\s*put gym before errands\b/.test(user)) &&
+    /\bswap that up\b/.test(normalized) &&
+    /\bstart with the gym\b/.test(normalized) &&
+    /\berrands\b/.test(normalized)
+  );
+}
+
+function buildPlanningDetourBridgeRepair(input: ResponseGateInput, text: string): string | null {
+  const previous = normalize(input.lastAssistantText ?? input.sceneState.last_assistant_text ?? "");
+  const match = previous.match(
+    /(Good\.\s*One round first, then we return to (?:tomorrow morning|the morning plan|the week|saturday|the evening plan)\.)/i,
+  );
+  if (!match) {
+    return null;
+  }
+  if (/\b(one round|return to)\b/i.test(text)) {
+    return text;
+  }
+  return `${match[1]} ${text}`.trim();
+}
+
+function shouldEnforceProfileGatherTurn(input: ResponseGateInput): boolean {
+  if (!input.turnPlan || input.turnPlan.requestedAction !== "gather_profile_only_when_needed") {
+    return false;
+  }
+  if (isPlanningTurnPlan(input.turnPlan) || isTaskTurnPlan(input.turnPlan)) {
+    return false;
+  }
+  const combined = normalize(
+    `${input.userText} ${input.turnPlan.activeThread} ${input.turnPlan.previousAssistantMessage ?? ""}`,
+  ).toLowerCase();
+  if (
+    /\b(?:help(?: me)? plan|let'?s plan|plan my|plan tomorrow|plan saturday|plan my week|figure out my|go back to|back to|return to)\b/.test(
+      combined,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /\b(?:what counts as done|why that task|set me another one|different task|make it \d+\s*(?:minutes?|hours?))\b/.test(
+      combined,
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function shouldAllowRepeatedGamePrompt(input: ResponseGateInput, text: string): boolean {
@@ -648,9 +1102,16 @@ function shouldEnforceTurnPlan(input: ResponseGateInput): boolean {
     input.turnPlan.requestedAction === "modify_existing_idea" ||
     input.turnPlan.requestedAction === "revise_previous_plan" ||
     input.turnPlan.requestedAction === "expand_previous_answer" ||
+    shouldEnforceProfileGatherTurn(input) ||
     input.turnPlan.requestedAction === "acknowledge_then_act" ||
     input.turnPlan.requestedAction === "summarize_current_thread" ||
     input.turnPlan.requestedAction === "follow_through_commitment" ||
+    (input.turnPlan.requestedAction === "shift_topic" &&
+      isPlanningTurnPlan(input.turnPlan) &&
+      /\b(go back|back to|return to)\b/i.test(normalize(input.userText))) ||
+    (input.turnPlan.requestedAction === "answer_direct_question" &&
+      isPlanningTurnPlan(input.turnPlan)) ||
+    (input.turnPlan.requestedAction === "continue_active_thread" && isPlanningTurnPlan(input.turnPlan)) ||
     (input.turnPlan.requestedAction === "interpret_and_reflect" &&
       isBareOpinionFollowUp(input.userText))
   );
@@ -752,6 +1213,9 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
         normalized,
       );
     }
+    if (isWeakAcknowledgementOnly(text)) {
+      return false;
+    }
     const kind = detectShortFollowUpKind(input.userText);
     if (kind === "go_on") {
       return /\b(keep going|tell me|because|concrete part|being trained by me|useful to me|what people usually|get wrong|what would make you useful|what you could actually do)\b/i.test(
@@ -793,6 +1257,7 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
     if (isChatSwitchRequest(input.userText)) {
       return /\b(chat|talk|mind|normal)\b/.test(normalized);
     }
+    const previousAskedQuestion = Boolean(input.lastAssistantText && /\?/.test(input.lastAssistantText));
     if (isAssistantSelfQuestion(input.userText) || isMutualGettingToKnowRequest(input.userText)) {
       return (
         /\b(i like|i enjoy|i pay attention|what matters|what pulls you in|what do you want to know first|ask me something real)\b/i.test(
@@ -812,12 +1277,18 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
       isProfileBuildingRequest(input.userText) ||
       isMutualGettingToKnowRequest(input.userText)
     ) {
+      if (/\b(start the session|our sessions|what do you want out of this session)\b/i.test(normalized)) {
+        return false;
+      }
       return (
         isSafeProfileQuestion(normalized) ||
         /\b(what do you want to know about me|tell me something about yourself|i pay attention|i remember what matters|both ways|give me something real back)\b/i.test(
           normalized,
         ) || hasKeywordOverlap(user, normalized)
       );
+    }
+    if (previousAskedQuestion && isWeakAcknowledgementOnly(text) && !hasKeywordOverlap(user, normalized)) {
+      return false;
     }
     return (
       /\b(noted|understood|i will use that)\b/.test(normalized) ||
@@ -1011,6 +1482,93 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     reason = "visual_claim_blocked_by_trust";
   }
 
+  const planningDriftDetected = !forced && containsGenericPlanningDrift(input, text);
+  const planningDetourBridgeMissing = !forced && isMissingPlanningDetourBridge(input, text);
+  const softPlanningReorderDetected = !forced && isSoftPlanningReorderDrift(input, text);
+  if (!forced && planningDriftDetected) {
+    const repaired = buildPlanningDriftRepair(input);
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "planning_drift_replaced";
+    }
+  }
+  if (!forced && planningDetourBridgeMissing) {
+    const repaired = buildPlanningDetourBridgeRepair(input, text);
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "planning_detour_bridge_restored";
+    }
+  }
+  if (!forced && softPlanningReorderDetected) {
+    const repaired = buildPlanningDriftRepair(input);
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "planning_drift_replaced";
+    }
+  }
+  if (
+    !forced &&
+    /\b(set me another one|give me another one|give me the next one|next task|another task|new task)\b/i.test(
+      normalize(input.userText),
+    ) &&
+    input.sceneState.task_spec.request_fulfilled &&
+    input.sceneState.task_spec.current_task_family.length > 0 &&
+    input.sceneState.topic_type !== "task_execution" &&
+    !/\b(here is your task|next task|start now|report back when it is done)\b/i.test(text)
+  ) {
+    const repaired = candidates.buildFallback();
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "task_follow_through_replaced";
+    }
+  }
+  if (!forced && containsGenericTaskDrift(input, text)) {
+    const repaired = buildTaskFollowThroughRepair(input);
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "task_follow_through_replaced";
+    }
+  }
+  if (
+    !forced &&
+    isTrueActiveGameExecution(input) &&
+    input.dialogueAct === "user_question" &&
+    containsWeakGameCorrectionShell(text)
+  ) {
+    const repaired = buildGameFollowThroughRepair(input);
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "weak_game_correction_replaced";
+    }
+  }
+  if (
+    !forced &&
+    isTrueActiveGameExecution(input) &&
+    input.dialogueAct === "short_follow_up" &&
+    containsWeakGameContinuationShell(text)
+  ) {
+    const repaired = buildGameFollowThroughRepair(input);
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "weak_game_continuation_replaced";
+    }
+  }
+  if (!forced && isWeakGameExplanationDrift(input, text)) {
+    const repaired = buildGameFollowThroughRepair(input);
+    if (repaired && normalize(repaired).toLowerCase() !== normalize(text).toLowerCase()) {
+      text = repaired;
+      forced = true;
+      reason = "weak_game_explanation_replaced";
+    }
+  }
+
   if (
     input.turnPlan &&
     enforceTurnPlan &&
@@ -1081,11 +1639,25 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     input.dialogueAct !== "task_request" &&
     input.dialogueAct !== "duration_request" &&
     conversationMove !== "blocked_need_clarification" &&
-    conversationMove !== "concrete_request"
+    (
+      conversationMove !== "concrete_request" ||
+      input.sceneState.interaction_mode === "profile_building" ||
+      isProfileBuildingRequest(input.userText)
+    )
   ) {
     text = candidates.buildOpenConversationFallback();
     forced = true;
     reason = "generic_fallback_on_valid_turn";
+  }
+
+  if (
+    !forced &&
+    isCasualProfileGateContext(input) &&
+    containsWeakCasualProfileShell(text)
+  ) {
+    text = candidates.buildOpenConversationFallback();
+    forced = true;
+    reason = "weak_casual_profile_shell";
   }
 
   if (
@@ -1143,6 +1715,16 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     });
     forced = true;
     reason = "weak_clarification_anchor";
+  }
+
+  if (
+    !forced &&
+    isActiveAnswerFirstTrainingFollowUp(input) &&
+    isQuestionFirstAnswerThreadReset(text)
+  ) {
+    text = candidates.buildFallback();
+    forced = true;
+    reason = "answer_thread_not_answered_first";
   }
 
   if (!forced && containsWeakLiteralConversationLead(text)) {

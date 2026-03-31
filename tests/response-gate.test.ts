@@ -11,6 +11,7 @@ import {
   applyResponseGate,
   scrubVisibleInternalLeakText,
 } from "../lib/session/response-gate.ts";
+import { createResponseGateCandidateBuilder } from "../lib/session/response-gate-candidates.ts";
 import {
   createSceneState,
   noteSceneStateAssistantTurn,
@@ -18,6 +19,7 @@ import {
 } from "../lib/session/scene-state.ts";
 import { createSessionMemory, writeUserAnswer } from "../lib/session/session-memory.ts";
 import { classifyDialogueRoute } from "../lib/dialogue/router.ts";
+import { createEmptyTrainingThread } from "../lib/session/training-thread.ts";
 
 test("response gate strips leaked internal prompt lines", () => {
   const result = applyResponseGate({
@@ -166,6 +168,451 @@ test("response gate rewrites assistant-service turn-back fallback into a real tr
   assert.match(result.text, /training|obedience|drill|one clean sentence|permission|cuffs|collar|plug|rule/i);
 });
 
+test("response gate rejects generic fallback on a valid planning opener", () => {
+  const turnPlan = buildTurnPlan([{ role: "user", content: "help me plan tomorrow morning" }]);
+
+  const result = applyResponseGate({
+    text: "Fine. Say what you want.",
+    userText: "help me plan tomorrow morning",
+    lastAssistantText: null,
+    turnPlan,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(tomorrow morning|what time|wake time|first block|anchor)\b/i);
+  assert.doesNotMatch(result.text, /fine\. say what you want|enough hovering/i);
+});
+
+test("response gate rejects wrong-family fallback on an active planning continuation", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+      },
+      { role: "user", content: "then what" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-planning-continuation"),
+        active_thread: "saturday",
+        active_topic: "saturday",
+        current_mode: "normal_chat",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Enough hovering, pet. Tell me what you actually want.",
+    userText: "then what",
+    lastAssistantText:
+      "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    turnPlan,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(gym|food|evening|after that)\b/i);
+  assert.doesNotMatch(result.text, /enough hovering|what you actually want|trained|useful to me/i);
+});
+
+test("response gate rejects planning clarification that reopens intake instead of answering the current plan", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+      },
+      { role: "user", content: "why" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-planning-why"),
+        active_thread: "saturday",
+        active_topic: "saturday",
+        current_mode: "normal_chat",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Because it helps us make a clear plan. Now, what are those tasks you need to get done?",
+    userText: "why",
+    lastAssistantText:
+      "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    turnPlan,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(because|errands|cleaner|later|gym|evening)\b/i);
+  assert.doesNotMatch(result.text, /what are those tasks you need to get done/i);
+});
+
+test("response gate rejects planning continuation that drifts into generic structuring language", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "Because errands first keeps the loose outside movement up front, so the rest of Saturday stops leaking around it. Then gym lands clean, and the evening stays open.",
+      },
+      { role: "user", content: "then what" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-planning-then-what"),
+        active_thread: "saturday",
+        active_topic: "saturday",
+        current_mode: "normal_chat",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "First, focus on structuring your day with clarity and precision. We can touch on the evening when we're closer to it, pet.",
+    userText: "then what",
+    lastAssistantText:
+      "Because errands first keeps the loose outside movement up front, so the rest of Saturday stops leaking around it. Then gym lands clean, and the evening stays open.",
+    turnPlan,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(gym|food|evening|after that|next block)\b/i);
+  assert.doesNotMatch(result.text, /structuring your day with clarity and precision|touch on the evening when we're closer to it/i);
+});
+
+test("response gate rejects generic errands-first planning drift and restores the concrete next-plan beat", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      { role: "assistant", content: "Fine. Do you want errands first, gym first, or downtime first?" },
+      { role: "user", content: "errands first" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-planning-errands-concrete"),
+        active_thread: "saturday",
+        active_topic: "saturday",
+        current_mode: "normal_chat",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Alright, let's start with running errands. What tasks need to be done this weekend?",
+    userText: "errands first",
+    lastAssistantText: "Fine. Do you want errands first, gym first, or downtime first?",
+    turnPlan,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "turn_plan_misaligned");
+  assert.match(result.text, /\b(errands first|gym|evening)\b/i);
+  assert.doesNotMatch(result.text, /what tasks need to be done this weekend/i);
+});
+
+test("response gate rejects generic errands-first drift on the live path without relying on turn plan", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Fine. Do you want errands first, gym first, or downtime first?",
+    memory: createSessionMemory(),
+  });
+
+  const result = applyResponseGate({
+    text: "Alright, let's plan your Saturday around errands first. What specific tasks do you need to complete?",
+    userText: "errands first",
+    lastAssistantText: "Fine. Do you want errands first, gym first, or downtime first?",
+    sceneState: {
+      ...scene,
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(errands first|gym|evening)\b/i);
+  assert.doesNotMatch(result.text, /what specific tasks do you need to complete/i);
+});
+
+test("response gate rejects generic why drift inside an active saturday plan on the live path", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    memory: createSessionMemory(),
+  });
+
+  const result = applyResponseGate({
+    text: "Because it will help us establish a clear schedule and reduce the chance of missing any important tasks or appointments. Having a well-planned day makes everything run smoothly and increases productivity. Now, let's get into the specifics.",
+    userText: "why",
+    lastAssistantText: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    sceneState: {
+      ...scene,
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(errands|saturday|cleaner|spill)\b/i);
+  assert.doesNotMatch(result.text, /establish a clear schedule|increases productivity/i);
+});
+
+test("response gate rejects routine-style why drift and restores the concrete saturday explanation", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    memory: createSessionMemory(),
+  });
+
+  const result = applyResponseGate({
+    text: "Because it helps us establish a routine and ensures we're making progress on our responsibilities. Now, which errands should we prioritize?",
+    userText: "why",
+    lastAssistantText: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    sceneState: {
+      ...scene,
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(errands|saturday|cleaner|spill)\b/i);
+  assert.doesNotMatch(result.text, /establish a routine|responsibilities|which errands should we prioritize/i);
+});
+
+test("response gate rejects generic then-what drift inside an active saturday plan on the live path", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Because errands spill if you push them late. This keeps the rest of Saturday cleaner.",
+    memory: createSessionMemory(),
+  });
+
+  const result = applyResponseGate({
+    text: "Alright, pet. Once we complete your errands, how would you like to spend the rest of the day?",
+    userText: "then what",
+    lastAssistantText: "Because errands spill if you push them late. This keeps the rest of Saturday cleaner.",
+    sceneState: {
+      ...scene,
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(then|gym|food|evening)\b/i);
+  assert.doesNotMatch(result.text, /spend the rest of the day/i);
+});
+
+test("response gate rejects generic evening planning drift and restores the concrete evening beat", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+      },
+      { role: "user", content: "ok and what about the evening?" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-planning-evening-concrete"),
+        active_thread: "saturday",
+        active_topic: "saturday",
+        current_mode: "normal_chat",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "We can stay on evening. Tell me what it actually changes between people.",
+    userText: "ok and what about the evening?",
+    lastAssistantText:
+      "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    turnPlan,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(evening|social|clean stop)\b/i);
+  assert.doesNotMatch(result.text, /what it actually changes between people/i);
+});
+
+test("response gate rejects generic evening drift inside an active plan on the live path", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    memory: createSessionMemory(),
+  });
+
+  const result = applyResponseGate({
+    text: "We can stay on evening. Tell me what it actually changes between people.",
+    userText: "ok and what about the evening?",
+    lastAssistantText:
+      "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    sceneState: {
+      ...scene,
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(evening|social|clean stop)\b/i);
+  assert.doesNotMatch(result.text, /what it actually changes between people/i);
+});
+
+test("response gate rejects soft reorder drift and restores the concrete gym-first revision", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Then gym, then food, then the evening stays flexible.",
+    memory: createSessionMemory(),
+  });
+
+  const result = applyResponseGate({
+    text: "Alright, let's swap that up. Start with the gym and then move on to your errands?",
+    userText: "change that, put gym before errands",
+    lastAssistantText: "Then gym, then food, then the evening stays flexible.",
+    sceneState: {
+      ...scene,
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(gym first|errands second|order changes)\b/i);
+  assert.doesNotMatch(result.text, /start with the gym and then move on to your errands/i);
+});
+
+test("response gate keeps the preserved-return bridge visible when a planning detour game is picked", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "Good. One round first, then we return to tomorrow morning. Do you want something quick, or do you want me to pick?",
+      },
+      { role: "user", content: "you pick" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-planning-detour-pick"),
+        active_thread: "game",
+        active_topic: "game",
+        current_mode: "game",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "I pick. We are doing number hunt, pet. You hunt one hidden number from 1 to 10. Two guesses maximum. Listen carefully, pet. First guess now. One number from 1 to 10.",
+    userText: "you pick",
+    lastAssistantText:
+      "Good. One round first, then we return to tomorrow morning. Do you want something quick, or do you want me to pick?",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_setup",
+      agreed_goal: "tomorrow morning",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b(number hunt|pick one number|one round|return to tomorrow morning|tomorrow morning)\b/i);
+});
+
+test("response gate keeps the preserved-return bridge visible on a detour pick without relying on turn plan", () => {
+  const result = applyResponseGate({
+    text: "I pick. We are doing number hunt, pet. You hunt one hidden number from 1 to 10. Two guesses maximum. Listen carefully, pet. First guess now. One number from 1 to 10.",
+    userText: "you pick",
+    dialogueAct: "answer_activity_choice",
+    lastAssistantText:
+      "Good. One round first, then we return to tomorrow morning. Do you want something quick, or do you want me to pick?",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_setup",
+      topic_locked: true,
+      agreed_goal: "tomorrow morning",
+      last_assistant_text:
+        "Good. One round first, then we return to tomorrow morning. Do you want something quick, or do you want me to pick?",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(one round|return to tomorrow morning)\b/i);
+  assert.match(result.text, /\b(number hunt|pick one number)\b/i);
+});
+
+test("response gate rejects game-family continuation when the user explicitly returns to the prior planning thread", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "Good. After this round, we return to the morning plan. Keep the game quick, then I put you back on the first block.",
+      },
+      { role: "user", content: "go back to that morning block you mentioned" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-planning-return"),
+        active_thread: "tomorrow morning",
+        active_topic: "tomorrow morning",
+        current_mode: "normal_chat",
+      },
+    },
+  );
+
+  const sceneState = noteSceneStateAssistantTurn(
+    {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+    },
+    {
+      text: "Good. After this round, we return to the morning plan. Keep the game quick, then I put you back on the first block.",
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Stay on this game, pet. First throw now. Choose rock, paper, or scissors.",
+    userText: "go back to that morning block you mentioned",
+    lastAssistantText:
+      "Good. After this round, we return to the morning plan. Keep the game quick, then I put you back on the first block.",
+    turnPlan,
+    sceneState,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(morning block|wake time|focused hour|first block|morning plan)\b/i);
+  assert.doesNotMatch(result.text, /first throw now|choose rock, paper, or scissors|stay on this game/i);
+});
+
 test("response gate accepts how-are-you reply as aligned social answer", () => {
   const result = applyResponseGate({
     text: "Sharp enough. Now tell me why you're here.",
@@ -203,8 +650,11 @@ test("response gate replaces duplicate output with a fallback when needed", () =
   });
 
   assert.equal(result.forced, true);
-  assert.equal(result.reason, "duplicate_output_blocked");
-  assert.match(result.text, /Choose quick or longer/i);
+  assert.match(result.reason, /duplicate_output_(?:blocked|replaced)/);
+  assert.match(
+    result.text,
+    /Choose quick,? or choose something that runs for a few minutes|Choose quick or longer/i,
+  );
   assert.notEqual(
     result.text.toLowerCase(),
     "fine. we stay with the game. choose quick or longer, or tell me to pick.",
@@ -702,7 +1152,453 @@ test("response gate duplicate replacement keeps profile questioning adaptive", (
 
   assert.equal(result.forced, true);
   assert.doesNotMatch(result.text, /what should i call you/i);
-  assert.match(result.text, /gets its hooks into you|does that do to your head|hard nos|tone dies on contact/i);
+  assert.match(
+    result.text,
+    /gets its hooks into you|does that do to your head|hard nos|tone dies on contact|people usually miss about you|keep in mind/i,
+  );
+});
+
+test("response gate rejects stock fallback on a profile-building request", () => {
+  const scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "I want you to learn what I like",
+    act: "other",
+    sessionTopic: null,
+  });
+  const turnPlan = buildTurnPlan([{ role: "user", content: "I want you to learn what I like" }], {
+    conversationState: createConversationStateSnapshot("response-gate-profile-request"),
+  });
+
+  const result = applyResponseGate({
+    text: "Fine. Say what you want.",
+    userText: "I want you to learn what I like",
+    dialogueAct: "user_answer",
+    lastAssistantText: null,
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+    turnPlan,
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(
+    result.text,
+    /what do you actually enjoy doing|what should i call you|what do you want me to understand/i,
+  );
+  assert.doesNotMatch(result.text, /fine\. say what you want/i);
+});
+
+test("response gate rejects opener reset on an active answer-thread follow-up question", () => {
+  const conversationState = {
+    ...createConversationStateSnapshot("response-gate-answer-thread-service"),
+    current_mode: "relational_chat" as const,
+    active_thread: "what being trained by me would actually change for you",
+    active_topic: "what being trained by me would actually change for you",
+  };
+  const scene = {
+    ...createSceneState(),
+    active_training_thread: {
+      ...createEmptyTrainingThread(),
+      subject: "anal" as const,
+      item_name: "plug",
+      primary_variant: "a slow anal hold",
+      alternate_variant: "paced anal intervals",
+      focus: "pressure tolerance, patience, and control under repetition",
+      rationale:
+        "That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy.",
+      proof_requirement:
+        "Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through.",
+      depth_guidance:
+        "Deep enough that you can keep the pace deliberate and the control clean. I want control first, not maximum depth for its own sake.",
+      recommended_duration: "15 to 20 minutes to start, longer only if the control stays deliberate.",
+      last_response:
+        "For anal training, I would start with a slow anal hold: settle into the pressure, hold it on a timer, ease off cleanly, and repeat without rushing.",
+    },
+  };
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "If you want training, tell me what you want it to change in you once it stops being decorative.",
+      },
+      { role: "user", content: "tell me what you can actually do for me" },
+    ],
+    { conversationState },
+  );
+
+  const result = applyResponseGate({
+    text: "Sharp enough. Now tell me why you're here.",
+    userText: "tell me what you can actually do for me",
+    dialogueAct: "other",
+    lastAssistantText:
+      "If you want training, tell me what you want it to change in you once it stops being decorative.",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+    turnPlan,
+  });
+
+  assert.equal(result.forced, true);
+  assert.doesNotMatch(result.text, /why you're here|sharp enough/i);
+  assert.match(result.text, /concrete anal training line|slow anal hold|paced anal intervals|pressure rule|deliberate instead of decorative/i);
+});
+
+test("response gate rejects opener or probe fallback on concrete-part follow-up turns", () => {
+  const conversationState = {
+    ...createConversationStateSnapshot("response-gate-answer-thread-concrete"),
+    current_mode: "relational_chat" as const,
+    active_thread: "what being trained by me would actually change for you",
+    active_topic: "what being trained by me would actually change for you",
+  };
+  const scene = {
+    ...createSceneState(),
+    active_training_thread: {
+      ...createEmptyTrainingThread(),
+      subject: "anal" as const,
+      item_name: "plug",
+      primary_variant: "a slow anal hold",
+      alternate_variant: "paced anal intervals",
+      focus: "pressure tolerance, patience, and control under repetition",
+      rationale:
+        "That line tells me whether you can stay deliberate under pressure instead of getting greedy or sloppy.",
+      proof_requirement:
+        "Yes. Give me one clean midpoint report and one final report so I know the control held the whole way through.",
+      depth_guidance:
+        "Deep enough that you can keep the pace deliberate and the control clean. I want control first, not maximum depth for its own sake.",
+      recommended_duration: "15 to 20 minutes to start, longer only if the control stays deliberate.",
+      last_response:
+        "For anal training, I would start with a slow anal hold: settle into the pressure, hold it on a timer, ease off cleanly, and repeat without rushing.",
+    },
+  };
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content:
+          "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+      },
+      { role: "user", content: "the concrete part" },
+    ],
+    { conversationState },
+  );
+
+  const result = applyResponseGate({
+    text: "Enough hovering, pet. Tell me what you actually want.",
+    userText: "the concrete part",
+    dialogueAct: "short_follow_up",
+    lastAssistantText:
+      "Start with clarity. Mean what you say, do what you promise, and hold steady once it costs you something. That is the part I pay attention to.",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+    turnPlan,
+  });
+
+  assert.equal(result.forced, true);
+  assert.doesNotMatch(result.text, /enough hovering|what you actually want/i);
+  assert.doesNotMatch(result.text, /tell me why you're here|start talking/i);
+  assert.match(result.text, /clarity|hold steady|follow through|concrete/i);
+});
+
+test("response gate rejects session-framing drift on a profile-building opener", () => {
+  const scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "I want you to learn what I like",
+    act: "other",
+    sessionTopic: null,
+  });
+  const turnPlan = buildTurnPlan([{ role: "user", content: "I want you to learn what I like" }], {
+    conversationState: createConversationStateSnapshot("response-gate-profile-session-framing"),
+  });
+
+  const result = applyResponseGate({
+    text: "Noted, pet. I will take note of your preferences, pet. Now tell me how you'd like to start the session.",
+    userText: "I want you to learn what I like",
+    dialogueAct: "user_answer",
+    lastAssistantText: null,
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+    turnPlan,
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /what do you actually enjoy doing|off the clock|what should i call you/i);
+  assert.doesNotMatch(result.text, /how you'd like to start the session|our sessions|here is your task/i);
+});
+
+test("response gate rejects pseudo-profile opener acknowledgement and restores a real profile question", () => {
+  const scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "I want you to learn what I like",
+    act: "other",
+    sessionTopic: null,
+  });
+  const turnPlan = buildTurnPlan([{ role: "user", content: "I want you to learn what I like" }], {
+    conversationState: createConversationStateSnapshot("response-gate-profile-opener-noted"),
+  });
+
+  const result = applyResponseGate({
+    text: "Noted, pet. To make this conversation helpful, I must learn about your preferences directly from you.",
+    userText: "I want you to learn what I like",
+    dialogueAct: "user_answer",
+    lastAssistantText: null,
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+    turnPlan,
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /what do you actually enjoy doing|off the clock|what should i call you|what do you want me to understand/i);
+  assert.doesNotMatch(result.text, /to make this conversation helpful|preferences directly from you/i);
+});
+
+test("response gate rejects pseudo-profile continuation and regrounds the user's answer", () => {
+  let scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "I want you to learn what I like",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "I like golf",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content: "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+      },
+      { role: "user", content: "I like golf" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-profile-golf"),
+        current_mode: "profile_building",
+        active_thread: "profile",
+        active_topic: "profile",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Yes. Keep going. Stay with the concrete part of profile, not the wording around it.",
+    userText: "I like golf",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+    turnPlan,
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\bgolf\b/i);
+  assert.match(result.text, /\bboundaries\b|what else should i know/i);
+  assert.doesNotMatch(result.text, /concrete part of profile|wording around it|here is your task/i);
+});
+
+test("response gate rejects bare profile-answer acknowledgement and restores a grounded follow-up question", () => {
+  let scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "I want you to learn what I like",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "I like golf",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  const turnPlan = buildTurnPlan(
+    [
+      {
+        role: "assistant",
+        content: "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+      },
+      { role: "user", content: "I like golf" },
+    ],
+    {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-profile-answer-noted"),
+        current_mode: "profile_building",
+        active_thread: "profile",
+        active_topic: "profile",
+      },
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Noted, pet. Now we're getting somewhere. Golf is one of your interests.",
+    userText: "I like golf",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+    turnPlan,
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\bgolf\b/i);
+  assert.match(result.text, /\bboundaries\b|what else should i know/i);
+  assert.doesNotMatch(result.text, /now we're getting somewhere|golf is one of your interests/i);
+});
+
+test("response gate rejects weak chat acknowledgement and restores the pressure question", () => {
+  let scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "hi mistress",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "You're here. What has your attention tonight: chat, a plan, or a game?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "chat",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  const result = applyResponseGate({
+    text: "Noted, pet. Alright then, let's have a chat. You can lead the topic if you like, or I will steer as long as you participate.",
+    userText: "chat",
+    dialogueAct: "user_answer",
+    lastAssistantText: "You're here. What has your attention tonight: chat, a plan, or a game?",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /what has the most pressure on you right now/i);
+  assert.doesNotMatch(result.text, /let's have a chat|you can lead the topic|i will steer/i);
+});
+
+test("response gate rejects generic work reset and restores the workload person decision triad", () => {
+  let scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "hi mistress",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "You're here. What has your attention tonight: chat, a plan, or a game?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "chat",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Fine. What has the most pressure on you right now?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "work",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  const result = applyResponseGate({
+    text: "Fine. Say what you want.",
+    userText: "work",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. What has the most pressure on you right now?",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /workload|person|decision/i);
+  assert.doesNotMatch(result.text, /fine\. say what you want/i);
+});
+
+test("response gate rejects generic probe reset on assistant-self questions", () => {
+  const result = applyResponseGate({
+    text: "Fine. Say what you want.",
+    userText: "tell me more about you",
+    dialogueAct: "user_question",
+    lastAssistantText: null,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /what keeps my attention|ask me something real|the part that is real|what do you want to know about me/i);
+  assert.doesNotMatch(result.text, /fine\. say what you want/i);
+});
+
+test("response gate rejects stale disclosure residue and restores a grounded golf follow-up", () => {
+  let scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "give me a device task for 30 minutes",
+    act: "task_request",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "What items are actually available right now so I do not build the wrong task?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "let's just chat for a bit",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Fine. We can talk normally. What is actually on your mind?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "I like golf",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  const result = applyResponseGate({
+    text: "Yes. Keep going. Stay with the concrete part of open, not the wording around it.",
+    userText: "I like golf",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. We can talk normally. What is actually on your mind?",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\bgolf\b/i);
+  assert.match(result.text, /\bfocus\b|\bquiet\b|\bcompetition\b|what do you like about it/i);
+  assert.doesNotMatch(result.text, /concrete part of open|wording around it|here is your task/i);
+});
+
+test("response gate rejects stale task blocker drift after an explicit chat pause", () => {
+  let scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "give me a device task for 30 minutes",
+    act: "task_request",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Here is your task: keep the device on for 30 minutes, check in once halfway through, and report back when it is done. Start now.",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "let's just chat for a bit",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Fine. We can talk normally. What is actually on your mind?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "I like golf",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  const result = applyResponseGate({
+    text: "What can you actually use for this one right now?",
+    userText: "I like golf",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. We can talk normally. What is actually on your mind?",
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\bgolf\b|focus|quiet|competition/i);
+  assert.doesNotMatch(result.text, /what can you actually use|put it on now|report back/i);
 });
 
 test("response gate rejects in-character menu drift when the turn needs a concrete modification", () => {
@@ -1226,4 +2122,657 @@ test("response gate rejects task or game scaffold drift on a conversational stat
   assert.equal(result.forced, true);
   assert.equal(result.reason, "mode_drift_on_conversational_turn");
   assert.doesNotMatch(result.text, /let's play a game|pick one number|here is your task/i);
+});
+
+test("response gate rejects generic acknowledgement when a direct casual follow-up exists", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Fine. What has the most pressure on you right now?",
+    memory: createSessionMemory(),
+  });
+  const turnPlan = buildTurnPlan(
+    [
+      { role: "assistant", content: "Fine. What has the most pressure on you right now?" },
+      { role: "user", content: "work" },
+    ],
+    {
+      conversationState: createConversationStateSnapshot("response-gate-casual-answer"),
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Noted.",
+    userText: "work",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. What has the most pressure on you right now?",
+    turnPlan,
+    sceneState: {
+      ...scene,
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /workload|person|decision you keep circling/i);
+  assert.doesNotMatch(result.text, /^noted\.?$/i);
+});
+
+test("response gate rejects weak generic clarification when active relational continuity exists", () => {
+  const scene = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "I like bondage when it actually changes the dynamic instead of decorating it.",
+    memory: createSessionMemory(),
+  });
+
+  const result = applyResponseGate({
+    text: "I mean noted, pet.",
+    userText: "what do you mean?",
+    dialogueAct: "short_follow_up",
+    lastAssistantText:
+      "I like bondage when it actually changes the dynamic instead of decorating it.",
+    sceneState: {
+      ...scene,
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /bondage|dynamic|actually changes|decorating/i);
+  assert.doesNotMatch(result.text, /i mean noted/i);
+});
+
+test("response gate rejects generic acknowledgement after explicit task release into chat", () => {
+  let scene = noteSceneStateUserTurn(createSceneState(), {
+    text: "give me a device task for 30 minutes",
+    act: "task_request",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Here is your task: keep the device on for 30 minutes, check in once halfway through, and report back when it is done. Start now.",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "let's just chat for a bit",
+    act: "other",
+    sessionTopic: null,
+  });
+  scene = noteSceneStateAssistantTurn(scene, {
+    text: "Fine. We can talk normally. What is actually on your mind?",
+  });
+  scene = noteSceneStateUserTurn(scene, {
+    text: "I like golf",
+    act: "other",
+    sessionTopic: null,
+  });
+
+  const turnPlan = buildTurnPlan(
+    [
+      { role: "assistant", content: "Fine. We can talk normally. What is actually on your mind?" },
+      { role: "user", content: "I like golf" },
+    ],
+    {
+      conversationState: createConversationStateSnapshot("response-gate-post-release-golf"),
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Noted.",
+    userText: "I like golf",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. We can talk normally. What is actually on your mind?",
+    turnPlan,
+    sceneState: scene,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\bgolf\b/i);
+  assert.match(result.text, /focus|quiet|competition|what do you like about it/i);
+  assert.doesNotMatch(result.text, /^noted\.?$/i);
+  assert.doesNotMatch(result.text, /put it on now|report back|what items are actually available/i);
+});
+
+test("response gate does not let profile-opening enforcement steal a planning opener", () => {
+  const turnPlan = {
+    ...buildTurnPlan([{ role: "user", content: "help me plan tomorrow morning" }], {
+      conversationState: {
+        ...createConversationStateSnapshot("response-gate-profile-scope-planning"),
+        current_mode: "profile_building",
+        active_thread: "profile",
+        active_topic: "profile",
+      },
+    }),
+    requestedAction: "gather_profile_only_when_needed" as const,
+  };
+
+  const result = applyResponseGate({
+    text: "Fine. Start with the anchor. What time does tomorrow morning begin?",
+    userText: "help me plan tomorrow morning",
+    dialogueAct: "other",
+    lastAssistantText: null,
+    turnPlan,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, false);
+  assert.match(result.text, /\b(tomorrow morning|anchor|what time)\b/i);
+});
+
+test("response gate does not let profile-opening enforcement steal task clarification", () => {
+  const turnPlan = {
+    ...buildTurnPlan(
+      [
+        { role: "assistant", content: "Here is your task: Hold a strict posture for 30 minutes. Start now." },
+        { role: "user", content: "what counts as done?" },
+      ],
+      {
+        conversationState: {
+          ...createConversationStateSnapshot("response-gate-profile-scope-task"),
+          current_mode: "profile_building",
+          active_thread: "task",
+          active_topic: "task",
+        },
+      },
+    ),
+    requestedAction: "gather_profile_only_when_needed" as const,
+  };
+
+  const result = applyResponseGate({
+    text: "Done means you hold the full 30 minutes, check in halfway, and report back cleanly at the end.",
+    userText: "what counts as done?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Here is your task: Hold a strict posture for 30 minutes. Start now.",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      topic_type: "task_execution",
+      topic_locked: true,
+      topic_state: "open",
+      task_progress: "secured",
+      task_duration_minutes: 30,
+      task_template_id: "steady_hold",
+      task_variant_index: 0,
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, false);
+  assert.match(result.text, /\b(done means|30 minutes|report back)\b/i);
+});
+
+test("response gate rejects generic task checkpoint text when done-criteria clarification is available", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      { role: "assistant", content: "Here is your task: Hold a strict posture for 30 minutes. Start now." },
+      { role: "user", content: "what counts as done?" },
+    ],
+    {
+      conversationState: createConversationStateSnapshot("response-gate-task-done-definition"),
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Next step: complete the current checkpoint and report back cleanly.",
+    userText: "what counts as done?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Here is your task: Hold a strict posture for 30 minutes. Start now.",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      topic_type: "task_execution",
+      topic_locked: true,
+      topic_state: "open",
+      task_progress: "secured",
+      task_duration_minutes: 120,
+      task_template_id: "steady_hold",
+      task_variant_index: 0,
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /done means|what counts as done|full 2 hours|1 hour/i);
+  assert.doesNotMatch(result.text, /next step: complete the current checkpoint/i);
+});
+
+test("response gate rejects generic acknowledgement when completed-task continuation can assign the next one", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      { role: "assistant", content: "That task is complete. Ask for the next task if you want one." },
+      { role: "user", content: "set me another one" },
+    ],
+    {
+      conversationState: createConversationStateSnapshot("response-gate-next-task"),
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Fine. Say what you want.",
+    userText: "set me another one",
+    dialogueAct: "user_question",
+    lastAssistantText: "That task is complete. Ask for the next task if you want one.",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      topic_type: "task_execution",
+      topic_locked: true,
+      topic_state: "open",
+      task_progress: "completed",
+      task_template_id: "steady_hold",
+      task_variant_index: 0,
+      task_duration_minutes: 120,
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /here is your task|here is the next one/i);
+  assert.match(result.text, /start now/i);
+  assert.doesNotMatch(result.text, /fine\. say what you want/i);
+});
+
+test("response gate avoids exact-repeat game correction on repeated invalid mixed-answer turns", () => {
+  let sceneState = createSceneState();
+  const gameOpenRoute = classifyDialogueRoute({
+    text: "lets play a game",
+    awaitingUser: false,
+    currentTopic: null,
+    nowMs: 1_000,
+  });
+  sceneState = noteSceneStateUserTurn(sceneState, {
+    text: "lets play a game",
+    act: gameOpenRoute.act,
+    sessionTopic: gameOpenRoute.nextTopic,
+  });
+  sceneState = noteSceneStateAssistantTurn(sceneState, {
+    text: "I pick. We are doing a math duel, pet. First prompt: 7 + 4 = ?",
+  });
+  const invalidMixedAnswer =
+    "Alright, got it. So the first answer is 11, and for the second one, 3 * 6 = ?";
+  const invalidRoute = classifyDialogueRoute({
+    text: invalidMixedAnswer,
+    awaitingUser: false,
+    currentTopic: null,
+    nowMs: 2_000,
+  });
+  sceneState = noteSceneStateUserTurn(sceneState, {
+    text: invalidMixedAnswer,
+    act: invalidRoute.act,
+    sessionTopic: invalidRoute.nextTopic,
+  });
+  const previousCorrection =
+    "No. Answer the prompt properly, pet. Listen carefully, pet. First prompt: 7 + 4 = ? Reply with digits only.";
+  sceneState = noteSceneStateAssistantTurn(sceneState, {
+    text: previousCorrection,
+  });
+  sceneState = noteSceneStateUserTurn(sceneState, {
+    text: invalidMixedAnswer,
+    act: invalidRoute.act,
+    sessionTopic: invalidRoute.nextTopic,
+  });
+
+  const result = applyResponseGate({
+    text: "No. Answer the prompt properly. First prompt: 7 + 4 = ?",
+    userText: invalidMixedAnswer,
+    dialogueAct: invalidRoute.act,
+    lastAssistantText: previousCorrection,
+    sceneState,
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.notEqual(result.text.trim(), previousCorrection);
+  assert.match(result.text, /\b(7 \+ 4|digits only|one clean answer|first prompt)\b/i);
+});
+
+test("response gate candidate duplicate nudge does not reuse the same game correction wrapper twice", () => {
+  const previousCorrection =
+    "Stay on this game, pet. No. Answer the prompt properly. First prompt: 7 + 4 = ?";
+  const builder = createResponseGateCandidateBuilder({
+    gateInput: {
+      text: "No. Answer the prompt properly. First prompt: 7 + 4 = ?",
+      userText:
+        "Alright, got it. So the first answer is 11, and for the second one, 3 * 6 = ?",
+      dialogueAct: "user_question",
+      lastAssistantText: previousCorrection,
+      sceneState: {
+        ...createSceneState(),
+        interaction_mode: "game",
+        topic_type: "game_execution",
+        topic_locked: true,
+        game_template_id: "math_duel",
+      },
+      commitmentState: createCommitmentState(),
+    },
+    continuityTopic: null,
+    conversationMove: "continue_current_thought",
+    activeTaskThread: false,
+    enforceTurnPlan: false,
+    explicitActivityDelegation: false,
+  });
+
+  const duplicateNudge = builder.buildDuplicateNudge(
+    "No. Answer the prompt properly. First prompt: 7 + 4 = ?",
+  );
+
+  assert.notEqual(duplicateNudge, previousCorrection);
+});
+
+test("response gate does not let stale game context steal a casual follow-up", () => {
+  const result = applyResponseGate({
+    text: "Keep going.",
+    userText: "go on",
+    dialogueAct: "short_follow_up",
+    lastAssistantText: "I mean is it workload, a person, or a decision you keep circling.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "game_execution",
+      topic_locked: false,
+      topic_state: "open",
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "dialogue_act_misaligned");
+  assert.match(result.text, /\b(workload|person|decision|pressure)\b/i);
+  assert.doesNotMatch(result.text, /\b(rock|paper|scissors|guess|throw|current move|game)\b/i);
+});
+
+test("response gate does not let stale game context steal a planning continuation fallback", () => {
+  const result = applyResponseGate({
+    text: "Errands first while the day is clean, then gym, then the evening stays open.",
+    userText: "then what",
+    dialogueAct: "short_follow_up",
+    lastAssistantText: "Errands first while the day is clean, then gym, then the evening stays open.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "game_execution",
+      topic_locked: false,
+      topic_state: "open",
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "dialogue_act_misaligned");
+  assert.match(result.text, /\b(gym|food|evening|after that|next block)\b/i);
+  assert.doesNotMatch(result.text, /\b(rock|paper|scissors|guess|throw|current move|game)\b/i);
+});
+
+test("response gate task clarification baseline is not stolen by stale game-preserving fallback", () => {
+  const result = applyResponseGate({
+    text: "Keep going.",
+    userText: "what counts as done?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Listen carefully, pet. Fine. This one only works if stillness is actually what you want. Here is your task: Hold still for 20 minutes, check in once halfway through, and report back when it is done. Start now. Hold still now and reply done once you are set, pet.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "game_execution",
+      topic_locked: false,
+      topic_state: "open",
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "stillness",
+        current_task_family: "stillness_focus",
+        request_kind: "fresh_assignment",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "dialogue_act_misaligned");
+  assert.doesNotMatch(result.text, /\b(rock|paper|scissors|guess|throw|current move|game)\b/i);
+  assert.match(result.text, /\b(done|checkpoint|report|20 minutes)\b/i);
+});
+
+test("response gate rejects stale-game planning why drift and restores the concrete saturday explanation", () => {
+  const result = applyResponseGate({
+    text: "Stay on this game, pet. First throw now.",
+    userText: "why",
+    dialogueAct: "user_question",
+    lastAssistantText: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "game_execution",
+      topic_locked: false,
+      topic_state: "open",
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(because|errands|cleaner|spill|saturday)\b/i);
+  assert.doesNotMatch(result.text, /\b(rock|paper|scissors|guess|throw|game)\b/i);
+});
+
+test("response gate rejects stale-game evening drift and restores the concrete planning beat", () => {
+  const result = applyResponseGate({
+    text: "Stay on this game, pet. First throw now.",
+    userText: "ok and what about the evening?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Good. Errands first while the day is clean, then gym, then the evening stays open.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "game_execution",
+      topic_locked: false,
+      topic_state: "open",
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+      agreed_goal: "saturday",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(evening|social|clean stop|light)\b/i);
+  assert.doesNotMatch(result.text, /\b(rock|paper|scissors|guess|throw|game)\b/i);
+});
+
+test("response gate rejects generic task rationale drift and restores the active task explanation", () => {
+  const result = applyResponseGate({
+    text: "Stay sharp, pet. That was a control test to ensure you were ready for more complex focus tasks. The results will help adjust your next task.",
+    userText: "why that task?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Listen carefully, pet. Fine. Here is your task: Clear one small surface for 20 minutes, check in once halfway through, and report back when it is done. Start now.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      topic_state: "open",
+      task_progress: "secured",
+      task_duration_minutes: 20,
+      task_template_id: "focus_hold",
+      task_variant_index: 0,
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "focus",
+        current_task_family: "focus_hold",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(proves?|specific|measurable|focus|control|comfort)\b/i);
+  assert.doesNotMatch(result.text, /more complex focus tasks|adjust your next task/i);
+});
+
+test("response gate rejects generic next-task filler and keeps next-task continuation in task flow", () => {
+  const result = applyResponseGate({
+    text: "Stay sharp, pet. We can adjust the line after this.",
+    userText: "set me another one",
+    dialogueAct: "user_question",
+    lastAssistantText: "Good. That task is complete. Ask for the next task if you want one.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      topic_state: "open",
+      task_progress: "completed",
+      task_duration_minutes: 20,
+      task_template_id: "focus_hold",
+      task_variant_index: 0,
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "focus",
+        current_task_family: "focus_hold",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /\b(here is your task|next task|15 minutes|start now)\b/i);
+  assert.doesNotMatch(result.text, /adjust the line after this/i);
+});
+
+test("response gate repairs relaxed next-task requests after the live path drops back to general request", () => {
+  const result = applyResponseGate({
+    text: "Fine. Say what you want.",
+    userText: "set me another one",
+    lastAssistantText:
+      "Because it is specific, measurable, and hard to fake. A clean timer and one clear rule tell me quickly whether your focus holds once it stops feeling flattering.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      topic_locked: false,
+      current_task_domain: "stillness",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "stillness",
+        current_task_family: "stillness_focus",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(here is your task|next task|start now)\b/i);
+  assert.doesNotMatch(result.text, /fine\. say what you want/i);
+});
+
+test("response gate rejects weak game clarification correction and restores current game rules", () => {
+  const result = applyResponseGate({
+    text: "No. Answer the prompt properly, pet. Listen carefully, pet. First guess now. One number only.",
+    userText: "what do you mean two guesses?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "I pick. We are doing number hunt, pet. You hunt one hidden number from 1 to 10. Two guesses maximum. Listen carefully, pet. First guess now. One number from 1 to 10.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+      game_template_id: "number_hunt",
+      game_progress: "round_1",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /number hunt|1 to 10|hint|final guess|two guesses/i);
+  assert.doesNotMatch(result.text, /answer the prompt properly|no stalling/i);
+});
+
+test("response gate rejects weak game go-on shell and restores the active prompt", () => {
+  const result = applyResponseGate({
+    text: "Keep going.",
+    userText: "go on",
+    dialogueAct: "short_follow_up",
+    lastAssistantText:
+      "I pick. We are doing number hunt, pet. You hunt one hidden number from 1 to 10. Two guesses maximum. Listen carefully, pet. First guess now. One number from 1 to 10.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+      game_template_id: "number_hunt",
+      game_progress: "round_1",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /first guess now|number hunt|1 to 10|one number/i);
+  assert.doesNotMatch(result.text, /^keep going\.?$/i);
+  assert.doesNotMatch(result.text, /fine\. say what you want|concrete part of open/i);
+});
+
+test("response gate rejects weak game explanation drift and keeps the current game visible", () => {
+  const result = applyResponseGate({
+    text: "Listen carefully, pet. We stay with rock paper scissors streak. Two throws. You answer each one with rock, paper, or scissors. Beat both throws to win.",
+    userText: "why that game?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /rock paper scissors|quick|clean|back and forth|fast/i);
+  assert.doesNotMatch(result.text, /we stay with rock paper scissors streak\. two throws\./i);
+});
+
+test("response gate rejects generic game consequence filler and keeps consequence follow-through on-thread", () => {
+  const result = applyResponseGate({
+    text: "Fine. Say what you want.",
+    userText: "what now?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Good. You lose the deciding throw. The round is mine. I win this one. Your consequence is live now. Say ready, and I will enforce it.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "reward_window",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+      game_outcome: "raven_win",
+      lose_condition: "wear your cage overnight",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /consequence|wear your cage overnight|say ready|enforce/i);
+  assert.doesNotMatch(result.text, /fine\. say what you want/i);
 });

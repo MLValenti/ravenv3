@@ -1,17 +1,17 @@
 {
-  "generated_at": "2026-03-24T18:53:11.282Z",
+  "generated_at": "2026-03-27T20:56:43.446Z",
   "executor": "synthetic",
   "scenario_count": 87,
   "summary": {
     "scenarioCount": 87,
     "turnCount": 224,
-    "violationCount": 0,
+    "violationCount": 4,
     "styles": {
-      "personaConsistency": 0.463,
+      "personaConsistency": 0.49,
       "confidence": 0.983,
-      "directness": 0.913,
-      "naturalness": 0.691,
-      "cannedRepetition": 0.986
+      "directness": 0.953,
+      "naturalness": 0.681,
+      "cannedRepetition": 0.99
     }
   },
   "scenarios": [
@@ -2472,25 +2472,23 @@
       "title": "Profile building asks adaptive questions",
       "description": "Profile mode should ask one question per turn and store typed profile facts.",
       "executor": "synthetic",
-      "violation_count": 0,
+      "violation_count": 1,
       "style": {
         "mode": "profile_building",
-        "personaConsistency": 0.333,
+        "personaConsistency": 1,
         "confidence": 1,
-        "directness": 0.333,
+        "directness": 1,
         "naturalness": 1,
         "cannedRepetition": 1,
-        "notes": [
-          "some turns were too neutral or carried disallowed conversational drift"
-        ]
+        "notes": []
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.25,
+        "topical_relevance": 0.167,
         "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
-        "coherence": 0.77,
-        "humanlike_flow": 0.77
+        "coherence": 0.753,
+        "humanlike_flow": 0.753
       },
       "traces": [
         {
@@ -2508,7 +2506,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -2556,12 +2554,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -2571,7 +2569,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -2579,14 +2577,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -2600,7 +2603,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -2617,7 +2620,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. I have your name now. Good. Name handled. That is the easy part. What matters more is how you want to be read once the surface drops away.",
-          "responseGateText": "Beyond the name, what should I read correctly about you before I make assumptions?",
+          "responseGateText": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -2654,13 +2657,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "next_expected_user_action",
@@ -2669,8 +2672,8 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "candidateResponseFamilies": [
@@ -2682,7 +2685,7 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "text": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -2690,7 +2693,7 @@
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
           "fallbackUsed": true,
-          "fallbackReason": "dialogue_act_misaligned",
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -2704,7 +2707,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Beyond the name, what should I read correctly about you before I make assumptions?"
+          "finalText": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
         },
         {
           "turnNumber": 3,
@@ -2721,7 +2724,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
-          "responseGateText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
+          "responseGateText": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -2753,18 +2756,18 @@
           "sceneWrites": [
             {
               "field": "current_rule",
-              "before": "Beyond the name, what should I read correctly about you before I make assumptions?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             },
             {
               "field": "current_subtask",
-              "before": "Beyond the name, what should I read correctly about you before I make assumptions?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             },
             {
               "field": "last_assistant_text",
-              "before": "Beyond the name, what should I read correctly about you before I make assumptions?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             }
           ],
           "candidateResponseFamilies": [
@@ -2776,15 +2779,15 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "text": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -2798,10 +2801,19 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+          "finalText": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
         }
       ],
-      "violations": []
+      "violations": [
+        {
+          "scenarioId": "profile_building_adaptive",
+          "turnNumber": 1,
+          "invariant": "required_phrase_any",
+          "expected": "what should i call you | what do you lose track of time doing | what boundaries | people usually miss about you | understand about you",
+          "actual": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+          "likelyCodePath": "lib/session/response-gate.ts"
+        }
+      ]
     },
     {
       "id": "profile_building_interpretive_beat",
@@ -2809,25 +2821,23 @@
       "title": "Profile building can interpret instead of interrogate",
       "description": "After a revealing profile answer, Raven can reflect what she noticed instead of defaulting to another checklist question.",
       "executor": "synthetic",
-      "violation_count": 0,
+      "violation_count": 1,
       "style": {
         "mode": "profile_building",
-        "personaConsistency": 0.5,
+        "personaConsistency": 1,
         "confidence": 1,
-        "directness": 0.5,
+        "directness": 1,
         "naturalness": 1,
         "cannedRepetition": 1,
-        "notes": [
-          "some turns were too neutral or carried disallowed conversational drift"
-        ]
+        "notes": []
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.1,
+        "topical_relevance": 0.4,
         "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
-        "coherence": 0.74,
-        "humanlike_flow": 0.74
+        "coherence": 0.8,
+        "humanlike_flow": 0.8
       },
       "traces": [
         {
@@ -2845,7 +2855,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -2893,12 +2903,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -2908,7 +2918,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -2916,14 +2926,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -2937,7 +2952,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -2954,7 +2969,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
-          "responseGateText": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
+          "responseGateText": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -2991,13 +3006,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "next_expected_user_action",
@@ -3006,8 +3021,8 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "candidateResponseFamilies": [
@@ -3019,20 +3034,20 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "text": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
           "summaryRouteSelected": false,
-          "profileQuestionRouteSelected": false,
+          "profileQuestionRouteSelected": true,
           "chatSwitchRouteSelected": false,
           "shortFollowUpRouteSelected": false,
           "oneOutputCommitted": true,
@@ -3041,10 +3056,19 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+          "finalText": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
         }
       ],
-      "violations": []
+      "violations": [
+        {
+          "scenarioId": "profile_building_interpretive_beat",
+          "turnNumber": 2,
+          "invariant": "blocked_phrase",
+          "expected": "not to include \"what else should i know\"",
+          "actual": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?",
+          "likelyCodePath": "lib/session/response-gate.ts"
+        }
+      ]
     },
     {
       "id": "relational_continuity_without_keyword_overlap",
@@ -3722,22 +3746,20 @@
       "violation_count": 0,
       "style": {
         "mode": "profile_building",
-        "personaConsistency": 0.667,
+        "personaConsistency": 1,
         "confidence": 1,
-        "directness": 0.667,
+        "directness": 1,
         "naturalness": 1,
         "cannedRepetition": 1,
-        "notes": [
-          "some turns were too neutral or carried disallowed conversational drift"
-        ]
+        "notes": []
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.333,
+        "topical_relevance": 0.533,
         "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
-        "coherence": 0.787,
-        "humanlike_flow": 0.787
+        "coherence": 0.827,
+        "humanlike_flow": 0.827
       },
       "traces": [
         {
@@ -3755,7 +3777,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -3803,12 +3825,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -3818,7 +3840,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -3826,14 +3848,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -3847,7 +3874,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -3864,7 +3891,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
-          "responseGateText": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
+          "responseGateText": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -3901,13 +3928,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "next_expected_user_action",
@@ -3916,8 +3943,8 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "candidateResponseFamilies": [
@@ -3929,20 +3956,20 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "text": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
           "summaryRouteSelected": false,
-          "profileQuestionRouteSelected": false,
+          "profileQuestionRouteSelected": true,
           "chatSwitchRouteSelected": false,
           "shortFollowUpRouteSelected": false,
           "oneOutputCommitted": true,
@@ -3951,13 +3978,13 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner."
+          "finalText": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?"
         },
         {
           "turnNumber": 3,
           "userInput": "use that and give me a calm nighttime routine",
           "detectedIntent": "user_answer",
-          "dialogueAct": "other",
+          "dialogueAct": "user_answer",
           "promptRouteMode": "default",
           "promptProfile": "full",
           "promptSummary": "route=default profile=full mode=profile_building turns=5",
@@ -3996,22 +4023,17 @@
           "sceneWrites": [
             {
               "field": "current_rule",
-              "before": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
+              "before": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?",
               "after": "Good. Keep the same subject, but answer this change directly: that and give me a calm nighttime routine."
             },
             {
               "field": "current_subtask",
-              "before": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
+              "before": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?",
               "after": "Good. Keep the same subject, but answer this change directly: that and give me a calm nighttime routine."
             },
             {
-              "field": "next_expected_user_action",
-              "before": "let Raven use the answer and continue",
-              "after": "continue the current thread"
-            },
-            {
               "field": "last_assistant_text",
-              "before": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
+              "before": "Golf because it shuts my head up. Good. What else should I know about your boundaries or the things you do not want pushed?",
               "after": "Good. Keep the same subject, but answer this change directly: that and give me a calm nighttime routine."
             }
           ],
@@ -4019,7 +4041,12 @@
             {
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
-              "text": "What boundaries or hard nos do you want me to keep in mind?"
+              "text": "When we talk, do you want me clipped and direct, or broader and more exploratory?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             },
             {
               "family": "model",
@@ -5018,7 +5045,7 @@
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
           "fallbackUsed": true,
-          "fallbackReason": "output_shape_mismatch_during_fulfillment",
+          "fallbackReason": "dialogue_act_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -5427,9 +5454,9 @@
       "violation_count": 0,
       "style": {
         "mode": "task_planning",
-        "personaConsistency": 0,
+        "personaConsistency": 0.5,
         "confidence": 1,
-        "directness": 0.25,
+        "directness": 0.75,
         "naturalness": 0.75,
         "cannedRepetition": 1,
         "notes": [
@@ -5438,11 +5465,11 @@
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.125,
+        "topical_relevance": 0.275,
         "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
-        "coherence": 0.745,
-        "humanlike_flow": 0.745
+        "coherence": 0.775,
+        "humanlike_flow": 0.775
       },
       "traces": [
         {
@@ -5460,7 +5487,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -5508,12 +5535,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -5523,7 +5550,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -5531,14 +5558,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -5552,7 +5584,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -5569,7 +5601,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. That is not filler to you. It is one of the places you go when you want your head quieter and cleaner.",
-          "responseGateText": "What is it about that that gets its hooks into you hard enough for me to remember it?",
+          "responseGateText": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -5606,13 +5638,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "next_expected_user_action",
@@ -5621,8 +5653,8 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "candidateResponseFamilies": [
@@ -5634,7 +5666,7 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "text": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -5656,7 +5688,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+          "finalText": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?"
         },
         {
           "turnNumber": 3,
@@ -5730,12 +5762,12 @@
             },
             {
               "field": "current_rule",
-              "before": "What is it about that that gets its hooks into you hard enough for me to remember it?",
+              "before": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?",
               "after": "How long should I make it run?"
             },
             {
               "field": "current_subtask",
-              "before": "What is it about that that gets its hooks into you hard enough for me to remember it?",
+              "before": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?",
               "after": "How long should I make it run?"
             },
             {
@@ -5745,7 +5777,7 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What is it about that that gets its hooks into you hard enough for me to remember it?",
+              "before": "Structure because it calms me down. Good. What else should I know about your boundaries or the things you do not want pushed?",
               "after": "How long should I make it run?"
             }
           ],
@@ -9712,10 +9744,10 @@
       "violation_count": 0,
       "style": {
         "mode": "task_planning",
-        "personaConsistency": 0.5,
+        "personaConsistency": 0,
         "confidence": 1,
         "directness": 1,
-        "naturalness": 0.5,
+        "naturalness": 0,
         "cannedRepetition": 1,
         "notes": [
           "some turns were too neutral or carried disallowed conversational drift"
@@ -9723,11 +9755,11 @@
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.167,
+        "topical_relevance": 0,
         "repetition_rate": 0.5,
         "memory_recall_accuracy": 0.75,
-        "coherence": 0.693,
-        "humanlike_flow": 0.443
+        "coherence": 0.66,
+        "humanlike_flow": 0.41
       },
       "traces": [
         {
@@ -9884,7 +9916,7 @@
           "taskProgress": "assigned",
           "rawModelOutput": null,
           "selectedCandidateText": "Listen carefully, pet. Next, set your inspection frame and reply done. Do that cleanly before anything else.",
-          "responseGateText": "Good. Next on the task: Start now. Square yourself to the camera and reply done once your inspection frame is set, pet.",
+          "responseGateText": "Listen carefully, pet. Next, set your inspection frame and reply done. Do that cleanly before anything else.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -9909,17 +9941,17 @@
             {
               "field": "current_rule",
               "before": "wait for the user to set your inspection frame and reply done before changing topics",
-              "after": "Good. Next on the task: Start now. Square yourself to the camera and reply done once your inspection frame is set, pet."
+              "after": "Listen carefully, pet. Next, set your inspection frame and reply done. Do that cleanly before anything else."
             },
             {
               "field": "current_subtask",
               "before": "Listen carefully, pet. Fine. This keeps you visible and easy to read. Here is your task: Stay fully in frame for 30 minutes, check in once halfway through, and report back when it ...",
-              "after": "Good. Next on the task: Start now. Square yourself to the camera and reply done once your inspection frame is set, pet."
+              "after": "Listen carefully, pet. Next, set your inspection frame and reply done. Do that cleanly before anything else."
             },
             {
               "field": "last_assistant_text",
               "before": "Listen carefully, pet. Fine. This keeps you visible and easy to read. Here is your task: Stay fully in frame for 30 minutes, check in once halfway through, and report back when it is done. Start now. Square yourself to the camera and reply done once your inspection frame is set, pet.",
-              "after": "Good. Next on the task: Start now. Square yourself to the camera and reply done once your inspection frame is set, pet."
+              "after": "Listen carefully, pet. Next, set your inspection frame and reply done. Do that cleanly before anything else."
             }
           ],
           "candidateResponseFamilies": [
@@ -9953,7 +9985,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Good. Next on the task: Start now. Square yourself to the camera and reply done once your inspection frame is set, pet."
+          "finalText": "Listen carefully, pet. Next, set your inspection frame and reply done. Do that cleanly before anything else."
         }
       ],
       "violations": []
@@ -12498,9 +12530,9 @@
       "violation_count": 0,
       "style": {
         "mode": "profile_building",
-        "personaConsistency": 0.25,
+        "personaConsistency": 0.75,
         "confidence": 1,
-        "directness": 0.5,
+        "directness": 1,
         "naturalness": 1,
         "cannedRepetition": 1,
         "notes": [
@@ -12509,11 +12541,11 @@
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.188,
+        "topical_relevance": 0.125,
         "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
-        "coherence": 0.758,
-        "humanlike_flow": 0.758
+        "coherence": 0.745,
+        "humanlike_flow": 0.745
       },
       "traces": [
         {
@@ -12531,7 +12563,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -12579,12 +12611,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -12594,7 +12626,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -12602,14 +12634,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -12623,7 +12660,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -12640,7 +12677,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. I have your name now. Good. Name handled. That is the easy part. What matters more is how you want to be read once the surface drops away.",
-          "responseGateText": "Beyond the name, what should I read correctly about you before I make assumptions?",
+          "responseGateText": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -12677,13 +12714,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "next_expected_user_action",
@@ -12692,8 +12729,8 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "candidateResponseFamilies": [
@@ -12705,7 +12742,7 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "Beyond the name, what should I read correctly about you before I make assumptions?"
+              "text": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -12713,7 +12750,7 @@
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
           "fallbackUsed": true,
-          "fallbackReason": "dialogue_act_misaligned",
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -12727,7 +12764,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Beyond the name, what should I read correctly about you before I make assumptions?"
+          "finalText": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?"
         },
         {
           "turnNumber": 3,
@@ -12744,7 +12781,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
-          "responseGateText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
+          "responseGateText": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -12776,18 +12813,18 @@
           "sceneWrites": [
             {
               "field": "current_rule",
-              "before": "Beyond the name, what should I read correctly about you before I make assumptions?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             },
             {
               "field": "current_subtask",
-              "before": "Beyond the name, what should I read correctly about you before I make assumptions?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             },
             {
               "field": "last_assistant_text",
-              "before": "Beyond the name, what should I read correctly about you before I make assumptions?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Call me Mara. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             }
           ],
           "candidateResponseFamilies": [
@@ -12799,15 +12836,15 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "text": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -12821,7 +12858,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+          "finalText": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
         },
         {
           "turnNumber": 4,
@@ -12871,12 +12908,12 @@
             },
             {
               "field": "current_rule",
-              "before": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
+              "before": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind.",
               "after": "So far I have: name: Mara | interests: golf. Give me the next useful piece when you are ready."
             },
             {
               "field": "current_subtask",
-              "before": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
+              "before": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind.",
               "after": "So far I have: name: Mara | interests: golf. Give me the next useful piece when you are ready."
             },
             {
@@ -12886,7 +12923,7 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
+              "before": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind.",
               "after": "So far I have: name: Mara | interests: golf. Give me the next useful piece when you are ready."
             }
           ],
@@ -13218,10 +13255,10 @@
       "violation_count": 0,
       "style": {
         "mode": "task_planning",
-        "personaConsistency": 0.667,
+        "personaConsistency": 0.333,
         "confidence": 1,
         "directness": 1,
-        "naturalness": 0.667,
+        "naturalness": 0.333,
         "cannedRepetition": 1,
         "notes": [
           "some turns were too neutral or carried disallowed conversational drift"
@@ -13229,11 +13266,11 @@
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.194,
+        "topical_relevance": 0.167,
         "repetition_rate": 0.333,
         "memory_recall_accuracy": 0.75,
-        "coherence": 0.699,
-        "humanlike_flow": 0.532
+        "coherence": 0.693,
+        "humanlike_flow": 0.526
       },
       "traces": [
         {
@@ -13509,7 +13546,7 @@
           "taskProgress": "assigned",
           "rawModelOutput": null,
           "selectedCandidateText": "Listen carefully, pet. Next, set your posture and reply done. Do that cleanly before anything else.",
-          "responseGateText": "Good. Next on the task: Start now. Set your posture now and reply done once you are set, pet.",
+          "responseGateText": "Listen carefully, pet. Next, set your posture and reply done. Do that cleanly before anything else.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -13559,12 +13596,12 @@
             {
               "field": "current_rule",
               "before": "Fine. Then talk to me normally for a minute.",
-              "after": "Good. Next on the task: Start now. Set your posture now and reply done once you are set, pet."
+              "after": "Listen carefully, pet. Next, set your posture and reply done. Do that cleanly before anything else."
             },
             {
               "field": "current_subtask",
               "before": "Fine. Then talk to me normally for a minute.",
-              "after": "Good. Next on the task: Start now. Set your posture now and reply done once you are set, pet."
+              "after": "Listen carefully, pet. Next, set your posture and reply done. Do that cleanly before anything else."
             },
             {
               "field": "next_expected_user_action",
@@ -13574,7 +13611,7 @@
             {
               "field": "last_assistant_text",
               "before": "Fine. Then talk to me normally for a minute.",
-              "after": "Good. Next on the task: Start now. Set your posture now and reply done once you are set, pet."
+              "after": "Listen carefully, pet. Next, set your posture and reply done. Do that cleanly before anything else."
             }
           ],
           "candidateResponseFamilies": [
@@ -13608,7 +13645,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Good. Next on the task: Start now. Set your posture now and reply done once you are set, pet."
+          "finalText": "Listen carefully, pet. Next, set your posture and reply done. Do that cleanly before anything else."
         }
       ],
       "violations": []
@@ -13619,26 +13656,25 @@
       "title": "Short follow-up stays single-family",
       "description": "Short clarification turns should not cascade into goal reset or open-chat reset.",
       "executor": "synthetic",
-      "violation_count": 0,
+      "violation_count": 2,
       "style": {
         "mode": "profile_building",
-        "personaConsistency": 0,
+        "personaConsistency": 0.333,
         "confidence": 1,
-        "directness": 0.667,
+        "directness": 1,
         "naturalness": 1,
-        "cannedRepetition": 0.667,
+        "cannedRepetition": 1,
         "notes": [
-          "some turns were too neutral or carried disallowed conversational drift",
-          "some turns repeated the same wording"
+          "some turns were too neutral or carried disallowed conversational drift"
         ]
       },
       "transcript_metrics": {
         "continuity": 0.9,
         "topical_relevance": 0,
-        "repetition_rate": 0.667,
+        "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
         "coherence": 0.72,
-        "humanlike_flow": 0.386
+        "humanlike_flow": 0.72
       },
       "traces": [
         {
@@ -13656,7 +13692,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -13704,12 +13740,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -13719,7 +13755,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -13727,14 +13763,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -13748,7 +13789,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -13764,8 +13805,8 @@
           "gameProgress": "none",
           "taskProgress": "none",
           "rawModelOutput": null,
-          "selectedCandidateText": "I mean the name you want me to use when I am speaking to you directly.",
-          "responseGateText": "I mean the name you want me to use when I am speaking to you directly.",
+          "selectedCandidateText": "I mean the piece I just pressed on.",
+          "responseGateText": "I mean the piece I just pressed on.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -13790,13 +13831,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "I mean the name you want me to use when I am speaking to you directly."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "I mean the piece I just pressed on."
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "I mean the name you want me to use when I am speaking to you directly."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "I mean the piece I just pressed on."
             },
             {
               "field": "next_expected_user_action",
@@ -13805,15 +13846,15 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "I mean the name you want me to use when I am speaking to you directly."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "I mean the piece I just pressed on."
             }
           ],
           "candidateResponseFamilies": [
             {
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
-              "text": "I mean the name you want me to use when I am speaking to you directly."
+              "text": "I mean the piece I just pressed on."
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -13835,7 +13876,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "I mean the name you want me to use when I am speaking to you directly."
+          "finalText": "I mean the piece I just pressed on."
         },
         {
           "turnNumber": 3,
@@ -13851,8 +13892,8 @@
           "gameProgress": "none",
           "taskProgress": "none",
           "rawModelOutput": null,
-          "selectedCandidateText": "I mean the name you want me to use when I am speaking to you directly. That is the part that actually tells me something useful.",
-          "responseGateText": "I mean the name you want me to use when I am speaking to you directly. That is the part that actually tells me something useful.",
+          "selectedCandidateText": "I mean the part about piece. That is the part that actually tells me something useful.",
+          "responseGateText": "I mean the part about piece. That is the part that actually tells me something useful.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -13869,12 +13910,28 @@
               "value": "why?"
             }
           ],
-          "sceneWrites": [],
+          "sceneWrites": [
+            {
+              "field": "current_rule",
+              "before": "I mean the piece I just pressed on.",
+              "after": "I mean the part about piece."
+            },
+            {
+              "field": "current_subtask",
+              "before": "I mean the piece I just pressed on.",
+              "after": "I mean the part about piece."
+            },
+            {
+              "field": "last_assistant_text",
+              "before": "I mean the piece I just pressed on.",
+              "after": "I mean the part about piece."
+            }
+          ],
           "candidateResponseFamilies": [
             {
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
-              "text": "I mean the name you want me to use when I am speaking to you directly. That is the part that actually tells me something useful."
+              "text": "I mean the part about piece. That is the part that actually tells me something useful."
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -13896,10 +13953,27 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "I mean the name you want me to use when I am speaking to you directly."
+          "finalText": "I mean the part about piece."
         }
       ],
-      "violations": []
+      "violations": [
+        {
+          "scenarioId": "short_follow_up_no_cascade",
+          "turnNumber": 2,
+          "invariant": "context.tie_back",
+          "expected": "clarification tied to recent context",
+          "actual": "I mean the piece I just pressed on.",
+          "likelyCodePath": "lib/session/scene-scaffolds.ts"
+        },
+        {
+          "scenarioId": "short_follow_up_no_cascade",
+          "turnNumber": 3,
+          "invariant": "required_phrase_any",
+          "expected": "what people usually miss about you | the piece i just pressed on | the name you want me to use when i am speaking to you directly",
+          "actual": "I mean the part about piece.",
+          "likelyCodePath": "lib/session/scene-scaffolds.ts"
+        }
+      ]
     },
     {
       "id": "short_follow_up_rejects_weak_anchor",
@@ -13912,7 +13986,7 @@
         "mode": "relational_chat",
         "personaConsistency": 0.667,
         "confidence": 1,
-        "directness": 0.667,
+        "directness": 1,
         "naturalness": 1,
         "cannedRepetition": 1,
         "notes": [
@@ -13921,11 +13995,11 @@
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.111,
-        "repetition_rate": 0.333,
+        "topical_relevance": 0.333,
+        "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
-        "coherence": 0.742,
-        "humanlike_flow": 0.576
+        "coherence": 0.787,
+        "humanlike_flow": 0.787
       },
       "traces": [
         {
@@ -13943,7 +14017,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -13991,12 +14065,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -14006,7 +14080,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -14014,14 +14088,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -14035,7 +14114,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -14052,7 +14131,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Yes. Then tell me what you can actually do for me, not just what sounds good.",
-          "responseGateText": "Yes. Then tell me what you can actually do for me, not just what sounds good.",
+          "responseGateText": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -14094,13 +14173,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Yes. Then tell me what you can actually do for me, not just what sounds good."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Yes. Then tell me what you can actually do for me, not just what sounds good."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "next_expected_user_action",
@@ -14109,8 +14188,8 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Yes. Then tell me what you can actually do for me, not just what sounds good."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "candidateResponseFamilies": [
@@ -14125,7 +14204,7 @@
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
           "fallbackUsed": true,
-          "fallbackReason": "dialogue_act_misaligned",
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -14139,7 +14218,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Yes. Then tell me what you can actually do for me, not just what sounds good."
+          "finalText": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?"
         },
         {
           "turnNumber": 3,
@@ -14155,8 +14234,8 @@
           "gameProgress": "none",
           "taskProgress": "none",
           "rawModelOutput": null,
-          "selectedCandidateText": "I mean what you can actually do for me, not just what sounds good.",
-          "responseGateText": "I mean what you can actually do for me, not just what sounds good.",
+          "selectedCandidateText": "I mean what you can do for me.",
+          "responseGateText": "I mean what you can do for me.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -14176,13 +14255,13 @@
           "sceneWrites": [
             {
               "field": "current_rule",
-              "before": "Yes. Then tell me what you can actually do for me, not just what sounds good.",
-              "after": "I mean what you can actually do for me, not just what sounds good."
+              "before": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "I mean what you can do for me."
             },
             {
               "field": "current_subtask",
-              "before": "Yes. Then tell me what you can actually do for me, not just what sounds good.",
-              "after": "I mean what you can actually do for me, not just what sounds good."
+              "before": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "I mean what you can do for me."
             },
             {
               "field": "next_expected_user_action",
@@ -14191,15 +14270,15 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "Yes. Then tell me what you can actually do for me, not just what sounds good.",
-              "after": "I mean what you can actually do for me, not just what sounds good."
+              "before": "Thinking about what i can do for you. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "I mean what you can do for me."
             }
           ],
           "candidateResponseFamilies": [
             {
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
-              "text": "I mean what you can actually do for me, not just what sounds good."
+              "text": "I mean what you can do for me."
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -14221,7 +14300,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "I mean what you can actually do for me, not just what sounds good."
+          "finalText": "I mean what you can do for me."
         }
       ],
       "violations": []
@@ -14340,11 +14419,6 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What keeps my attention is the part that is real. Say that cleanly, and I will stay with it."
-            },
-            {
-              "family": "scene_fallback",
-              "sourceFunction": "buildSceneFallback",
-              "text": "Fine. Say what you want."
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -14787,11 +14861,6 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What keeps my attention is the part that is real. Say that cleanly, and I will stay with it."
-            },
-            {
-              "family": "scene_fallback",
-              "sourceFunction": "buildSceneFallback",
-              "text": "Fine. Say what you want."
             }
           ],
           "winningResponseFamily": "deterministic_scene",
@@ -20663,22 +20732,20 @@
       "violation_count": 0,
       "style": {
         "mode": "normal_chat",
-        "personaConsistency": 0.667,
+        "personaConsistency": 1,
         "confidence": 1,
-        "directness": 0.667,
+        "directness": 1,
         "naturalness": 1,
         "cannedRepetition": 1,
-        "notes": [
-          "some turns were too neutral or carried disallowed conversational drift"
-        ]
+        "notes": []
       },
       "transcript_metrics": {
         "continuity": 0.9,
-        "topical_relevance": 0.25,
+        "topical_relevance": 0.083,
         "repetition_rate": 0,
         "memory_recall_accuracy": 0.9,
-        "coherence": 0.77,
-        "humanlike_flow": 0.77
+        "coherence": 0.737,
+        "humanlike_flow": 0.737
       },
       "traces": [
         {
@@ -20696,7 +20763,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "What should I call you when I am speaking to you directly?",
-          "responseGateText": "What should I call you when I am speaking to you directly?",
+          "responseGateText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -20744,12 +20811,12 @@
             {
               "field": "current_rule",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "current_subtask",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             },
             {
               "field": "next_expected_user_action",
@@ -20759,7 +20826,7 @@
             {
               "field": "last_assistant_text",
               "before": "none",
-              "after": "What should I call you when I am speaking to you directly?"
+              "after": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "candidateResponseFamilies": [
@@ -20767,14 +20834,19 @@
               "family": "deterministic_scene",
               "sourceFunction": "buildSceneScaffoldReply",
               "text": "What should I call you when I am speaking to you directly?"
+            },
+            {
+              "family": "scene_fallback",
+              "sourceFunction": "buildSceneFallback",
+              "text": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -20788,7 +20860,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "What should I call you when I am speaking to you directly?"
+          "finalText": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?"
         },
         {
           "turnNumber": 2,
@@ -20805,7 +20877,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
-          "responseGateText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
+          "responseGateText": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?",
           "memoryWritesAttempted": [
             {
               "key": "last_user_answer",
@@ -20842,13 +20914,13 @@
             },
             {
               "field": "current_rule",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "current_subtask",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?"
             },
             {
               "field": "next_expected_user_action",
@@ -20857,8 +20929,8 @@
             },
             {
               "field": "last_assistant_text",
-              "before": "What should I call you when I am speaking to you directly?",
-              "after": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+              "before": "Fine. Start simple. What do you actually enjoy doing when you are off the clock?",
+              "after": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "candidateResponseFamilies": [
@@ -20870,20 +20942,20 @@
             {
               "family": "scene_fallback",
               "sourceFunction": "buildSceneFallback",
-              "text": "What is it about that that gets its hooks into you hard enough for me to remember it?"
+              "text": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?"
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
           "summaryRouteSelected": false,
-          "profileQuestionRouteSelected": false,
+          "profileQuestionRouteSelected": true,
           "chatSwitchRouteSelected": false,
           "shortFollowUpRouteSelected": false,
           "oneOutputCommitted": true,
@@ -20892,13 +20964,13 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it."
+          "finalText": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?"
         },
         {
           "turnNumber": 3,
           "userInput": "let's just chat normally",
           "detectedIntent": "user_refusal_or_confusion",
-          "dialogueAct": "other",
+          "dialogueAct": "user_answer",
           "promptRouteMode": "default",
           "promptProfile": "full",
           "promptSummary": "route=default profile=full mode=normal_chat turns=5",
@@ -20909,7 +20981,7 @@
           "taskProgress": "none",
           "rawModelOutput": null,
           "selectedCandidateText": "Fine. Then talk to me normally for a minute.",
-          "responseGateText": "Fine. Then talk to me normally for a minute.",
+          "responseGateText": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind.",
           "memoryWritesAttempted": [
             {
               "key": "last_user_question",
@@ -20951,23 +21023,18 @@
             },
             {
               "field": "current_rule",
-              "before": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
-              "after": "Fine. Then talk to me normally for a minute."
+              "before": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             },
             {
               "field": "current_subtask",
-              "before": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
-              "after": "Fine. Then talk to me normally for a minute."
-            },
-            {
-              "field": "next_expected_user_action",
-              "before": "let Raven use the answer and continue",
-              "after": "continue the current thread"
+              "before": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             },
             {
               "field": "last_assistant_text",
-              "before": "Good. golf is not really the point by itself. I am more interested in what it gives you when you disappear into it.",
-              "after": "Fine. Then talk to me normally for a minute."
+              "before": "Golf. Good. What else should I know about your boundaries or the things you do not want pushed?",
+              "after": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
             }
           ],
           "candidateResponseFamilies": [
@@ -20978,11 +21045,11 @@
             }
           ],
           "winningResponseFamily": "deterministic_scene",
-          "finalOutputSource": "deterministic_scene",
+          "finalOutputSource": "response_gate_fallback",
           "moreThanOneGeneratorFired": false,
           "postProcessingModifiedOutput": false,
-          "fallbackUsed": false,
-          "fallbackReason": "accepted",
+          "fallbackUsed": true,
+          "fallbackReason": "turn_plan_misaligned",
           "taskStatePaused": false,
           "taskStateResumed": false,
           "lockActive": false,
@@ -20996,7 +21063,7 @@
             "allow": true,
             "reason": "ok"
           },
-          "finalText": "Fine. Then talk to me normally for a minute."
+          "finalText": "Good. Stay on you. Tell me one thing people usually miss about you that I should keep in mind."
         }
       ],
       "violations": []
