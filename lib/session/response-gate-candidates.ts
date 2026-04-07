@@ -93,6 +93,37 @@ function looksLikeChoiceOrThreadAnswer(
   return false;
 }
 
+function isTaskRepairCue(text: string): boolean {
+  return /\b(what counts as done|why that task|why this task|set me another one|give me another one|give me the next one|next task|what else should i do now)\b/i.test(
+    normalize(text),
+  );
+}
+
+function shouldBlockTaskRepairForFreshCasualTurn(gateInput: ResponseGateInput): boolean {
+  if (
+    gateInput.sceneState.interaction_mode !== "normal_chat" &&
+    gateInput.sceneState.interaction_mode !== "relational_chat" &&
+    gateInput.sceneState.interaction_mode !== "question_answering" &&
+    gateInput.sceneState.interaction_mode !== "profile_building"
+  ) {
+    return false;
+  }
+  if (isTaskRepairCue(gateInput.userText)) {
+    return false;
+  }
+  const normalized = normalize(gateInput.userText).toLowerCase();
+  return (
+    /^(work|chat|plan|game)$/i.test(normalized) ||
+    /^(?:what do you mean|go on|keep going|why)\??$/.test(normalized) ||
+    /^(?:i like|i love|i enjoy|i want|i wanted|i prefer|i think|i feel|call me|my name is|my name's|i'm into|i am into)\b/.test(
+      normalized,
+    ) ||
+    /^(?:what do you think about|what's your take on|where do we start|okay ask|ok ask|ask me more questions|tell me more about you|tell me more about me|what do you want to know about me)\b/.test(
+      normalized,
+    )
+  );
+}
+
 function isGameTopicActive(input: ResponseGateInput): boolean {
   return (
     input.sceneState.interaction_mode === "game" ||
@@ -212,12 +243,6 @@ function shouldPreferOpenConversationFallback(
   return isStableCoreConversationMove(conversationMove);
 }
 
-function isTaskRepairCue(text: string): boolean {
-  return /\b(what counts as done|why that task|why this task|set me another one|give me another one|give me the next one|next task|what else should i do now)\b/i.test(
-    normalize(text),
-  );
-}
-
 export function createResponseGateCandidateBuilder(
   input: ResponseGateCandidateBuilderInput,
 ): ResponseGateCandidateBuilder {
@@ -233,6 +258,7 @@ export function createResponseGateCandidateBuilder(
     (gateInput.sceneState.topic_type === "game_setup" ||
       gateInput.sceneState.topic_type === "game_execution" ||
       gateInput.sceneState.topic_type === "reward_window");
+  const taskRepairBlocked = shouldBlockTaskRepairForFreshCasualTurn(gateInput);
 
   const buildOpenConversationFallback = (): string => {
     const toneProfile = gateInput.toneProfile ?? "neutral";
@@ -377,11 +403,10 @@ export function createResponseGateCandidateBuilder(
     }
     if (hasStaleGameTopic) {
       if (
+        !taskRepairBlocked &&
         (
           activeTaskThread ||
-          /\b(what counts as done|why that task|why this task|set me another one|next task|what else should i do now)\b/i.test(
-            normalize(gateInput.userText),
-          )
+          isTaskRepairCue(gateInput.userText)
         ) &&
         (gateInput.dialogueAct === "user_question" || gateInput.dialogueAct === "short_follow_up")
       ) {
@@ -444,6 +469,7 @@ export function createResponseGateCandidateBuilder(
       return buildOpenConversationFallback();
     }
     if (
+      !taskRepairBlocked &&
       gateInput.sceneState.topic_type === "task_execution" &&
       (gateInput.dialogueAct === "user_question" || gateInput.dialogueAct === "short_follow_up")
     ) {

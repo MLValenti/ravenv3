@@ -530,12 +530,212 @@ function containsWeakGameContinuationShell(text: string): boolean {
   );
 }
 
+function containsGameOpenOrProceduralFallback(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /^first we choose the game, pet\./.test(normalized) ||
+    /^i pick\. we are doing\b/.test(normalized) ||
+    /\bwe stay on one game thread: one prompt from me, one clean reply from you\./.test(normalized) ||
+    /^good\. keep the same subject, but answer this change directly:/i.test(normalize(text))
+  );
+}
+
+function isExplicitGameRestartCue(userText: string): boolean {
+  return /\b(start over|new game|different game|reset|you pick|pick for me|choose quick|choose longer|play again|another round)\b/i.test(
+    normalize(userText),
+  );
+}
+
+function hasExplicitCurrentTurnLiveGameEvidence(text: string): boolean {
+  return /\b(game|rock paper scissors|rps|number hunt|math duel|riddle lock|number command|wager|stakes|if i win|if you win|another round|play again|you pick|pick for me|choose quick|choose longer|start over|new game|different game|reset)\b/i.test(
+    normalize(text),
+  );
+}
+
+function roundCommittedForGame(input: ResponseGateInput): boolean {
+  const userText = normalize(input.userText);
+  const lastAssistantText = normalize(input.lastAssistantText ?? input.sceneState.last_assistant_text ?? "");
+  const hasMoveOrGuessCue =
+    /\b(i choose\b|my choice is|my first throw is|for my (?:first|second|third) throw|first throw\b|second throw\b|rock\b|paper\b|scissors\b|guess(?:\s+\d+)?)\b/i.test(
+      userText,
+    );
+  const hasImmediateContinuationCue =
+    /\b(go on|keep going|what now|play again|another round|continue|wager|stakes|if i win|if you win|why that game|why this game|explain the game)\b/i.test(
+      userText,
+    );
+  const hasPlayablePrompt =
+    /\b(i pick\. we are doing|first throw now|first guess now)\b/i.test(lastAssistantText);
+  const hasResolvedRoundCue =
+    /\b(you win this round|i win this one|your consequence is live now|say ready)\b/i.test(
+      lastAssistantText,
+    );
+  return (
+    !isExplicitGameRestartCue(input.userText) &&
+    (
+      (
+        input.sceneState.topic_type === "game_execution" &&
+        (hasMoveOrGuessCue || hasImmediateContinuationCue)
+      ) ||
+      ((hasPlayablePrompt || hasResolvedRoundCue) &&
+        (hasMoveOrGuessCue || hasImmediateContinuationCue))
+    )
+  );
+}
+
+function containsWrongFamilyTaskResidue(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return /\b(work assignment|next instruction|initial request to have a device task|focus on your initial request|explore [a-z0-9' -]+ games later)\b/.test(
+    normalized,
+  );
+}
+
+function isFreshCasualDisclosureOrTopicQuestion(input: ResponseGateInput): boolean {
+  if (
+    input.sceneState.interaction_mode !== "normal_chat" &&
+    input.sceneState.interaction_mode !== "relational_chat" &&
+    input.sceneState.interaction_mode !== "question_answering" &&
+    input.sceneState.interaction_mode !== "profile_building"
+  ) {
+    return false;
+  }
+  const normalized = normalize(input.userText).toLowerCase();
+  return (
+    /^(?:i like|i love|i enjoy|i want|i wanted|i prefer|i think|i feel|call me|my name is|my name's|i'm into|i am into)\b/.test(
+      normalized,
+    ) ||
+    /^(?:what do you think about|what's your take on)\b/.test(normalized)
+  );
+}
+
 function isTrueActiveGameExecution(input: ResponseGateInput): boolean {
   return (
     input.sceneState.interaction_mode === "game" &&
     input.sceneState.topic_locked &&
     input.sceneState.topic_type === "game_execution"
   );
+}
+
+function isTurnPlanDurationCannedText(text: string): boolean {
+  return /^(?:listen carefully, pet\.\s*)?(?:for this round, 30 minutes|this round runs for 30 minutes)\.?$/i.test(
+    normalize(text),
+  );
+}
+
+function classifyWinningSourceFamily(text: string, reason: string, finalMatchesRaw: boolean): string {
+  const normalized = normalize(text);
+  if (finalMatchesRaw && reason === "accepted") {
+    return "raw_model";
+  }
+  if (/^first we choose the game, pet\./i.test(normalized)) {
+    return "buildGameSetupReply";
+  }
+  if (/^i pick\. we are doing\b/i.test(normalized)) {
+    return "buildDeterministicGameStart";
+  }
+  if (
+    /\bwe stay on one game thread: one prompt from me, one clean reply from you\./i.test(normalized) ||
+    /^good\. keep the same subject, but answer this change directly:/i.test(normalized) ||
+    isTurnPlanDurationCannedText(normalized)
+  ) {
+    return reason === "turn_plan_misaligned" ? "turn_plan_misaligned" : "buildTurnPlanFallback";
+  }
+  if (reason === "duplicate_output_replaced" || reason === "duplicate_output_blocked") {
+    return "duplicate_output_path";
+  }
+  if (reason === "turn_plan_misaligned") {
+    return "turn_plan_misaligned";
+  }
+  if (/fallback|misaligned|blocked|replaced|drift|hijack|wrapper|leak|residue/i.test(reason)) {
+    return "buildFallback";
+  }
+  return "other";
+}
+
+function isKnownBadFamilyText(text: string): boolean {
+  return containsGameOpenOrProceduralFallback(text) || isTurnPlanDurationCannedText(text);
+}
+
+function hasCommittedDelegatedPlayableCue(text: string | null | undefined): boolean {
+  return /\b(i pick\. we are doing|first throw now|first guess now)\b/i.test(normalize(text ?? ""));
+}
+
+function isPostChoiceQuestionFirstGameTurn(input: ResponseGateInput): boolean {
+  if (
+    input.sceneState.topic_type !== "game_setup" ||
+    input.dialogueAct !== "user_question" ||
+    !hasCommittedDelegatedPlayableCue(input.lastAssistantText ?? input.sceneState.last_assistant_text)
+  ) {
+    return false;
+  }
+  return /\b(rules?|how does that one work|how do we play|which one|easiest|beginner|first move)\b/i.test(
+    normalize(input.userText),
+  );
+}
+
+function buildPostChoiceGameQuestionReply(input: ResponseGateInput): string | null {
+  const previous = normalize(input.lastAssistantText ?? input.sceneState.last_assistant_text ?? "");
+  const user = normalize(input.userText).toLowerCase();
+  if (/rock paper scissors streak/i.test(previous)) {
+    if (/\b(which one|easiest|beginner)\b/.test(user)) {
+      return "Rock paper scissors streak is the easy one. Two throws, you choose rock, paper, or scissors each throw, and I reveal after you commit.";
+    }
+    if (/\b(first move)\b/.test(user)) {
+      return "First move is yours. Choose rock, paper, or scissors for the first throw, then I reveal mine after you commit.";
+    }
+    return "Rock paper scissors streak is simple: two throws, you choose rock, paper, or scissors each throw, and I reveal after you commit.";
+  }
+  if (/number hunt/i.test(previous)) {
+    return "Number hunt is simple: I lock one hidden number from 1 to 10, and you get two guesses maximum.";
+  }
+  if (/math duel/i.test(previous)) {
+    return "Math duel is simple: two math prompts, digits only, and one wrong answer loses the round.";
+  }
+  return null;
+}
+
+function isRepeatedTaskBlockerFamily(text: string): boolean {
+  return /^(?:answer directly, pet\.\s*)?be specific\. give me the task domain or the time window so i can set it properly\.?$/i.test(
+    normalize(text),
+  );
+}
+
+function isTaskProgressReportBackTurn(input: ResponseGateInput): boolean {
+  const hasTaskContext =
+    (input.sceneState.topic_type === "task_negotiation" || input.sceneState.topic_type === "task_execution") &&
+    (input.sceneState.task_spec.request_fulfilled ||
+      input.sceneState.current_task_domain.length > 0 ||
+      input.sceneState.task_progress !== "none");
+  return (
+    hasTaskContext &&
+    /\b(halfway|report back|check(?:-| )?in|finish|completed?|done|proceed|next step|what should i do next|what do i do next)\b/i.test(
+      normalize(input.userText),
+    )
+  );
+}
+
+function explicitlyAsksTaskDomainOrDuration(userText: string): boolean {
+  return /\b(task domain|what domain|which domain|time window|how long|duration|minutes?|hours?)\b/i.test(
+    normalize(userText),
+  );
+}
+
+function appendResponseGateTrace(entry: unknown): void {
+  if (process.env.RAVEN_RESPONSE_GATE_TRACE !== "1") {
+    return;
+  }
+  const traceFile = process.env.RAVEN_RESPONSE_GATE_TRACE_FILE || ".tmp-response-gate-trace.jsonl";
+  try {
+    const builtinProcess = process as typeof process & {
+      getBuiltinModule?: (id: string) => { appendFileSync?: (path: string, data: string, encoding: string) => void } | null;
+    };
+    const fsModule =
+      typeof builtinProcess.getBuiltinModule === "function"
+        ? builtinProcess.getBuiltinModule("node:fs")
+        : null;
+    fsModule?.appendFileSync?.(traceFile, `${JSON.stringify(entry)}\n`, "utf8");
+  } catch {
+    // Debug tracing must never affect live behavior.
+  }
 }
 
 function isWeakGameExplanationDrift(input: ResponseGateInput, text: string): boolean {
@@ -1399,9 +1599,37 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
 }
 
 export function applyResponseGate(input: ResponseGateInput): ResponseGateResult {
+  const rawModelOutput = input.text;
   let text = stripInternalLines(input.text);
   let forced = false;
   let reason = "accepted";
+  let preservedCurrentAnswerAfterBlockedFallback = false;
+  const replacementChain: Array<{
+    oldText: string;
+    newText: string;
+    reason: string;
+    sourcePath: string;
+  }> = [];
+  const traceDecision = (
+    oldText: string,
+    newText: string,
+    decisionReason: string,
+    sourcePath: string,
+    preservedCurrent = false,
+  ): void => {
+    if (normalize(oldText) === normalize(newText) && !preservedCurrent) {
+      return;
+    }
+    if (preservedCurrent) {
+      preservedCurrentAnswerAfterBlockedFallback = true;
+    }
+    replacementChain.push({
+      oldText: normalize(oldText),
+      newText: normalize(newText),
+      reason: decisionReason,
+      sourcePath,
+    });
+  };
   const continuityTopic = resolveContinuityTopic(input);
   const conversationMove = classifyCoreConversationMove({
     userText: input.userText,
@@ -1422,18 +1650,22 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   const initialGameStartInspection = inspectGameStartContract(text, input.sceneState.game_template_id);
   const allowGameStartContract = candidates.shouldAllowGameStartContract(initialGameStartInspection);
   if (initialGameStartInspection.detected && !allowGameStartContract) {
+    const oldText = text;
     text = candidates.buildOpenConversationFallback();
     forced = true;
     reason = "unexpected_game_start_on_conversational_turn";
+    traceDecision(oldText, text, reason, "buildOpenConversationFallback");
   }
   if (!forced && allowGameStartContract) {
     const enforcedGameStart = enforceGameStartContract(text, input.sceneState.game_template_id);
     if (enforcedGameStart.inspection.detected && enforcedGameStart.inspection.usedFallbackStart) {
+      const oldText = text;
       text = enforcedGameStart.text;
       forced = true;
       reason = enforcedGameStart.inspection.hasPlayablePrompt
         ? "game_start_contract_restored"
         : "game_start_missing_first_prompt";
+      traceDecision(oldText, text, reason, "enforceGameStartContract");
     }
   }
   const isGameStartTurn =
@@ -1568,6 +1800,23 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       reason = "weak_game_explanation_replaced";
     }
   }
+  if (
+    !forced &&
+    containsGameOpenOrProceduralFallback(text) &&
+    (
+      roundCommittedForGame(input) ||
+      (
+        input.sceneState.topic_type === "task_execution" &&
+        !hasExplicitCurrentTurnLiveGameEvidence(input.userText)
+      )
+    )
+  ) {
+    const oldText = text;
+    text = candidates.buildFallback();
+    forced = true;
+    reason = "wrong_family_game_open_blocked";
+    traceDecision(oldText, text, reason, "buildFallback");
+  }
 
   if (
     input.turnPlan &&
@@ -1583,9 +1832,13 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   if (enforceTurnPlan && input.turnPlan) {
     const turnPlanCheck = isTurnPlanSatisfied(input.turnPlan, text);
     if (!turnPlanCheck.ok) {
+      const oldText = text;
       text = candidates.buildTurnPlanFallback();
-      forced = true;
-      reason = "turn_plan_misaligned";
+      if (normalize(text).toLowerCase() !== normalize(oldText).toLowerCase()) {
+        forced = true;
+        reason = "turn_plan_misaligned";
+        traceDecision(oldText, text, reason, "buildTurnPlanFallback");
+      }
     }
   }
 
@@ -1629,6 +1882,16 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     text = candidates.buildFallback();
     forced = true;
     reason = "verbose_task_debug_wrapper";
+  }
+
+  if (
+    !forced &&
+    isFreshCasualDisclosureOrTopicQuestion(input) &&
+    containsWrongFamilyTaskResidue(text)
+  ) {
+    text = candidates.buildOpenConversationFallback();
+    forced = true;
+    reason = "task_residue_on_casual_turn";
   }
 
   if (
@@ -1785,9 +2048,45 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   }
 
   if (!forced && !isDialogueActAligned(input, text)) {
-    text = candidates.buildFallback();
-    forced = true;
-    reason = "dialogue_act_misaligned";
+    const oldText = text;
+    const fallback = candidates.buildFallback();
+    if (
+      isPostChoiceQuestionFirstGameTurn(input) &&
+      containsGameOpenOrProceduralFallback(fallback)
+    ) {
+      const repaired = buildPostChoiceGameQuestionReply(input);
+      if (repaired) {
+        text = repaired;
+        forced = true;
+        reason = "dialogue_act_misaligned";
+        traceDecision(oldText, text, reason, "post_choice_game_question");
+      } else {
+        text = fallback;
+        forced = true;
+        reason = "dialogue_act_misaligned";
+        traceDecision(oldText, text, reason, "buildFallback");
+      }
+    } else {
+      text = fallback;
+      forced = true;
+      reason = "dialogue_act_misaligned";
+      traceDecision(oldText, text, reason, "buildFallback");
+    }
+  }
+
+  if (
+    !forced &&
+    isPostChoiceQuestionFirstGameTurn(input) &&
+    containsGameOpenOrProceduralFallback(text)
+  ) {
+    const oldText = text;
+    const repaired = buildPostChoiceGameQuestionReply(input);
+    if (repaired) {
+      text = repaired;
+      forced = true;
+      reason = "post_choice_game_question";
+      traceDecision(oldText, text, reason, "post_choice_game_question");
+    }
   }
 
   if (
@@ -1844,9 +2143,11 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     isSemanticallyRepeated(text, input.lastAssistantText)
   ) {
     if (isShortClarificationTurn(input.userText)) {
+      const oldText = text;
       text = candidates.buildFallback();
       forced = true;
       reason = "duplicate_output_replaced";
+      traceDecision(oldText, text, reason, "buildFallback");
       return {
         text: normalize(text),
         forced,
@@ -1857,9 +2158,11 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       normalize(input.userText),
     );
     if (input.sceneState.topic_type === "reward_negotiation" || hasWagerCue) {
+      const oldText = text;
       text = candidates.buildDuplicateNudge(candidates.buildFallback());
       forced = true;
       reason = "duplicate_output_blocked";
+      traceDecision(oldText, text, reason, "duplicate_output_path");
       return {
         text: normalize(text),
         forced,
@@ -1867,14 +2170,55 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       };
     }
     const fallback = candidates.buildFallback();
+    if (
+      isPostChoiceQuestionFirstGameTurn(input) &&
+      containsGameOpenOrProceduralFallback(fallback)
+    ) {
+      const oldText = text;
+      const repaired = buildPostChoiceGameQuestionReply(input);
+      if (repaired) {
+        text = repaired;
+        forced = true;
+        reason = "duplicate_output_replaced";
+        traceDecision(oldText, text, reason, "post_choice_game_question");
+        return {
+          text: normalize(text),
+          forced,
+          reason,
+        };
+      }
+    }
+    if (
+      isRepeatedTaskBlockerFamily(text) &&
+      isTaskProgressReportBackTurn(input) &&
+      !explicitlyAsksTaskDomainOrDuration(input.userText)
+    ) {
+      const repaired = buildTaskFollowThroughRepair(input);
+      if (repaired && normalize(repaired).toLowerCase() !== normalized.toLowerCase()) {
+        const oldText = text;
+        text = repaired;
+        forced = true;
+        reason = "duplicate_output_replaced";
+        traceDecision(oldText, text, reason, "buildTaskFollowThroughRepair");
+        return {
+          text: normalize(text),
+          forced,
+          reason,
+        };
+      }
+    }
     if (normalize(fallback).toLowerCase() !== normalized.toLowerCase()) {
+      const oldText = text;
       text = fallback;
       forced = true;
       reason = "duplicate_output_replaced";
+      traceDecision(oldText, text, reason, "buildFallback");
     } else {
+      const oldText = text;
       text = candidates.buildDuplicateNudge(fallback);
       forced = true;
       reason = "duplicate_output_blocked";
+      traceDecision(oldText, text, reason, "duplicate_output_path");
     }
   }
 
@@ -1884,6 +2228,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     initialGameStartInspection.detected &&
     !finalGameStartInspection.hasPlayablePrompt
   ) {
+    const oldText = text;
     const restored = enforceGameStartContract(
       initialGameStartInspection.usedFallbackStart ? text : input.text,
       initialGameStartInspection.templateId,
@@ -1891,10 +2236,40 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     text = restored.text;
     forced = true;
     reason = "game_start_contract_restored";
+    traceDecision(oldText, text, reason, "enforceGameStartContract");
   }
 
+  const finalOutput = normalize(text);
+  const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
+  if (forced && replacementChain.length === 0) {
+    replacementChain.push({
+      oldText: normalize(rawModelOutput),
+      newText: finalOutput,
+      reason,
+      sourcePath: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
+    });
+  }
+  appendResponseGateTrace({
+    turnId: null,
+    scenarioLabel: null,
+    rawModelOutput: normalize(rawModelOutput),
+    userText: normalize(input.userText),
+    dialogueAct: input.dialogueAct ?? null,
+    topicType: input.sceneState.topic_type,
+    interactionMode: input.sceneState.interaction_mode,
+    finalOutput,
+    finalMatchesRaw,
+    replaced: !finalMatchesRaw,
+    replacementReason: reason,
+    winningSourceFamily: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
+    preservedCurrentAnswerAfterBlockedFallback,
+    rawAlreadyBad: isKnownBadFamilyText(rawModelOutput),
+    replacementIntroducedBadOutput: !isKnownBadFamilyText(rawModelOutput) && isKnownBadFamilyText(finalOutput),
+    replacementChain,
+  });
+
   return {
-    text: normalize(text),
+    text: finalOutput,
     forced,
     reason,
   };

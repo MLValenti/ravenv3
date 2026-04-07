@@ -2158,6 +2158,95 @@ test("response gate rejects generic acknowledgement when a direct casual follow-
   assert.doesNotMatch(result.text, /^noted\.?$/i);
 });
 
+test("response gate does not let stale task residue steal a grounded casual short answer", () => {
+  const turnPlan = buildTurnPlan(
+    [
+      { role: "assistant", content: "Fine. What has the most pressure on you right now?" },
+      { role: "user", content: "work" },
+    ],
+    {
+      conversationState: createConversationStateSnapshot("response-gate-stale-task-work"),
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Noted, pet. You completed the step, so I move you to the next instruction now. Here is your work assignment: Respond directly to my question about the scene's topic without mentioning a specific game or task yet.",
+    userText: "work",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Fine. What has the most pressure on you right now?",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_focus",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(workload|person|decision|pressure)\b/i);
+  assert.doesNotMatch(result.text, /\b(work assignment|next instruction|scene's topic)\b/i);
+});
+
+test("response gate does not let stale task residue steal casual clarification after a grounded work line", () => {
+  const result = applyResponseGate({
+    text: "I mean noted, pet.",
+    userText: "what do you mean?",
+    dialogueAct: "short_follow_up",
+    lastAssistantText: "I mean is it workload, a person, or a decision you keep circling.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_focus",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(work|attention|amount|person|choice|decision)\b/i);
+  assert.doesNotMatch(result.text, /i mean noted/i);
+});
+
+test("response gate does not let stale task residue steal casual go-on after a grounded work line", () => {
+  const result = applyResponseGate({
+    text: "Yes. Keep going. Stay with the concrete part of open, not the wording around it.",
+    userText: "go on",
+    dialogueAct: "short_follow_up",
+    lastAssistantText: "I mean is it workload, a person, or a decision you keep circling.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_focus",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(pick one|thread|which part|workload|person|decision)\b/i);
+  assert.doesNotMatch(result.text, /concrete part of open/i);
+});
+
 test("response gate rejects weak generic clarification when active relational continuity exists", () => {
   const scene = noteSceneStateAssistantTurn(createSceneState(), {
     text: "I like bondage when it actually changes the dynamic instead of decorating it.",
@@ -2231,6 +2320,56 @@ test("response gate rejects generic acknowledgement after explicit task release 
   assert.match(result.text, /focus|quiet|competition|what do you like about it/i);
   assert.doesNotMatch(result.text, /^noted\.?$/i);
   assert.doesNotMatch(result.text, /put it on now|report back|what items are actually available/i);
+});
+
+test("response gate does not let stale task residue steal a fresh personal disclosure after paused task history", () => {
+  const result = applyResponseGate({
+    text: "Noted, pet. We'll explore pegging games later if you want. For now, let's focus on your initial request to have a device task for 30 minutes.",
+    userText: "I like pegging",
+    dialogueAct: "other",
+    lastAssistantText: "Fine. We can talk normally. What is actually on your mind?",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_focus",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b(pegging|what do you like about it|what about it|what pulls you in)\b/i);
+  assert.doesNotMatch(result.text, /\b(device task|30 minutes|explore pegging games later)\b/i);
+});
+
+test("response gate does not let stale task residue steal a casual topical question", () => {
+  const result = applyResponseGate({
+    text: "I prefer structure because it calms me down and keeps control clear. What routine interests you?",
+    userText: "what do you think about routines?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Noted, pet. We'll explore golf games later if you want. For now, let's focus on your initial request to have a device task for 30 minutes.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_focus",
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b(routines|structure|support your life|hold things together)\b/i);
+  assert.doesNotMatch(result.text, /\b(device task|30 minutes|golf games)\b/i);
 });
 
 test("response gate does not let profile-opening enforcement steal a planning opener", () => {
@@ -2775,4 +2914,440 @@ test("response gate rejects generic game consequence filler and keeps consequenc
   assert.equal(result.forced, true);
   assert.match(result.text, /consequence|wear your cage overnight|say ready|enforce/i);
   assert.doesNotMatch(result.text, /fine\. say what you want/i);
+});
+
+test("response gate rejects game setup reopening on active game move follow-through", () => {
+  const result = applyResponseGate({
+    text: "First we choose the game, pet. Tell me to pick, or choose quick or longer. Do it properly.",
+    userText: "I choose rock for the first throw.",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(chose rock|threw|first throw|second throw|round)\b/i);
+  assert.doesNotMatch(result.text, /first we choose the game|choose quick or longer/i);
+});
+
+test("response gate does not reopen setup on a question-first game turn after the game is already chosen", () => {
+  const result = applyResponseGate({
+    text: "First we choose the game, pet. Tell me to pick, or choose quick or longer. Do it properly.",
+    userText: "How does that one work again?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_setup",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.doesNotMatch(result.text, /first we choose the game|i pick\. we are doing/i);
+});
+
+test("response gate duplicate path does not preserve opener text after the game is already chosen", () => {
+  const repeated = "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.";
+  const result = applyResponseGate({
+    text: repeated,
+    userText: "How does that one work again?",
+    dialogueAct: "user_question",
+    lastAssistantText: repeated,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_setup",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.doesNotMatch(result.text, /first we choose the game|i pick\. we are doing/i);
+});
+
+test("response gate rejects procedural game turn-plan fallback on task progress turns", () => {
+  const result = applyResponseGate({
+    text: "We stay on one game thread: one prompt from me, one clean reply from you.",
+    userText: "What should I do next to finish this task?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Listen carefully, pet. Fine. This one keeps your mouth and body under the same rule. Here is your task: Keep your chastity device on for 30 minutes under a silence rule: no touching, no adjusting, no bargaining. Check in once halfway through, and report back when it is done. The stakes are chastity. Start now. Lock your chastity device on, settle the silence rule, and reply done once you are under control, pet.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      task_progress: "secured",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_endurance",
+        duration_minutes: 30,
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(next|check in|30 minutes|done|finish|hold)\b/i);
+  assert.doesNotMatch(result.text, /one game thread|one prompt from me|one clean reply/i);
+});
+
+test("response gate rejects procedural keep-the-same-subject fallback on task clarification", () => {
+  const result = applyResponseGate({
+    text: "Good. Keep the same subject, but answer this change directly: the task.",
+    userText: "What do I need to do to complete this task?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Good. It is set. Hold it to 15 minutes, check in once, then finish the full 30 minutes.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      task_progress: "halfway_checked",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_endurance",
+        duration_minutes: 30,
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(done|complete|30 minutes|report back|finish)\b/i);
+  assert.doesNotMatch(result.text, /keep the same subject|answer this change directly/i);
+});
+
+test("response gate rejects duration canned turn-plan fallback on non-duration task progress", () => {
+  const result = applyResponseGate({
+    text: "For this round, 30 minutes.",
+    userText: "What should I do after I finish this task?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Good. It is set. Hold it to 15 minutes, check in once, then finish the full 30 minutes.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      task_progress: "halfway_checked",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_endurance",
+        duration_minutes: 30,
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(after|finish|report back|done|next)\b/i);
+  assert.doesNotMatch(result.text, /^for this round, 30 minutes/i);
+});
+
+test("response gate still allows duration canned answer on an explicit task duration question", () => {
+  const result = applyResponseGate({
+    text: "For this round, 30 minutes.",
+    userText: "How long do I keep it on before the halfway check in?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Good. It is set. Hold it to 15 minutes, check in once, then finish the full 30 minutes.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      task_progress: "secured",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_endurance",
+        duration_minutes: 30,
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b30 minutes\b/i);
+});
+
+test("response gate still allows fresh unchosen game-open behavior", () => {
+  const result = applyResponseGate({
+    text: "First we choose the game, pet. Tell me to pick, or choose quick or longer. Do it properly.",
+    userText: "Which one should we play first?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Good. You want a game. Choose quick, or choose something that runs for a few minutes.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_setup",
+      topic_locked: true,
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /first we choose the game|quick games are rock paper scissors/i);
+});
+
+test("response gate rejects procedural game fallback on post-round continue", () => {
+  const result = applyResponseGate({
+    text: "Good. Keep the same subject, but answer this change directly: play again.",
+    userText: "play again",
+    dialogueAct: "short_follow_up",
+    lastAssistantText:
+      "You win this round. Your consequence is live now. Say ready if you want another round.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+      game_progress: "round_2",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b(another round|ready|throw|play again|round)\b/i);
+  assert.doesNotMatch(result.text, /keep the same subject|answer this change directly|first we choose the game/i);
+});
+
+test("response gate preserves a valid current-round raw answer instead of reopening game start", () => {
+  const raw =
+    "Good. You chose paper. I threw scissors. Scissors beats paper. You lose the first throw. The round is mine. I win this one. Your consequence is live now.";
+
+  const result = applyResponseGate({
+    text: raw,
+    userText:
+      "Got it. For the first round, I choose paper. Reveal your choice and tell me who wins this throw.",
+    dialogueAct: "answer_activity_choice",
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_execution",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+      game_progress: "round_1",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\byou chose paper\b/i);
+  assert.match(result.text, /\bi threw scissors\b/i);
+  assert.doesNotMatch(result.text, /^i pick\. we are doing\b/i);
+});
+
+test("response gate preserves a valid wager answer instead of reopening game start", () => {
+  const raw =
+    "Good. The stakes are five bucks each. Winner takes the full ten. The terms are agreed. We lock that in before the first throw.";
+
+  const result = applyResponseGate({
+    text: raw,
+    userText:
+      "Let's make it five bucks each. Winner takes the full ten. Agreed before we start?",
+    dialogueAct: "propose_activity",
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "reward_negotiation",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b(stakes|terms|agreed|winner takes)\b/i);
+  assert.doesNotMatch(result.text, /^i pick\. we are doing\b/i);
+});
+
+test("response gate does not accept raw opener text on a post-choice question-first turn", () => {
+  const repeated =
+    "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.";
+
+  const result = applyResponseGate({
+    text: repeated,
+    userText: "Which one would be easiest for a beginner?",
+    dialogueAct: "user_question",
+    lastAssistantText: repeated,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "game_setup",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.doesNotMatch(result.text, /^i pick\. we are doing\b|^first we choose the game\b/i);
+  assert.match(result.text, /\b(easy|simple|two throws|choose rock, paper, or scissors)\b/i);
+});
+
+test("response gate preserves a valid wager answer instead of procedural turn-plan text", () => {
+  const turnPlan = buildTurnPlan([
+    {
+      role: "assistant",
+      content:
+        "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    },
+    {
+      role: "user",
+      content:
+        "Sure, let's play a quick game of rock-paper-scissors. How about we make it a best-of-three rounds and bet 10 bucks per round?",
+    },
+  ]);
+
+  const result = applyResponseGate({
+    text:
+      "Good. The stakes are the round. Ten bucks per round. If you win two out of three, you take twenty total. If I win, I take the money. The terms are set.",
+    userText:
+      "Sure, let's play a quick game of rock-paper-scissors. How about we make it a best-of-three rounds and bet 10 bucks per round?",
+    dialogueAct: "propose_activity",
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "reward_negotiation",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b(stakes|terms)\b/i);
+  assert.doesNotMatch(result.text, /keep the same subject|answer this change directly/i);
+});
+
+test("response gate preserves a valid task-progress answer instead of procedural turn-plan text", () => {
+  const turnPlan = buildTurnPlan([
+    {
+      role: "assistant",
+      content:
+        "Listen carefully, pet. Fine. This one keeps your mouth and body under the same rule. Here is your task: Keep your chastity device on for 30 minutes under a silence rule: no touching, no adjusting, no bargaining. Check in once halfway through, and report back when it is done. The stakes are chastity. Start now. Lock your chastity device on, settle the silence rule, and reply done once you are under control, pet.",
+    },
+    {
+      role: "user",
+      content:
+        "I've started the second half of the task. I won't touch or adjust my chastity device for another 15 minutes. What should I do after I finish this task?",
+    },
+  ]);
+
+  const result = applyResponseGate({
+    text:
+      "Good. Hold the same rule through the final 15 minutes, then report back once the full 30 is done.",
+    userText:
+      "I've started the second half of the task. I won't touch or adjust my chastity device for another 15 minutes. What should I do after I finish this task?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "Listen carefully, pet. Fine. This one keeps your mouth and body under the same rule. Here is your task: Keep your chastity device on for 30 minutes under a silence rule: no touching, no adjusting, no bargaining. Check in once halfway through, and report back when it is done. The stakes are chastity. Start now. Lock your chastity device on, settle the silence rule, and reply done once you are under control, pet.",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_execution",
+      topic_locked: true,
+      task_progress: "halfway_checked",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_endurance",
+        duration_minutes: 30,
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b(final 15 minutes|report back|full 30)\b/i);
+  assert.doesNotMatch(result.text, /keep the same subject|answer this change directly/i);
+  assert.doesNotMatch(result.text, /^for this round, 30 minutes/i);
+});
+
+test("response gate does not restore game-start text over a valid consequence answer", () => {
+  const result = applyResponseGate({
+    text:
+      "Good. You lose this round. Your consequence is live now. Say ready, and I will enforce it.",
+    userText: "What happens now?",
+    dialogueAct: "user_question",
+    lastAssistantText:
+      "I pick. We are doing a rock paper scissors streak, pet. Two throws. Choose rock, paper, or scissors each throw. I reveal my throw after you commit. Listen carefully, pet. First throw now. Choose rock, paper, or scissors.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "game",
+      topic_type: "reward_window",
+      topic_locked: true,
+      game_template_id: "rps_streak",
+      game_outcome: "raven_win",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.match(result.text, /\b(consequence is live|say ready|enforce)\b/i);
+  assert.doesNotMatch(result.text, /^i pick\. we are doing\b/i);
+  assert.notEqual(result.reason, "game_start_contract_restored");
+});
+
+test("response gate duplicate path does not preserve repeated task blocker text on progress turns", () => {
+  const repeated = "Be specific. Give me the task domain or the time window so I can set it properly.";
+  const result = applyResponseGate({
+    text: repeated,
+    userText:
+      "Alright, in 15 minutes, I'll let you know if I'm still able to maintain my silence and chastity device compliance without touching or adjusting it. Is that what you wanted me to report back on?",
+    dialogueAct: "user_question",
+    lastAssistantText: repeated,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "task_planning",
+      topic_type: "task_negotiation",
+      topic_locked: true,
+      task_progress: "secured",
+      current_task_domain: "device",
+      task_spec: {
+        ...createSceneState().task_spec,
+        request_fulfilled: true,
+        requested_domain: "device",
+        current_task_family: "device_endurance",
+        duration_minutes: 30,
+      },
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.doesNotMatch(result.text, /answer directly, pet\. be specific\. give me the task domain or the time window/i);
+  assert.match(result.text, /\b(check in|report back|halfway|15 minutes|finish)\b/i);
 });

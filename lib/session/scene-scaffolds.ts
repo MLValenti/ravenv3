@@ -454,9 +454,50 @@ function buildNumberCommandExecutionReply(input: SceneScaffoldInput): string | n
   return `${plan.commandText} ${plan.followUpText}`.trim();
 }
 
+function isExplicitGameRestartCue(userText: string): boolean {
+  return /\b(start over|new game|different game|reset|you pick|pick for me|choose quick|choose longer|play again|another round)\b/i.test(
+    normalize(userText),
+  );
+}
+
+function isRoundCommittedForGameInput(input: SceneScaffoldInput): boolean {
+  const userText = normalize(input.userText);
+  const lastAssistantText = normalize(input.sceneState.last_assistant_text ?? "");
+  const hasMoveOrGuessCue =
+    /\b(i choose\b|my choice is|my first throw is|first throw\b|second throw\b|rock\b|paper\b|scissors\b|guess(?:\s+\d+)?)\b/i.test(
+      userText,
+    );
+  const hasImmediateContinuationCue =
+    /\b(go on|keep going|what now|play again|another round|continue)\b/i.test(userText);
+  const hasPlayablePrompt =
+    /\b(i pick\. we are doing|first throw now|first guess now)\b/i.test(lastAssistantText);
+  const hasResolvedRoundCue =
+    /\b(you win this round|i win this one|your consequence is live now|say ready)\b/i.test(
+      lastAssistantText,
+    );
+  return (
+    (
+      input.sceneState.topic_type === "game_execution" &&
+      (hasMoveOrGuessCue || hasImmediateContinuationCue)
+    ) ||
+    ((hasPlayablePrompt || hasResolvedRoundCue) &&
+      (hasMoveOrGuessCue || hasImmediateContinuationCue))
+  );
+}
+
 function buildGameSetupReply(input: SceneScaffoldInput): string {
   const stakesLine = buildStakesLine(input.sceneState);
   const normalizedUserText = normalize(input.userText);
+  const isTrueGameSetup = input.sceneState.topic_type === "game_setup";
+  const hasExplicitGameStartOrResetCue =
+    /\b(let'?s play|play a game|dealer'?s choice|quick game|longer game)\b/i.test(
+      normalizedUserText,
+    ) || isExplicitGameRestartCue(input.userText);
+  const roundCommitted = isRoundCommittedForGameInput(input);
+  const isDirectGameOptionsQuestion =
+    /\b(how do we play|what are (?:our )?options|what games can we play|what are our game options|give me an example|example of a game|what's our first step)\b/i.test(
+      normalizedUserText,
+    );
   const planningDetourBridge = buildPlanningQuestionFallback(input.userText, {
     previousAssistantText: input.sceneState.last_assistant_text || null,
     currentTopic: input.sceneState.agreed_goal || input.sceneState.summary || null,
@@ -497,6 +538,23 @@ function buildGameSetupReply(input: SceneScaffoldInput): string {
     hasSpeedChoiceCue ||
     hasExplicitSupportedGameCue
   ) {
+    if (!isTrueGameSetup && !hasExplicitGameStartOrResetCue) {
+      return "Quick games are rock paper scissors streak or number hunt. Longer ones are math duel, number command, or riddle lock. If you want me to pick, say so directly.";
+    }
+  }
+  if (
+    (input.act === "answer_activity_choice" ||
+      isGameChoiceDelegation(input.userText) ||
+      isExplicitAnotherRoundRequest(input.userText) ||
+      hasExplicitGameReplacementCue ||
+      isGameStartCue(input.userText) ||
+      hasSpeedChoiceCue ||
+      hasExplicitSupportedGameCue) &&
+    (isTrueGameSetup || hasExplicitGameStartOrResetCue)
+  ) {
+    if (roundCommitted && !isExplicitGameRestartCue(input.userText)) {
+      return "Quick games are rock paper scissors streak or number hunt. Longer ones are math duel, number command, or riddle lock. If you want me to pick, say so directly.";
+    }
     const template = hasExplicitGameReplacementCue && !hasExplicitSupportedGameCue
       ? resolveDeterministicGameTemplateById(
           pickReplacementGameTemplateId(input.sceneState.game_template_id),
@@ -540,6 +598,12 @@ function buildGameSetupReply(input: SceneScaffoldInput): string {
     input.act === "confusion" ||
     isGameRulesQuestion(input.userText)
   ) {
+    if (isDirectGameOptionsQuestion) {
+      return "Quick games are rock paper scissors streak or number hunt. Longer ones are math duel, number command, or riddle lock. If you want me to pick, say so directly.";
+    }
+    if (roundCommitted && !isExplicitGameRestartCue(input.userText)) {
+      return "Stay on this round. Throw your move or tell me if you want another round once this one lands.";
+    }
     return "First we choose the game, pet. Tell me to pick, or choose quick or longer. Do it properly.";
   }
 

@@ -273,6 +273,25 @@ test("ui harness casual short-answer thread stays coherent through clarification
   assert.doesNotMatch(fourth, /neutral tone|keep up, pet|fine\. say what you want/i);
 });
 
+test("ui harness paused task history does not steal fresh casual disclosures or topical questions", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-paused-task-casual-recovery"),
+    outputs: [],
+  };
+
+  applyUserTurn(state, "give me a device task for 30 minutes");
+  applyUserTurn(state, "let's just chat for a bit");
+  const disclosure = applyUserTurn(state, "I like pegging");
+  const routines = applyUserTurn(state, "what do you think about routines?");
+
+  assert.match(disclosure, /\b(pegging|what do you like about it|what about it|what pulls you in)\b/i);
+  assert.doesNotMatch(disclosure, /\b(device task|30 minutes|report back)\b/i);
+
+  assert.match(routines, /\b(routines|structure|support your life|hold things together)\b/i);
+  assert.doesNotMatch(routines, /\b(device task|30 minutes|report back)\b/i);
+});
+
 test("ui harness greeting opener can start and hold a casual thread without generic fallback drift", () => {
   const state: HarnessState = {
     scene: createSceneState(),
@@ -2886,6 +2905,66 @@ test("ui harness game follow-through micro-fix keeps casual profile planning and
 
   assert.match(taskReply, /\b(done means|what counts as done|20 minutes|report back)\b/i);
   assert.doesNotMatch(taskReply, /rock paper scissors|number hunt|fine\. say what you want/i);
+});
+
+test("ui harness game setup over-eligibility fix keeps live game and task progress on-thread", () => {
+  const questionFirstState: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-game-question-first-direct"),
+    outputs: [],
+  };
+
+  const questionFirstReply = applyUserTurn(questionFirstState, "how do we play");
+  assert.match(questionFirstReply, /\b(quick|longer|rock paper scissors|number hunt|math duel|riddle lock|pick)\b/i);
+  assert.doesNotMatch(questionFirstReply, /first we choose the game/i);
+
+  const gameState: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-game-over-eligibility-follow-through"),
+    outputs: [],
+  };
+  applyUserTurn(gameState, "lets play a game");
+  applyUserTurn(gameState, "lets bet on the game");
+  applyUserTurn(gameState, "the stakes are control");
+  applyUserTurn(gameState, "if i win you tell me a truth");
+  applyUserTurn(gameState, "if you win i wear it overnight");
+  const gameStart = applyUserTurn(gameState, "you pick");
+  assert.match(gameStart, /rock paper scissors streak|number hunt|math duel|number command|riddle lock/i);
+
+  const moveReply = applyUserTurn(gameState, "I choose rock for the first throw.");
+  assert.match(moveReply, /\b(chose rock|threw|first throw|second throw|round)\b/i);
+  assert.doesNotMatch(moveReply, /first we choose the game|choose quick or longer|i pick\. we are doing/i);
+
+  const taskState: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-game-over-eligibility-task-progress"),
+    outputs: [],
+  };
+  applyUserTurn(taskState, "give me a chastity task for 30 minutes");
+  const taskProgress = applyUserTurn(taskState, "What should I do next to finish this task?");
+  const taskClarification = applyUserTurn(taskState, "What do I need to do to complete this task?");
+
+  assert.match(taskProgress, /\b(next|check in|30 minutes|done|finish|hold)\b/i);
+  assert.doesNotMatch(taskProgress, /one game thread|one prompt from me|one clean reply|i pick\. we are doing|first we choose the game/i);
+
+  assert.match(taskClarification, /\b(done|complete|30 minutes|report back|finish)\b/i);
+  assert.doesNotMatch(taskClarification, /keep the same subject|answer this change directly|one game thread|i pick\. we are doing/i);
+});
+
+test("ui harness explicit new game reset still allows valid game setup behavior", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-game-explicit-reset"),
+    outputs: [],
+  };
+
+  applyUserTurn(state, "lets play a game");
+  applyUserTurn(state, "you pick");
+  applyUserTurn(state, "rock");
+
+  const resetReply = applyUserTurn(state, "new game");
+
+  assert.match(resetReply, /\b(i pick|rock paper scissors streak|number hunt|math duel|number command|riddle lock|choose quick|choose longer)\b/i);
 });
 
 test("ui harness planning-task recovery keeps stale-game residue off planning and task while preserving game follow-through", () => {
