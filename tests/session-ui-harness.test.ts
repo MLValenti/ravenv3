@@ -26,11 +26,20 @@ import {
 } from "../lib/session/scene-state.ts";
 import {
   createSessionMemory,
+  isConversationArrivalAnswer,
   type SessionMemory,
+  traceWriteUserAnswer,
+  traceWriteUserQuestion,
   writeConversationMode,
   writeUserAnswer,
   writeUserQuestion,
 } from "../lib/session/session-memory.ts";
+import {
+  createSessionStateContract,
+  reduceAssistantEmission,
+  reduceUserTurn,
+  type SessionStateContract,
+} from "../lib/session/session-state-contract.ts";
 import {
   canEmitAssistant,
   createTurnGate,
@@ -38,6 +47,7 @@ import {
   persistUserMessage,
   type TurnGateState,
 } from "../lib/session/turn-gate.ts";
+import { buildChatSwitchReply } from "../lib/session/mode-style.ts";
 import { buildDeterministicDominantWeakInputReply } from "../lib/session/weak-input-replies.ts";
 import type { SessionInventoryItem } from "../lib/session/session-inventory.ts";
 
@@ -48,6 +58,7 @@ type HarnessState = {
   memory?: SessionMemory;
   conversation?: ConversationStateSnapshot;
   inventory?: SessionInventoryItem[];
+  contract?: SessionStateContract;
 };
 
 function normalize(text: string): string {
@@ -207,6 +218,221 @@ function applyUserTurn(state: HarnessState, userText: string): string {
   state.outputs.push(gated.text);
   return gated.text;
 }
+
+function applySessionPathDebugTurn(
+  state: HarnessState,
+  userText: string,
+): {
+  text: string;
+  debug: {
+    rawUserText: string;
+    assistantCandidatesProduced: string[];
+    finalCommittedAssistantOutputCount: number;
+    finalCommittedAssistantText: string;
+    assistantRenderAppendEvents: number;
+    recoverSkippedAssistantRenderFired: boolean;
+    appendRavenOutputRunsForTurn: number;
+    visibleAssistantStringsShownForTurn: number;
+    activeThreadBefore: string;
+    activeThreadAfter: string;
+    awaitingUserBefore: boolean;
+    awaitingUserAfter: boolean;
+    lastUserQuestionBefore: string | null;
+    lastUserQuestionAfter: string | null;
+    lastUserAnswerBefore: string | null;
+    lastUserAnswerAfter: string | null;
+    profileFactsAddedOnTurn: string[];
+    conversationMode: string | null;
+    personaMarkers: string[];
+  };
+} {
+  const currentMemory = state.memory ?? createSessionMemory();
+  const currentConversation =
+    state.conversation ?? createConversationStateSnapshot("session-ui-loop-debug");
+  const currentContract =
+    state.contract ?? createSessionStateContract(state.gate.sessionId);
+  const beforeOutputCount = state.outputs.length;
+  const activeThreadBefore = currentConversation.active_thread;
+  const awaitingUserBefore = currentContract.turnGate.awaitingUser;
+  const lastUserQuestionBefore = currentMemory.last_user_question?.value ?? null;
+  const lastUserAnswerBefore = currentMemory.last_user_answer?.value ?? null;
+
+  const reducedUserTurn = reduceUserTurn(currentContract, {
+    text: userText,
+    nowMs: Date.now(),
+  });
+  state.contract = reducedUserTurn.next;
+  state.gate = reducedUserTurn.next.turnGate;
+
+  let nextMemory = currentMemory;
+  let profileFactsAddedOnTurn: string[] = [];
+  if (
+    reducedUserTurn.intent === "user_question" ||
+    reducedUserTurn.intent === "user_short_follow_up" ||
+    reducedUserTurn.intent === "user_refusal_or_confusion"
+  ) {
+    nextMemory = traceWriteUserQuestion(currentMemory, userText, Date.now(), 0.9).memory;
+  } else if (reducedUserTurn.intent === "user_answer") {
+    const tracedWrite = traceWriteUserAnswer(currentMemory, userText, Date.now(), null, 0.88);
+    nextMemory = tracedWrite.memory;
+    profileFactsAddedOnTurn = tracedWrite.committed
+      .filter((record) => record.key === "user_profile_facts")
+      .map((record) => record.value);
+  }
+  state.memory = nextMemory;
+  state.conversation = noteConversationUserTurn(currentConversation, {
+    text: userText,
+    userIntent: reducedUserTurn.intent,
+    routeAct: reducedUserTurn.route.act,
+    nowMs: Date.now(),
+  });
+  state.scene = noteSceneStateUserTurn(state.scene, {
+    text: userText,
+    act: reducedUserTurn.route.act,
+    sessionTopic: reducedUserTurn.route.nextTopic,
+    inventory: state.inventory,
+  });
+
+  const scaffolded = buildSceneScaffoldReply({
+    act: reducedUserTurn.route.act,
+    userText,
+    sceneState: state.scene,
+    sessionMemory: nextMemory,
+    inventory: state.inventory,
+  });
+  const deterministicWeakInputReply = scaffolded
+    ? null
+    : buildDeterministicDominantWeakInputReply(userText);
+  const sceneFallback =
+    buildSceneFallback(state.scene, userText, nextMemory, state.inventory) ??
+    (isGoalOrIntentStatement(userText)
+      ? "Good. Tell me what that actually means to you."
+      : buildHumanQuestionFallback(userText, "neutral", {
+          previousAssistantText: state.outputs[state.outputs.length - 1] ?? null,
+          currentTopic: state.scene.agreed_goal || null,
+        }));
+  const conversationArrivalReply =
+    reducedUserTurn.intent === "user_answer" &&
+    isConversationArrivalAnswer(userText) &&
+    nextMemory.conversation_mode?.value === "normal_chat"
+      ? buildChatSwitchReply()
+      : null;
+  const deterministicCandidate =
+    conversationArrivalReply ?? scaffolded ?? deterministicWeakInputReply;
+  const bypassModel = shouldBypassModelForSceneTurn({
+    sceneState: state.scene,
+    dialogueAct: reducedUserTurn.route.act,
+    hasDeterministicCandidate: Boolean(deterministicCandidate),
+  });
+  const candidate = bypassModel
+    ? deterministicCandidate ?? sceneFallback
+    : deterministicCandidate ?? sceneFallback;
+  const turnPlan =
+    reducedUserTurn.route.act === "user_question" ||
+    reducedUserTurn.route.act === "short_follow_up"
+      ? buildTurnPlan(
+          state.conversation.recent_window.map((entry) => ({
+            role: entry.role,
+            content: entry.content,
+          })),
+          {
+            conversationState: state.conversation,
+          },
+        )
+      : null;
+  const gated = applyResponseGate({
+    text: candidate,
+    userText,
+    lastAssistantText: state.outputs[state.outputs.length - 1] ?? null,
+    turnPlan,
+    sceneState: state.scene,
+    commitmentState: createCommitmentState(),
+    inventory: state.inventory ?? [],
+  });
+  const emit = canEmitAssistant(state.gate, `ui-debug-${state.gate.stepIndex}`, gated.text);
+  assert.equal(emit.allow, true);
+  state.contract = reduceAssistantEmission(state.contract, {
+    stepId: `ui-debug-${state.gate.stepIndex}`,
+    content: gated.text,
+    isQuestion: gated.text.includes("?"),
+    topicResolved: false,
+  });
+  state.gate = state.contract.turnGate;
+  state.scene = noteSceneStateAssistantTurn(state.scene, { text: gated.text });
+  state.conversation = noteConversationAssistantTurn(state.conversation, {
+    text: gated.text,
+    ravenIntent: reducedUserTurn.route.act,
+    nowMs: Date.now() + 1,
+  });
+  state.outputs.push(gated.text);
+
+  const finalCommittedAssistantText = gated.text;
+  const personaMarkers = ["sharp", "sharp enough", "pet", "enough hovering"].filter((marker) =>
+    new RegExp(marker.replace(/\s+/g, "\\s+"), "i").test(finalCommittedAssistantText),
+  );
+  return {
+    text: gated.text,
+    debug: {
+      rawUserText: userText,
+      assistantCandidatesProduced: [
+        scaffolded,
+        deterministicWeakInputReply,
+        conversationArrivalReply,
+        sceneFallback,
+      ].filter((value): value is string => Boolean(value)),
+      finalCommittedAssistantOutputCount: state.outputs.length - beforeOutputCount,
+      finalCommittedAssistantText,
+      assistantRenderAppendEvents: 1,
+      recoverSkippedAssistantRenderFired: false,
+      appendRavenOutputRunsForTurn: 1,
+      visibleAssistantStringsShownForTurn: state.outputs.length - beforeOutputCount,
+      activeThreadBefore,
+      activeThreadAfter: state.conversation.active_thread,
+      awaitingUserBefore,
+      awaitingUserAfter: state.gate.awaitingUser,
+      lastUserQuestionBefore,
+      lastUserQuestionAfter: state.memory?.last_user_question?.value ?? null,
+      lastUserAnswerBefore,
+      lastUserAnswerAfter: state.memory?.last_user_answer?.value ?? null,
+      profileFactsAddedOnTurn,
+      conversationMode: state.memory?.conversation_mode?.value ?? null,
+      personaMarkers,
+    },
+  };
+}
+
+test("ui harness session loop regression keeps one clean committed reply after im here to talk", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-session-loop"),
+    outputs: [],
+    memory: createSessionMemory(),
+    conversation: createConversationStateSnapshot("ui-harness-session-loop"),
+  };
+
+  applyUserTurn(state, "how are you?");
+  const result = applySessionPathDebugTurn(state, "im here to talk");
+
+  console.info("raven.session.loop_debug", JSON.stringify(result.debug));
+
+  assert.equal(result.debug.finalCommittedAssistantOutputCount, 1);
+  assert.equal(result.debug.assistantRenderAppendEvents, 1);
+  assert.equal(result.debug.recoverSkippedAssistantRenderFired, false);
+  assert.equal(result.debug.appendRavenOutputRunsForTurn, 1);
+  assert.equal(result.debug.visibleAssistantStringsShownForTurn, 1);
+  assert.doesNotMatch(result.debug.finalCommittedAssistantText, /\bsharp enough\b|\bsharp\b/i);
+  assert.doesNotMatch(
+    result.debug.finalCommittedAssistantText,
+    /\bwhy you(?:'re| are) here\b|\bwhat you actually want\b/i,
+  );
+  assert.doesNotMatch(result.debug.finalCommittedAssistantText, /\bpet\b|\benough hovering\b/i);
+  assert.equal(result.debug.lastUserQuestionBefore, "how are you?");
+  assert.equal(result.debug.lastUserQuestionAfter, null);
+  assert.equal(result.debug.lastUserAnswerAfter, "im here to talk");
+  assert.deepEqual(result.debug.profileFactsAddedOnTurn, []);
+  assert.equal(result.debug.conversationMode, "normal_chat");
+  assert.equal(result.debug.awaitingUserAfter, false);
+});
 
 test("ui harness wager flow does not repeat the same line and stays in negotiation", () => {
   const state: HarnessState = {

@@ -24,6 +24,7 @@ import {
   persistUserMessage,
   type TurnGateState,
 } from "./turn-gate.ts";
+import { isConversationArrivalAnswer } from "./session-memory.ts";
 
 export type SessionStateContract = {
   turnGate: TurnGateState;
@@ -83,16 +84,32 @@ export function reduceUserTurn(
     currentTopic: state.sessionTopic,
     nowMs: input.nowMs,
   });
+  const intentAdjustedRoute =
+    intent === "user_answer" &&
+    rawRoute.act === "other" &&
+    isConversationArrivalAnswer(text)
+      ? {
+          ...rawRoute,
+          act: "user_answer" as const,
+          reason: `${rawRoute.reason}; conversation-arrival answer preserved user-answer route`,
+        }
+      : rawRoute;
   const route = adaptRouteWithCanonicalTurnMove(
-    rawRoute,
+    intentAdjustedRoute,
     state.sessionTopic,
     input.canonicalTurnMove,
   );
-  const nextWorkingMemory = noteWorkingMemoryUserTurn(state.workingMemory, {
+  let nextWorkingMemory = noteWorkingMemoryUserTurn(state.workingMemory, {
     text,
     act: route.act,
     nextTopic: route.nextTopic,
   });
+  if (intent === "user_answer" && nextWorkingMemory.current_unresolved_question) {
+    nextWorkingMemory = {
+      ...nextWorkingMemory,
+      current_unresolved_question: "",
+    };
+  }
   const diagnostic = input.diagnosticRecord
     ? attachStateRouteToLiveTurnDiagnostic(input.diagnosticRecord, {
         text,

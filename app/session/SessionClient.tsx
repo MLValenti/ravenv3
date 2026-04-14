@@ -145,6 +145,7 @@ import {
   chooseNextAskSlot,
   createSessionMemory,
   getSessionMemoryFocus,
+  isConversationArrivalAnswer,
   listMissingAskSlots,
   summarizeSessionMemory,
   traceWriteUserAnswer,
@@ -228,7 +229,7 @@ import {
   isRelationalOfferStatement,
 } from "@/lib/session/interaction-mode";
 import { isCoherentRelationalQuestionAnswer } from "@/lib/chat/relational-answer-alignment";
-import { buildOpenChatGreeting } from "@/lib/session/mode-style";
+import { buildChatSwitchReply, buildOpenChatGreeting } from "@/lib/session/mode-style";
 import {
   buildVerificationManualConfirmationPrompt,
   buildVerificationManualConfirmationReply,
@@ -4697,7 +4698,14 @@ export default function SessionPage() {
         workingMemoryRef.current,
         sceneStateRef.current,
       );
+    const conversationArrivalReply =
+      pendingTurn.intent === "user_answer" &&
+      isConversationArrivalAnswer(pendingTurn.text) &&
+      nextMemory.conversation_mode?.value === "normal_chat"
+        ? buildChatSwitchReply()
+        : null;
     const deterministicCandidate =
+      conversationArrivalReply ??
       scaffolded ??
       shortFollowUpReply ??
       deterministicCoreConversationReply ??
@@ -4708,6 +4716,9 @@ export default function SessionPage() {
       deterministicTaskReply ??
       deterministicQuestionReply;
     const availableFamilies: TurnResponseFamily[] = [];
+    if (conversationArrivalReply) {
+      availableFamilies.push("deterministic_scene");
+    }
     if (scaffolded) {
       availableFamilies.push("deterministic_scene");
     }
@@ -5555,14 +5566,13 @@ export default function SessionPage() {
         at_ms: now(),
       });
       activeAssistantTraceRef.current = null;
-      finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
       setMessage("Raven generated a reply, but rendering was skipped. Check the trace for details.");
       lastHandledUserMessageIdRef.current = pendingTurn.messageId;
       pendingUserTurnRef.current = null;
+      finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
       return;
     }
     activeAssistantTraceRef.current = null;
-    finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
 
     if (
       sceneStateRef.current.topic_type === "game_setup" &&
@@ -5602,6 +5612,7 @@ export default function SessionPage() {
     syncSessionPhase(updatedContract.turnGate);
     lastHandledUserMessageIdRef.current = pendingTurn.messageId;
     pendingUserTurnRef.current = null;
+    finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
   }
 
   async function runStandalonePendingTurn() {

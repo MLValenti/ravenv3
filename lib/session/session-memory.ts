@@ -98,6 +98,10 @@ const PROFILE_BUILDING_PATTERNS = [
   /\bwhat should you know about me\b/i,
 ];
 
+export function isConversationArrivalAnswer(text: string): boolean {
+  return /\b(?:i(?:'m| am|m)\s+|just\s+)?here to (?:talk|chat)\b/i.test(text);
+}
+
 function isMetaConversationIntent(text: string): boolean {
   return (
     matchesAny(text, PROFILE_BUILDING_PATTERNS) ||
@@ -303,6 +307,9 @@ function inferConversationModeValue(text: string): InteractionMode | null {
   if (isChatSwitchRequest(text)) {
     return "normal_chat";
   }
+  if (isConversationArrivalAnswer(text)) {
+    return "normal_chat";
+  }
   if (isProfileSummaryRequest(text)) {
     return "profile_building";
   }
@@ -387,6 +394,7 @@ function extractProfileFacts(text: string, slotHint: SessionMemorySlotKey | null
     isMetaConversationIntent(text) ||
     isProfileSummaryRequest(text) ||
     isChatSwitchRequest(text) ||
+    isConversationArrivalAnswer(text) ||
     isNormalChatRequest(text) ||
     isTransientStateDisclosure(text) ||
     isEphemeralRelationalOffer(text) ||
@@ -949,6 +957,7 @@ export function writeUserAnswer(
       nowMs,
       isWeakMemoryValue(next) ? confidence * 0.5 : confidence,
     ),
+    last_user_question: null,
     session_intent: nextIntent ? createEntry(nextIntent, nowMs, confidence) : memory.session_intent,
     conversation_mode: nextMode ? createEntry(nextMode, nowMs, confidence) : memory.conversation_mode,
   };
