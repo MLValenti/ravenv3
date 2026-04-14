@@ -21,9 +21,11 @@ import {
 } from "@/lib/chat/conversation-quality";
 import {
   attachWinnerToLiveTurnDiagnostic,
+  buildServerCanonicalTurnMove,
   buildLiveTurnDiagnosticRecord,
   interpretLiveRouteTurn,
   type LiveTurnDiagnosticRecord,
+  type ServerCanonicalTurnMove,
 } from "@/lib/chat/live-turn-interpretation";
 import { getSelectedPersonaPlaybookIds } from "@/lib/chat/behavior-pack";
 import {
@@ -471,6 +473,7 @@ function buildServerTurnDiagnosticRecord(input: {
   interpretationInput: Parameters<typeof buildLiveTurnDiagnosticRecord>[0]["interpretationInput"];
   messages: ChatMessage[];
   conversationStateSnapshot: ConversationStateSnapshot;
+  canonicalTurnMove?: ServerCanonicalTurnMove | null;
 }): LiveTurnDiagnosticRecord {
   const baseRecord = buildLiveTurnDiagnosticRecord({
     requestId: input.requestId,
@@ -513,6 +516,7 @@ function buildServerTurnDiagnosticRecord(input: {
     text: input.messages[latestUserIndex]?.content ?? input.interpretationInput.lastUserMessage,
     nowMs: latestUserIndex + 1,
     diagnosticRecord: baseRecord,
+    canonicalTurnMove: input.canonicalTurnMove ?? null,
   });
   return reducedLatest.diagnostic ?? baseRecord;
 }
@@ -1246,6 +1250,27 @@ export async function POST(request: Request) {
     messages,
     conversationStateSnapshot,
   });
+  const canonicalTurnMove: ServerCanonicalTurnMove = buildServerCanonicalTurnMove({
+    interpretation: turnInterpretation,
+    diagnosticRecord: liveTurnDiagnosticRecord,
+  });
+  liveTurnDiagnosticRecord = buildServerTurnDiagnosticRecord({
+    requestId,
+    turnId,
+    sessionId,
+    interpretationInput: {
+      lastUserMessage: lastUserMessage?.content ?? "",
+      awaitingUser: conversationState.awaitingUser,
+      userAnswered: conversationState.userAnswered,
+      verificationJustCompleted: conversationState.verificationJustCompleted,
+      sessionPhase: conversationState.sessionPhase,
+      previousAssistantMessage: conversationState.lastAssistantOutput,
+      currentTopic: null,
+    },
+    messages,
+    conversationStateSnapshot,
+    canonicalTurnMove,
+  });
   const workingMemory = normalizeWorkingMemory(payload.workingMemory);
   const turnPlan = buildTurnPlan(messages, {
     conversationState: conversationStateSnapshot,
@@ -1566,6 +1591,7 @@ export async function POST(request: Request) {
     capabilityCatalog,
     allowedCheckTypes,
     diagnosticRecord: liveTurnDiagnosticRecord,
+    canonicalTurnMove,
     logSessionRouteDebug,
     maybePersistTaskFromAssistantText: persistTaskFromAssistantText,
     appendChatHistory,
@@ -2018,6 +2044,7 @@ export async function POST(request: Request) {
       stage: "session_final",
       latest_user_message: sessionReplayDebugContext.latestUserMessage,
       detected_user_act: sessionReplayDebugContext.detectedUserAct,
+      canonical_turn_move: canonicalTurnMove,
       current_session_mode: sessionReplayDebugContext.currentSessionMode,
       replayed_scene_state: sessionReplayDebugContext.replayedSceneStateSummary,
       scene_scope: sessionReplayDebugContext.sceneScope,

@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 import type { HistoryMessage } from "../lib/chat-prompt.ts";
 import { createConversationStateSnapshot } from "../lib/chat/conversation-state.ts";
 import { buildTurnPlan } from "../lib/chat/turn-plan.ts";
-import { buildLiveTurnDiagnosticRecord } from "../lib/chat/live-turn-interpretation.ts";
+import {
+  buildLiveTurnDiagnosticRecord,
+  buildServerCanonicalTurnMove,
+  interpretLiveRouteTurn,
+} from "../lib/chat/live-turn-interpretation.ts";
 import { maybeHandleSessionReplayDeterministicBypass } from "../lib/session/live-turn-controller.ts";
 import { createWorkingMemory, type WorkingMemory } from "../lib/session/working-memory.ts";
 
@@ -13,6 +17,7 @@ type CallbackCounters = {
   summary: number;
   persist: number;
   logs: number;
+  payloads: Record<string, unknown>[];
 };
 
 function createControllerInput(input: {
@@ -29,7 +34,7 @@ function createControllerInput(input: {
   const lastUserMessage = [...input.messages].reverse().find((message) => message.role === "user");
   const previousAssistantMessage =
     [...input.messages].reverse().find((message) => message.role === "assistant")?.content ?? null;
-  const counters: CallbackCounters = { append: 0, summary: 0, persist: 0, logs: 0 };
+  const counters: CallbackCounters = { append: 0, summary: 0, persist: 0, logs: 0, payloads: [] };
   const diagnosticRecord = buildLiveTurnDiagnosticRecord({
     requestId: "request-live-turn-controller-test",
     turnId: "turn-live-turn-controller-test",
@@ -45,6 +50,18 @@ function createControllerInput(input: {
     },
     interactionMode: conversationStateSnapshot.current_mode,
     activeThreadHint: conversationStateSnapshot.active_thread,
+  });
+  const canonicalTurnMove = buildServerCanonicalTurnMove({
+    interpretation: interpretLiveRouteTurn({
+      lastUserMessage: lastUserMessage?.content ?? "",
+      awaitingUser: false,
+      userAnswered: false,
+      verificationJustCompleted: false,
+      sessionPhase: "chat",
+      previousAssistantMessage,
+      currentTopic: conversationStateSnapshot.active_thread,
+    }),
+    diagnosticRecord,
   });
 
   return {
@@ -69,8 +86,10 @@ function createControllerInput(input: {
       capabilityCatalog: [],
       allowedCheckTypes: [],
       diagnosticRecord,
-      logSessionRouteDebug: () => {
+      canonicalTurnMove,
+      logSessionRouteDebug: (payload: Record<string, unknown>) => {
         counters.logs += 1;
+        counters.payloads.push(payload);
       },
       maybePersistTaskFromAssistantText: async ({ text }: { text: string }) => {
         counters.persist += 1;
@@ -146,6 +165,20 @@ test("live turn controller returns deterministic bypass response and triggers si
   assert.equal(counters.persist, 1);
   assert.equal(counters.append, 1);
   assert.equal(counters.summary, 1);
+  const finalTracePayload = [...counters.payloads]
+    .reverse()
+    .find((payload) => payload.stage === "session_final");
+  assert.ok(finalTracePayload);
+  assert.equal(
+    (finalTracePayload?.canonical_turn_move as { primaryRouteAct?: string } | undefined)
+      ?.primaryRouteAct,
+    "duration_request",
+  );
+  assert.equal(
+    (finalTracePayload?.canonical_turn_move as { revisionKind?: string } | undefined)
+      ?.revisionKind,
+    "duration_only",
+  );
 });
 
 test("live turn controller returns early deterministic started-flow response without task persistence", async () => {
@@ -170,6 +203,15 @@ test("live turn controller returns early deterministic started-flow response wit
   assert.equal(counters.persist, 0);
   assert.equal(counters.append, 1);
   assert.equal(counters.summary, 1);
+  const finalTracePayload = [...counters.payloads]
+    .reverse()
+    .find((payload) => payload.stage === "session_final");
+  assert.ok(finalTracePayload);
+  assert.equal(
+    (finalTracePayload?.canonical_turn_move as { continuationKind?: string } | undefined)
+      ?.continuationKind,
+    "continue_current_thought",
+  );
 });
 
 test("live turn controller prefers the scene scaffold over generic continuity when a game setup turn says you pick", async () => {

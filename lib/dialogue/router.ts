@@ -63,6 +63,17 @@ export function resolveSessionTopic(topic: SessionTopic | null): SessionTopic | 
   };
 }
 
+function isPositiveProfileBuildingInvitation(text: string): boolean {
+  return (
+    /\b(i want you to|i want us to|i(?: would|'d) like you to|can you|help you)\b[\w\s]{0,30}\b(get to know me better|know me better|understand me better|learn more about me)\b/i.test(
+      text,
+    ) &&
+    !/\b(do not|don't|does not|doesn't|cannot|can't|won't)\b[\w\s]{0,20}\b(get to know me better|know me better|understand me better|learn more about me)\b/i.test(
+      text,
+    )
+  );
+}
+
 export function classifyDialogueRoute(input: DialogueRouteInput): DialogueRouteResult {
   const text = normalizeUserText(input.text);
   const scores = scoreDialogueIntentSignals(text);
@@ -214,6 +225,16 @@ export function classifyDialogueRoute(input: DialogueRouteInput): DialogueRouteR
         nextTopic: currentTopic,
       };
     }
+  }
+
+  if (isPositiveProfileBuildingInvitation(text)) {
+    return {
+      act: "user_answer",
+      reason: "explicit profile-building invitation should stay on the getting-to-know-you rail",
+      nextTopic:
+        currentTopic ??
+        openTopic("general_request", "start building understanding of the user before changing topics", nowMs),
+    };
   }
 
   if (input.awaitingUser) {

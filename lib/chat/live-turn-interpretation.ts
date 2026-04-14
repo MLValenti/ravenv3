@@ -71,6 +71,34 @@ export type LiveTurnDiagnosticRecord = {
   finalWinningResponseSource: string | null;
 };
 
+export type ServerCanonicalTurnMove = {
+  primaryRouteAct: DialogueRouteAct;
+  continuationKind:
+    | "none"
+    | "continue_current_thought"
+    | "clarify_prior_point"
+    | "raven_leads_next_beat";
+  revisionKind:
+    | "none"
+    | "duration_only"
+    | "task_replacement"
+    | "task_scope_revision";
+  questionLike: boolean;
+  taskContextKind:
+    | "none"
+    | "task_request"
+    | "task_follow_through"
+    | "task_revision";
+  ambiguity: "low" | "mixed" | "high";
+  sourceSummary: Array<
+    "intent"
+    | "live_route"
+    | "state_route"
+    | "dialogue_act"
+    | "core_move"
+  >;
+};
+
 function compactDiagnosticText(text: string | null | undefined, max = 160): string | null {
   if (typeof text !== "string") {
     return null;
@@ -238,6 +266,135 @@ function isQuestionLikeDiagnosticRecord(
   );
 }
 
+function isTaskContextRecord(record: LiveTurnDiagnosticRecord | null | undefined): boolean {
+  if (!record) {
+    return false;
+  }
+  return (
+    record.taskHardLockActive === true ||
+    record.interactionMode === "task_planning" ||
+    record.interactionMode === "locked_task_execution" ||
+    record.topicType === "task_negotiation" ||
+    record.topicType === "task_execution" ||
+    record.topicType === "task_terms_negotiation" ||
+    record.topicType === "duration_negotiation" ||
+    record.topicType === "verification_in_progress"
+  );
+}
+
+function isTaskReplacementText(text: string): boolean {
+  return /\b(different task|different kind of task|another task|new task|next task|something else to do)\b/i.test(
+    text,
+  );
+}
+
+function isDurationRevisionText(text: string): boolean {
+  return /\b(make it \d+\s*(minutes?|hours?)|make it shorter|make it longer|change how long|change the duration)\b/i.test(
+    text,
+  );
+}
+
+function deriveCanonicalContinuationKind(input: {
+  latestRouteAct: DialogueRouteAct;
+  latestCoreConversationMove: CoreConversationMove | null;
+}): ServerCanonicalTurnMove["continuationKind"] {
+  if (input.latestCoreConversationMove === "raven_leads_next_beat") {
+    return "raven_leads_next_beat";
+  }
+  if (
+    input.latestCoreConversationMove === "clarify_meaning" ||
+    (
+      input.latestRouteAct === "short_follow_up" &&
+      input.latestCoreConversationMove !== "continue_current_thought" &&
+      input.latestCoreConversationMove !== "agree_and_extend"
+    )
+  ) {
+    return "clarify_prior_point";
+  }
+  if (
+    input.latestCoreConversationMove === "continue_current_thought" ||
+    input.latestCoreConversationMove === "agree_and_extend" ||
+    input.latestCoreConversationMove === "user_correction"
+  ) {
+    return "continue_current_thought";
+  }
+  return "none";
+}
+
+function deriveCanonicalRevisionKind(input: {
+  latestRouteAct: DialogueRouteAct;
+  latestCoreConversationMove: CoreConversationMove | null;
+  rawUserText: string;
+}): ServerCanonicalTurnMove["revisionKind"] {
+  if (
+    input.latestRouteAct === "duration_request" ||
+    isDurationRevisionText(input.rawUserText)
+  ) {
+    return "duration_only";
+  }
+  if (isTaskReplacementText(input.rawUserText)) {
+    return "task_replacement";
+  }
+  if (input.latestCoreConversationMove === "request_revision") {
+    return "task_scope_revision";
+  }
+  return "none";
+}
+
+function deriveCanonicalTaskContextKind(input: {
+  primaryRouteAct: DialogueRouteAct;
+  revisionKind: ServerCanonicalTurnMove["revisionKind"];
+  questionLike: boolean;
+  continuationKind: ServerCanonicalTurnMove["continuationKind"];
+  diagnosticRecord?: LiveTurnDiagnosticRecord | null;
+}): ServerCanonicalTurnMove["taskContextKind"] {
+  if (input.primaryRouteAct === "task_request") {
+    return "task_request";
+  }
+  const taskContext = isTaskContextRecord(input.diagnosticRecord);
+  if (input.revisionKind !== "none") {
+    return taskContext ? "task_revision" : "none";
+  }
+  if (
+    taskContext &&
+    (
+      input.primaryRouteAct === "user_question" ||
+      input.questionLike ||
+      input.continuationKind !== "none"
+    )
+  ) {
+    return "task_follow_through";
+  }
+  return "none";
+}
+
+function deriveCanonicalAmbiguity(
+  diagnosticRecord?: LiveTurnDiagnosticRecord | null,
+): ServerCanonicalTurnMove["ambiguity"] {
+  if (!diagnosticRecord?.classifierDisagreement) {
+    return "low";
+  }
+  return diagnosticRecord.disagreementKinds.length >= 2 ? "high" : "mixed";
+}
+
+function deriveCanonicalSourceSummary(input: {
+  interpretation: LiveRouteTurnInterpretation;
+  diagnosticRecord?: LiveTurnDiagnosticRecord | null;
+}): ServerCanonicalTurnMove["sourceSummary"] {
+  const summary: ServerCanonicalTurnMove["sourceSummary"] = [
+    "intent",
+    "live_route",
+    "dialogue_act",
+  ];
+  if (input.diagnosticRecord?.stateRouteAct !== null) {
+    summary.push("state_route");
+  }
+  if (input.interpretation.latestCoreConversationMove !== null) {
+    summary.push("core_move");
+  }
+  return summary;
+}
+
 export function classifyRouteActForState(text: string, awaitingUser: boolean): DialogueRouteAct {
   return classifyDialogueRoute({
     text,
@@ -378,5 +535,48 @@ export function attachWinnerToLiveTurnDiagnostic(
     pathWinner: input.pathWinner,
     pathReason: input.pathReason,
     finalWinningResponseSource: input.finalWinningResponseSource,
+  };
+}
+
+export function buildServerCanonicalTurnMove(input: {
+  interpretation: LiveRouteTurnInterpretation;
+  diagnosticRecord?: LiveTurnDiagnosticRecord | null;
+}): ServerCanonicalTurnMove {
+  const primaryRouteAct = input.interpretation.latestRouteAct;
+  const rawUserText = input.diagnosticRecord?.rawUserText ?? "";
+  const questionLike =
+    input.diagnosticRecord?.questionLike ??
+    isQuestionLikeDiagnosticRecord({
+      rawUserText,
+      intentUsed: input.interpretation.latestUserIntent,
+      liveRouteAct: input.interpretation.latestRouteAct,
+      stateRouteAct: input.diagnosticRecord?.stateRouteAct ?? null,
+      dialogueActUsed: input.interpretation.dialogueAct,
+      coreConversationMoveUsed: input.interpretation.latestCoreConversationMove,
+    });
+  const continuationKind = deriveCanonicalContinuationKind({
+    latestRouteAct: primaryRouteAct,
+    latestCoreConversationMove: input.interpretation.latestCoreConversationMove,
+  });
+  const revisionKind = deriveCanonicalRevisionKind({
+    latestRouteAct: primaryRouteAct,
+    latestCoreConversationMove: input.interpretation.latestCoreConversationMove,
+    rawUserText,
+  });
+
+  return {
+    primaryRouteAct,
+    continuationKind,
+    revisionKind,
+    questionLike,
+    taskContextKind: deriveCanonicalTaskContextKind({
+      primaryRouteAct,
+      revisionKind,
+      questionLike,
+      continuationKind,
+      diagnosticRecord: input.diagnosticRecord,
+    }),
+    ambiguity: deriveCanonicalAmbiguity(input.diagnosticRecord),
+    sourceSummary: deriveCanonicalSourceSummary(input),
   };
 }

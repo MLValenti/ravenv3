@@ -845,6 +845,54 @@ function buildProfileBuildingReply(
     : interpretiveBeat ?? "Give me one more detail that tells me how to read you properly.";
 }
 
+function extractProfileShortFollowUpReferent(text: string | null | undefined): string | null {
+  const normalized = normalize(text ?? "");
+  if (!normalized) {
+    return null;
+  }
+  if (
+    /\bwhat do you actually enjoy doing when you are off the clock\b/i.test(normalized) ||
+    /\bwhat you actually enjoy doing when you are off the clock\b/i.test(normalized)
+  ) {
+    return "what you actually enjoy doing when you are off the clock";
+  }
+  if (/\bwhat people usually miss about you\b/i.test(normalized)) {
+    return "what people usually miss about you";
+  }
+  if (/\bwhat should i call you\b/i.test(normalized)) {
+    return "the name you want me to use when I am speaking to you directly";
+  }
+  if (/\bboundaries or hard nos\b|\bwhat boundaries\b|\bwhat do not want pushed\b/i.test(normalized)) {
+    return "the boundaries you do not want pushed";
+  }
+  return null;
+}
+
+function buildProfileShortFollowUpClarification(userText: string, referent: string | null): string | null {
+  const normalized = normalize(userText);
+  const isWhatFollowUp = /^what[?.!]*$/.test(normalized);
+  const isWhyFollowUp = /^why[?.!]*$/.test(normalized);
+  if (!referent || (!isWhatFollowUp && !isWhyFollowUp)) {
+    return null;
+  }
+  if (isWhatFollowUp) {
+    if (referent === "what you actually enjoy doing when you are off the clock") {
+      return "I mean the part I just pressed on: what you actually enjoy doing when you are off the clock.";
+    }
+    return `I mean ${referent}.`;
+  }
+  if (referent === "what you actually enjoy doing when you are off the clock") {
+    return "Because the piece I just pressed on was what you actually enjoy doing when you are off the clock, and that tells me what pulls you in when nobody is steering you.";
+  }
+  if (referent === "what people usually miss about you") {
+    return "Because what people usually miss about you usually tells me more than the first answer people reach for.";
+  }
+  if (referent === "the name you want me to use when I am speaking to you directly") {
+    return "Because the name you want me to use tells me how you want to be addressed directly.";
+  }
+  return `Because ${referent} tells me how to read you more accurately.`;
+}
+
 export function buildRelationalChatReply(
   userText: string,
   inventory?: SessionInventoryItem[] | null,
@@ -1505,6 +1553,15 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
       ) {
         // Keep short task replies inside the active negotiation instead of dropping to generic clarification.
       } else {
+    const profileClarification = buildProfileShortFollowUpClarification(
+      input.userText,
+      extractProfileShortFollowUpReferent(
+        input.sceneState.last_assistant_text || input.sceneState.last_profile_prompt || null,
+      ),
+    );
+    if (profileClarification) {
+      return profileClarification;
+    }
     return buildShortClarificationReply({
       userText: input.userText,
       interactionMode: input.sceneState.interaction_mode,

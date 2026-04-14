@@ -416,6 +416,36 @@ function containsProfileIntakeQuestion(text: string): boolean {
   );
 }
 
+function isExplicitProfileBuildingInvitation(text: string): boolean {
+  return /\b(i want you to|i want us to|i(?: would|'d) like you to|can you|help you)\b[\w\s]{0,30}\b(get to know me better|know me better|understand me better|learn more about me)\b/i.test(
+    normalize(text),
+  );
+}
+
+function isAcceptedProfileBuildingInvitationOpener(text: string): boolean {
+  return /\b(what should i call you|what do you lose track of time doing|what boundaries|what people usually miss about you|what should i understand about you|what do you want me to understand about you)\b/i.test(
+    normalize(text),
+  );
+}
+
+function shouldPreserveInterpretiveProfileBeat(input: ResponseGateInput, text: string): boolean {
+  if (
+    input.sceneState.interaction_mode !== "profile_building" ||
+    input.dialogueAct !== "user_answer"
+  ) {
+    return false;
+  }
+  if (containsProfileIntakeQuestion(text) || violatesEmbodiedVoice(input, text)) {
+    return false;
+  }
+  return (
+    hasKeywordOverlap(input.userText, text) ||
+    /\b(that tells me|which tells me|you are reaching for|quiets the noise|not just the hobby label)\b/i.test(
+      normalize(text),
+    )
+  );
+}
+
 function isTaskFulfillmentDue(input: ResponseGateInput): boolean {
   return (
     input.sceneState.topic_type === "task_negotiation" &&
@@ -1833,11 +1863,36 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     const turnPlanCheck = isTurnPlanSatisfied(input.turnPlan, text);
     if (!turnPlanCheck.ok) {
       const oldText = text;
-      text = candidates.buildTurnPlanFallback();
-      if (normalize(text).toLowerCase() !== normalize(oldText).toLowerCase()) {
-        forced = true;
-        reason = "turn_plan_misaligned";
-        traceDecision(oldText, text, reason, "buildTurnPlanFallback");
+      if (shouldPreserveInterpretiveProfileBeat(input, text)) {
+        traceDecision(
+          oldText,
+          text,
+          "turn_plan_interpretive_profile_preserved",
+          "preserveCurrentAnswer",
+          true,
+        );
+      } else if (
+        input.sceneState.interaction_mode === "profile_building" &&
+        input.dialogueAct === "user_answer" &&
+        isExplicitProfileBuildingInvitation(input.userText)
+      ) {
+        if (isAcceptedProfileBuildingInvitationOpener(text)) {
+          traceDecision(oldText, text, "turn_plan_profile_invitation_opener_preserved", "preserveCurrentAnswer", true);
+        } else {
+          text = "What should I call you when I am speaking to you directly?";
+          if (normalize(text).toLowerCase() !== normalize(oldText).toLowerCase()) {
+            forced = true;
+            reason = "turn_plan_profile_invitation_opener_restored";
+            traceDecision(oldText, text, reason, "restoreProfileBuildingInvitationOpener");
+          }
+        }
+      } else {
+        text = candidates.buildTurnPlanFallback();
+        if (normalize(text).toLowerCase() !== normalize(oldText).toLowerCase()) {
+          forced = true;
+          reason = "turn_plan_misaligned";
+          traceDecision(oldText, text, reason, "buildTurnPlanFallback");
+        }
       }
     }
   }

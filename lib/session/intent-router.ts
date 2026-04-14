@@ -45,20 +45,20 @@ const ACK_TERMS = new Set([
 
 const SMALLTALK_TERMS = ["hi", "hello", "thanks", "thank you", "lol", "haha", "nice", "cool"];
 
-const REFUSAL_OR_CONFUSION_TERMS = [
-  "no",
-  "stop",
-  "i won't",
-  "i dont",
-  "i don't",
-  "cannot",
-  "can't",
-  "confused",
-  "what do you mean",
-  "not sure",
-  "i do not understand",
-  "dont understand",
-  "don't understand",
+const REFUSAL_OR_CONFUSION_PATTERNS = [
+  /\bno\b/i,
+  /\bstop\b/i,
+  /\bi won't\b/i,
+  /\bi dont\b/i,
+  /\bi don't\b/i,
+  /\bcannot\b/i,
+  /\bcan't\b/i,
+  /\bconfused\b/i,
+  /\bwhat do you mean\b/i,
+  /\bnot sure\b/i,
+  /\bi do not understand\b/i,
+  /\bdont understand\b/i,
+  /\bdon't understand\b/i,
 ];
 
 const IMPLICIT_QUESTION_PATTERNS = [
@@ -92,6 +92,21 @@ function hasImplicitQuestionCue(text: string): boolean {
   return IMPLICIT_QUESTION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
+function isPositiveProfileBuildingInvitation(text: string): boolean {
+  return (
+    /\b(i want you to|i want us to|i(?: would|'d) like you to|can you|help you)\b[\w\s]{0,30}\b(get to know me better|know me better|understand me better|learn more about me)\b/i.test(
+      text,
+    ) &&
+    !/\b(do not|don't|does not|doesn't|cannot|can't|won't)\b[\w\s]{0,20}\b(get to know me better|know me better|understand me better|learn more about me)\b/i.test(
+      text,
+    )
+  );
+}
+
+function containsRefusalOrConfusionCue(text: string): boolean {
+  return REFUSAL_OR_CONFUSION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 export function classifyUserIntent(input: string, awaitingUser: boolean): UserIntent {
   const text = normalize(input);
   if (!text) {
@@ -107,7 +122,11 @@ export function classifyUserIntent(input: string, awaitingUser: boolean): UserIn
     return "user_question";
   }
 
-  if (containsAny(text, REFUSAL_OR_CONFUSION_TERMS)) {
+  if (isPositiveProfileBuildingInvitation(text)) {
+    return "user_answer";
+  }
+
+  if (containsRefusalOrConfusionCue(text)) {
     return "user_refusal_or_confusion";
   }
 

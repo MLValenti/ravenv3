@@ -2,6 +2,7 @@ import type { HistoryMessage, ToneProfile } from "../chat-prompt.ts";
 import {
   attachWinnerToLiveTurnDiagnostic,
   type LiveTurnDiagnosticRecord,
+  type ServerCanonicalTurnMove,
 } from "../chat/live-turn-interpretation.ts";
 import {
   buildCoreConversationReply,
@@ -50,6 +51,7 @@ import type {
 export type SessionReplayDebugContext = {
   latestUserMessage: string;
   detectedUserAct: string;
+  canonicalTurnMove: ServerCanonicalTurnMove | null;
   currentSessionMode: string;
   replayedSceneStateSummary: string;
   sceneScope: "task_scoped" | "game_scoped" | "open_conversation";
@@ -94,6 +96,7 @@ export type SessionReplayDeterministicBypassInput = {
   capabilityCatalog: VerificationCapabilityCatalogEntry[];
   allowedCheckTypes: string[];
   diagnosticRecord?: LiveTurnDiagnosticRecord | null;
+  canonicalTurnMove?: ServerCanonicalTurnMove | null;
   logSessionRouteDebug: (payload: Record<string, unknown>) => void;
   maybePersistTaskFromAssistantText: PersistTaskFromAssistantText;
   appendChatHistory: (role: "assistant", content: string, sessionId: string) => Promise<void>;
@@ -190,6 +193,14 @@ export function detectDirectQuestionTurn(text: string, act: string): boolean {
   );
 }
 
+function isCanonicalQuestionLike(
+  canonicalTurnMove: ServerCanonicalTurnMove | null | undefined,
+  text: string,
+  act: string,
+): boolean {
+  return canonicalTurnMove?.questionLike ?? detectDirectQuestionTurn(text, act);
+}
+
 function firstSentence(text: string): string {
   return text.split(/(?<=[.!?])\s+/)[0]?.trim() ?? "";
 }
@@ -271,10 +282,12 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       input.diagnosticRecord,
       replayed.sceneState,
     );
+    const startedFlowAct = input.canonicalTurnMove?.primaryRouteAct ?? replayed.latestAct;
     input.logSessionRouteDebug({
       stage: "session_final",
       latest_user_message: input.lastUserMessage.content,
-      detected_user_act: replayed.latestAct,
+      detected_user_act: startedFlowAct,
+      canonical_turn_move: input.canonicalTurnMove ?? null,
       current_session_mode: input.conversationStateSnapshot.current_mode,
       replayed_scene_state: summarizeReplaySceneState(replayed.sceneState),
       scene_scope: classifyReplaySceneScope(replayed.sceneState),
@@ -284,11 +297,15 @@ export async function maybeHandleSessionReplayDeterministicBypass(
         : "working_memory_started_flow_guidance",
       model_called: false,
       chosen_response_source: "deterministic scene",
-      direct_question: detectDirectQuestionTurn(input.lastUserMessage.content, replayed.latestAct),
+      direct_question: isCanonicalQuestionLike(
+        input.canonicalTurnMove,
+        input.lastUserMessage.content,
+        startedFlowAct,
+      ),
       answered_direct_question_first: answeredDirectQuestionFirst(
         input.lastUserMessage.content,
         startedProposalFlowReply,
-        replayed.latestAct,
+        startedFlowAct,
       ),
       pre_model_candidate_source: "working_memory_started_flow",
       final_output_source: "workingMemoryStartedFlow",
@@ -355,10 +372,12 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       input.diagnosticRecord,
       replayed.sceneState,
     );
+    const quickChoiceAct = input.canonicalTurnMove?.primaryRouteAct ?? replayed.latestAct;
     input.logSessionRouteDebug({
       stage: "session_final",
       latest_user_message: input.lastUserMessage.content,
-      detected_user_act: replayed.latestAct,
+      detected_user_act: quickChoiceAct,
+      canonical_turn_move: input.canonicalTurnMove ?? null,
       current_session_mode: input.conversationStateSnapshot.current_mode,
       replayed_scene_state: summarizeReplaySceneState(replayed.sceneState),
       scene_scope: classifyReplaySceneScope(replayed.sceneState),
@@ -366,11 +385,15 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       deterministic_bypass_reason: "game_quick_choice",
       model_called: false,
       chosen_response_source: "deterministic scene",
-      direct_question: detectDirectQuestionTurn(input.lastUserMessage.content, replayed.latestAct),
+      direct_question: isCanonicalQuestionLike(
+        input.canonicalTurnMove,
+        input.lastUserMessage.content,
+        quickChoiceAct,
+      ),
       answered_direct_question_first: answeredDirectQuestionFirst(
         input.lastUserMessage.content,
         deterministicQuickChoiceReply,
-        replayed.latestAct,
+        quickChoiceAct,
       ),
       pre_model_candidate_source: "game_quick_choice",
       final_output_source: "deterministic-game-choice",
@@ -408,7 +431,8 @@ export async function maybeHandleSessionReplayDeterministicBypass(
         : null,
     };
   }
-  const effectiveSceneAct = replayed.latestAct;
+  const canonicalTurnMove = input.canonicalTurnMove ?? null;
+  const effectiveSceneAct = canonicalTurnMove?.primaryRouteAct ?? replayed.latestAct;
   const lastAssistantOutput =
     input.lastAssistantOutput ?? previousAssistantText(input.messages);
   const workingMemoryContinuityTopic = resolveWorkingMemoryContinuityTopic(input.workingMemory);
@@ -429,7 +453,10 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     memoryFallbackText: replayedLastUserText,
   });
   const shortFollowUpReply =
-    effectiveSceneAct === "short_follow_up"
+    (
+      effectiveSceneAct === "short_follow_up" ||
+      canonicalTurnMove?.continuationKind === "clarify_prior_point"
+    )
       ? buildShortClarificationReply({
           userText: input.lastUserMessage.content,
           interactionMode: replayed.sceneState.interaction_mode,
@@ -456,6 +483,7 @@ export async function maybeHandleSessionReplayDeterministicBypass(
         currentTopic,
       })
     : null;
+  const revisionFollowThrough = canonicalTurnMove?.revisionKind !== "none";
   const deterministicGreetingReply =
     isChatLikeSmalltalk(input.lastUserMessage.content) && !replayed.sceneState.task_hard_lock_active
       ? buildOpenChatGreeting()
@@ -545,10 +573,15 @@ export async function maybeHandleSessionReplayDeterministicBypass(
           latestUserText: input.lastUserMessage.content,
         });
   const bypassModel = bypassDecision.bypass;
-  const directQuestion = detectDirectQuestionTurn(input.lastUserMessage.content, effectiveSceneAct);
+  const directQuestion = isCanonicalQuestionLike(
+    canonicalTurnMove,
+    input.lastUserMessage.content,
+    effectiveSceneAct,
+  );
   const sessionReplayDebugContext: SessionReplayDebugContext = {
     latestUserMessage: input.lastUserMessage.content,
     detectedUserAct: effectiveSceneAct,
+    canonicalTurnMove,
     currentSessionMode: input.conversationStateSnapshot.current_mode,
     replayedSceneStateSummary: summarizeReplaySceneState(replayed.sceneState),
     sceneScope,
@@ -563,9 +596,10 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     stage: "session_replay",
     latest_user_message: sessionReplayDebugContext.latestUserMessage,
     detected_user_act: sessionReplayDebugContext.detectedUserAct,
-      current_session_mode: sessionReplayDebugContext.currentSessionMode,
-      replayed_scene_state: sessionReplayDebugContext.replayedSceneStateSummary,
-      scene_scope: sessionReplayDebugContext.sceneScope,
+    canonical_turn_move: sessionReplayDebugContext.canonicalTurnMove,
+    current_session_mode: sessionReplayDebugContext.currentSessionMode,
+    replayed_scene_state: sessionReplayDebugContext.replayedSceneStateSummary,
+    scene_scope: sessionReplayDebugContext.sceneScope,
     deterministic_bypass_triggered: sessionReplayDebugContext.deterministicBypassTriggered,
     deterministic_bypass_reason: sessionReplayDebugContext.deterministicBypassReason,
     model_called: false,
@@ -573,6 +607,7 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     direct_question: sessionReplayDebugContext.directQuestion,
     answered_direct_question_first: false,
     pre_model_candidate_source: sessionReplayDebugContext.preModelCandidateSource,
+    revision_follow_through: revisionFollowThrough,
   });
 
   if (!bypassModel) {
@@ -614,6 +649,7 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     stage: "session_final",
     latest_user_message: input.lastUserMessage.content,
     detected_user_act: effectiveSceneAct,
+    canonical_turn_move: canonicalTurnMove,
     current_session_mode: input.conversationStateSnapshot.current_mode,
     replayed_scene_state: summarizeReplaySceneState(replayed.sceneState),
     scene_scope: sceneScope,
