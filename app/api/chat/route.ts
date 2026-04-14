@@ -19,7 +19,12 @@ import {
   shapeAssistantOutput,
   type DialogueAct,
 } from "@/lib/chat/conversation-quality";
-import { interpretLiveRouteTurn } from "@/lib/chat/live-turn-interpretation";
+import {
+  attachWinnerToLiveTurnDiagnostic,
+  buildLiveTurnDiagnosticRecord,
+  interpretLiveRouteTurn,
+  type LiveTurnDiagnosticRecord,
+} from "@/lib/chat/live-turn-interpretation";
 import { getSelectedPersonaPlaybookIds } from "@/lib/chat/behavior-pack";
 import {
   shouldNoopForNoNewUserMessage,
@@ -142,6 +147,11 @@ import { inspectGameStartContract } from "@/lib/session/game-start-contract";
 import { normalizeWorkingMemory } from "@/lib/session/working-memory";
 import { persistTaskFromAssistantText } from "@/lib/session/task-persistence";
 import { DEFAULT_SETTINGS } from "@/lib/settings";
+import {
+  createSessionStateContract,
+  reduceAssistantEmission,
+  reduceUserTurn,
+} from "@/lib/session/session-state-contract";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -422,6 +432,89 @@ function buildPromptRouteConversationState(
 
 function logSessionRouteDebug(payload: Record<string, unknown>): void {
   console.info("raven.route.debug", JSON.stringify(payload));
+}
+
+function compactDiagnosticText(text: string | null | undefined, max = 160): string | null {
+  if (typeof text !== "string") {
+    return null;
+  }
+  const normalized = text.trim().replace(/\s+/g, " ");
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.length <= max) {
+    return normalized;
+  }
+  return `${normalized.slice(0, max - 3)}...`;
+}
+
+function buildActiveThreadHint(
+  conversationStateSnapshot: ConversationStateSnapshot,
+): string | null {
+  return (
+    compactDiagnosticText(
+      conversationStateSnapshot.active_thread !== "none"
+        ? conversationStateSnapshot.active_thread
+        : conversationStateSnapshot.last_conversation_topic !== "none"
+          ? conversationStateSnapshot.last_conversation_topic
+          : conversationStateSnapshot.pending_user_request !== "none"
+            ? conversationStateSnapshot.pending_user_request
+            : null,
+    ) ?? null
+  );
+}
+
+function buildServerTurnDiagnosticRecord(input: {
+  requestId: string;
+  turnId: string;
+  sessionId: string;
+  interpretationInput: Parameters<typeof buildLiveTurnDiagnosticRecord>[0]["interpretationInput"];
+  messages: ChatMessage[];
+  conversationStateSnapshot: ConversationStateSnapshot;
+}): LiveTurnDiagnosticRecord {
+  const baseRecord = buildLiveTurnDiagnosticRecord({
+    requestId: input.requestId,
+    turnId: input.turnId,
+    sessionId: input.sessionId,
+    interpretationInput: input.interpretationInput,
+    interactionMode: input.conversationStateSnapshot.current_mode,
+    activeThreadHint: buildActiveThreadHint(input.conversationStateSnapshot),
+  });
+  const latestUserIndex = [...input.messages]
+    .map((message, index) => ({ message, index }))
+    .reverse()
+    .find((entry) => entry.message.role === "user")?.index;
+  if (latestUserIndex === undefined) {
+    return baseRecord;
+  }
+
+  let contract = createSessionStateContract(`route-diagnostic-${input.sessionId}`);
+  for (let index = 0; index < latestUserIndex; index += 1) {
+    const message = input.messages[index];
+    if (!message || message.role === "system") {
+      continue;
+    }
+    if (message.role === "user") {
+      const reduced = reduceUserTurn(contract, {
+        text: message.content,
+        nowMs: index + 1,
+      });
+      contract = reduced.next;
+      continue;
+    }
+    contract = reduceAssistantEmission(contract, {
+      stepId: `route-diagnostic-${index}`,
+      content: message.content,
+      isQuestion: message.content.includes("?"),
+    });
+  }
+
+  const reducedLatest = reduceUserTurn(contract, {
+    text: input.messages[latestUserIndex]?.content ?? input.interpretationInput.lastUserMessage,
+    nowMs: latestUserIndex + 1,
+    diagnosticRecord: baseRecord,
+  });
+  return reducedLatest.diagnostic ?? baseRecord;
 }
 
 async function persistSessionTurnSummary(
@@ -1137,6 +1230,22 @@ export async function POST(request: Request) {
           classifyUserIntent: turnInterpretation.classifyUserIntentForState,
           classifyRouteAct: turnInterpretation.classifyRouteActForState,
         });
+  let liveTurnDiagnosticRecord = buildServerTurnDiagnosticRecord({
+    requestId,
+    turnId,
+    sessionId,
+    interpretationInput: {
+      lastUserMessage: lastUserMessage?.content ?? "",
+      awaitingUser: conversationState.awaitingUser,
+      userAnswered: conversationState.userAnswered,
+      verificationJustCompleted: conversationState.verificationJustCompleted,
+      sessionPhase: conversationState.sessionPhase,
+      previousAssistantMessage: conversationState.lastAssistantOutput,
+      currentTopic: null,
+    },
+    messages,
+    conversationStateSnapshot,
+  });
   const workingMemory = normalizeWorkingMemory(payload.workingMemory);
   const turnPlan = buildTurnPlan(messages, {
     conversationState: conversationStateSnapshot,
@@ -1456,6 +1565,7 @@ export async function POST(request: Request) {
     sessionId,
     capabilityCatalog,
     allowedCheckTypes,
+    diagnosticRecord: liveTurnDiagnosticRecord,
     logSessionRouteDebug,
     maybePersistTaskFromAssistantText: persistTaskFromAssistantText,
     appendChatHistory,
@@ -1464,6 +1574,7 @@ export async function POST(request: Request) {
     buildChatTraceHeaders,
   });
   sessionReplayDebugContext = sessionReplayResult.sessionReplayDebugContext;
+  liveTurnDiagnosticRecord = sessionReplayResult.diagnosticRecord ?? liveTurnDiagnosticRecord;
   if (sessionReplayResult.response) {
     return sessionReplayResult.response;
   }
@@ -1896,6 +2007,12 @@ export async function POST(request: Request) {
     },
   });
 
+  liveTurnDiagnosticRecord = attachWinnerToLiveTurnDiagnostic(liveTurnDiagnosticRecord, {
+    pathWinner: "server_model_path",
+    pathReason: sessionReplayDebugContext?.deterministicBypassReason ?? "model_path_after_replay_fallthrough",
+    finalWinningResponseSource: finalOutputSource,
+  });
+
   if (sessionReplayDebugContext && lastUserMessage) {
     logSessionRouteDebug({
       stage: "session_final",
@@ -1919,6 +2036,7 @@ export async function POST(request: Request) {
         finalAssistantText,
         sessionReplayDebugContext.detectedUserAct,
       ),
+      live_turn_diagnostic: liveTurnDiagnosticRecord,
       pre_model_candidate_source: sessionReplayDebugContext.preModelCandidateSource,
       final_output_source: finalOutputSource,
       turn_plan_check: baseResponseHeaders["x-raven-turn-plan-check"] ?? "none",

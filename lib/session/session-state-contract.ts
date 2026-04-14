@@ -8,6 +8,10 @@ import {
   type UserIntent,
 } from "./intent-router.ts";
 import {
+  attachStateRouteToLiveTurnDiagnostic,
+  type LiveTurnDiagnosticRecord,
+} from "../chat/live-turn-interpretation.ts";
+import {
   createWorkingMemory,
   noteWorkingMemoryAssistantTurn,
   noteWorkingMemoryUserTurn,
@@ -31,6 +35,7 @@ export type UserTurnReduceResult = {
   intent: UserIntent;
   route: DialogueRouteResult;
   awaitingBeforePersist: boolean;
+  diagnostic?: LiveTurnDiagnosticRecord | null;
 };
 
 export type TurnGateUiProjection = {
@@ -60,7 +65,11 @@ export function projectTurnGateUi(gate: TurnGateState): TurnGateUiProjection {
 
 export function reduceUserTurn(
   state: SessionStateContract,
-  input: { text: string; nowMs: number },
+  input: {
+    text: string;
+    nowMs: number;
+    diagnosticRecord?: LiveTurnDiagnosticRecord | null;
+  },
 ): UserTurnReduceResult {
   const text = input.text.trim();
   const awaitingBeforePersist = state.turnGate.awaitingUser;
@@ -77,6 +86,14 @@ export function reduceUserTurn(
     act: route.act,
     nextTopic: route.nextTopic,
   });
+  const diagnostic = input.diagnosticRecord
+    ? attachStateRouteToLiveTurnDiagnostic(input.diagnosticRecord, {
+        text,
+        awaitingUser: awaitingBeforePersist,
+        currentTopic: state.sessionTopic,
+        nowMs: input.nowMs,
+      })
+    : null;
   return {
     next: {
       turnGate: nextGate,
@@ -86,6 +103,7 @@ export function reduceUserTurn(
     intent,
     route,
     awaitingBeforePersist,
+    diagnostic,
   };
 }
 
@@ -113,4 +131,3 @@ export function reduceAssistantEmission(
     sessionTopic: nextWorkingMemory.session_topic,
   };
 }
-

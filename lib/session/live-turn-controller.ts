@@ -1,5 +1,9 @@
 import type { HistoryMessage, ToneProfile } from "../chat-prompt.ts";
 import {
+  attachWinnerToLiveTurnDiagnostic,
+  type LiveTurnDiagnosticRecord,
+} from "../chat/live-turn-interpretation.ts";
+import {
   buildCoreConversationReply,
   classifyCoreConversationMove,
   isStableCoreConversationMove,
@@ -89,6 +93,7 @@ export type SessionReplayDeterministicBypassInput = {
   sessionId: string;
   capabilityCatalog: VerificationCapabilityCatalogEntry[];
   allowedCheckTypes: string[];
+  diagnosticRecord?: LiveTurnDiagnosticRecord | null;
   logSessionRouteDebug: (payload: Record<string, unknown>) => void;
   maybePersistTaskFromAssistantText: PersistTaskFromAssistantText;
   appendChatHistory: (role: "assistant", content: string, sessionId: string) => Promise<void>;
@@ -109,12 +114,32 @@ export type SessionReplayDeterministicBypassInput = {
 export type SessionReplayDeterministicBypassResult = {
   response: Response | null;
   sessionReplayDebugContext: SessionReplayDebugContext | null;
+  diagnosticRecord: LiveTurnDiagnosticRecord | null;
 };
 
 function previousAssistantText(messages: HistoryMessage[]): string | null {
   const copy = [...messages].reverse();
   const lastAssistant = copy.find((message) => message.role === "assistant");
   return lastAssistant?.content ?? null;
+}
+
+function withReplaySceneDiagnosticContext(
+  diagnosticRecord: LiveTurnDiagnosticRecord | null | undefined,
+  sceneState: SceneState,
+): LiveTurnDiagnosticRecord | null {
+  if (!diagnosticRecord) {
+    return null;
+  }
+  return {
+    ...diagnosticRecord,
+    interactionMode: sceneState.interaction_mode,
+    topicType: sceneState.topic_type,
+    topicLocked: sceneState.topic_locked,
+    taskHardLockActive: sceneState.task_hard_lock_active,
+    taskProgress: sceneState.task_progress,
+    gameProgress: sceneState.game_progress,
+    activeThreadHint: diagnosticRecord.activeThreadHint ?? sceneState.agreed_goal ?? null,
+  };
 }
 
 export function summarizeReplaySceneState(sceneState: SceneState): string {
@@ -197,7 +222,11 @@ export async function maybeHandleSessionReplayDeterministicBypass(
   input: SessionReplayDeterministicBypassInput,
 ): Promise<SessionReplayDeterministicBypassResult> {
   if (!input.sessionMode || input.plannerEnabled || !input.lastUserMessage) {
-    return { response: null, sessionReplayDebugContext: null };
+    return {
+      response: null,
+      sessionReplayDebugContext: null,
+      diagnosticRecord: input.diagnosticRecord ?? null,
+    };
   }
 
   const profile = await getProfileFromDb();
@@ -238,6 +267,10 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       input.conversationStateSnapshot,
       "deterministic_scene",
     );
+    const startedFlowDiagnosticRecord = withReplaySceneDiagnosticContext(
+      input.diagnosticRecord,
+      replayed.sceneState,
+    );
     input.logSessionRouteDebug({
       stage: "session_final",
       latest_user_message: input.lastUserMessage.content,
@@ -260,6 +293,15 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       pre_model_candidate_source: "working_memory_started_flow",
       final_output_source: "workingMemoryStartedFlow",
       turn_plan_check: "pass:working_memory_started_flow",
+      live_turn_diagnostic: startedFlowDiagnosticRecord
+        ? attachWinnerToLiveTurnDiagnostic(startedFlowDiagnosticRecord, {
+            pathWinner: "server_replay_bypass",
+            pathReason: isProposalAcceptanceCue(input.lastUserMessage.content)
+              ? "working_memory_proposal_acceptance_starts_flow"
+              : "working_memory_started_flow_guidance",
+            finalWinningResponseSource: "workingMemoryStartedFlow",
+          })
+        : null,
     });
     return {
       response: input.createStaticAssistantNdjsonResponse(startedProposalFlowReply, {
@@ -275,6 +317,18 @@ export async function maybeHandleSessionReplayDeterministicBypass(
         "x-raven-source": "working-memory-started-flow",
       }),
       sessionReplayDebugContext: null,
+      diagnosticRecord: withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState)
+        ? attachWinnerToLiveTurnDiagnostic(
+            withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState)!,
+            {
+              pathWinner: "server_replay_bypass",
+              pathReason: isProposalAcceptanceCue(input.lastUserMessage.content)
+                ? "working_memory_proposal_acceptance_starts_flow"
+                : "working_memory_started_flow_guidance",
+              finalWinningResponseSource: "workingMemoryStartedFlow",
+            },
+          )
+        : null,
     };
   }
   const deterministicQuickChoiceReply =
@@ -297,6 +351,37 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       input.conversationStateSnapshot,
       "deterministic_scene",
     );
+    const quickChoiceDiagnosticRecord = withReplaySceneDiagnosticContext(
+      input.diagnosticRecord,
+      replayed.sceneState,
+    );
+    input.logSessionRouteDebug({
+      stage: "session_final",
+      latest_user_message: input.lastUserMessage.content,
+      detected_user_act: replayed.latestAct,
+      current_session_mode: input.conversationStateSnapshot.current_mode,
+      replayed_scene_state: summarizeReplaySceneState(replayed.sceneState),
+      scene_scope: classifyReplaySceneScope(replayed.sceneState),
+      deterministic_bypass_triggered: true,
+      deterministic_bypass_reason: "game_quick_choice",
+      model_called: false,
+      chosen_response_source: "deterministic scene",
+      direct_question: detectDirectQuestionTurn(input.lastUserMessage.content, replayed.latestAct),
+      answered_direct_question_first: answeredDirectQuestionFirst(
+        input.lastUserMessage.content,
+        deterministicQuickChoiceReply,
+        replayed.latestAct,
+      ),
+      pre_model_candidate_source: "game_quick_choice",
+      final_output_source: "deterministic-game-choice",
+      live_turn_diagnostic: quickChoiceDiagnosticRecord
+        ? attachWinnerToLiveTurnDiagnostic(quickChoiceDiagnosticRecord, {
+            pathWinner: "server_replay_bypass",
+            pathReason: "game_quick_choice",
+            finalWinningResponseSource: "deterministic-game-choice",
+          })
+        : null,
+    });
     return {
       response: input.createStaticAssistantNdjsonResponse(deterministicQuickChoiceReply, {
         ...input.buildChatTraceHeaders({
@@ -311,6 +396,16 @@ export async function maybeHandleSessionReplayDeterministicBypass(
         "x-raven-source": "deterministic-game-choice",
       }),
       sessionReplayDebugContext: null,
+      diagnosticRecord: withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState)
+        ? attachWinnerToLiveTurnDiagnostic(
+            withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState)!,
+            {
+              pathWinner: "server_replay_bypass",
+              pathReason: "game_quick_choice",
+              finalWinningResponseSource: "deterministic-game-choice",
+            },
+          )
+        : null,
     };
   }
   const effectiveSceneAct = replayed.latestAct;
@@ -481,7 +576,11 @@ export async function maybeHandleSessionReplayDeterministicBypass(
   });
 
   if (!bypassModel) {
-    return { response: null, sessionReplayDebugContext };
+    return {
+      response: null,
+      sessionReplayDebugContext,
+      diagnosticRecord: withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState),
+    };
   }
 
   const gated = applyResponseGate({
@@ -507,6 +606,10 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     turnId: input.turnId,
   });
   const chosenResponseSource = gated.forced ? "response-gate fallback" : "deterministic scene";
+  const finalBypassDiagnosticRecord = withReplaySceneDiagnosticContext(
+    input.diagnosticRecord,
+    replayed.sceneState,
+  );
   input.logSessionRouteDebug({
     stage: "session_final",
     latest_user_message: input.lastUserMessage.content,
@@ -525,6 +628,13 @@ export async function maybeHandleSessionReplayDeterministicBypass(
       effectiveSceneAct,
     ),
     pre_model_candidate_source: deterministicCandidateSource,
+    live_turn_diagnostic: finalBypassDiagnosticRecord
+      ? attachWinnerToLiveTurnDiagnostic(finalBypassDiagnosticRecord, {
+          pathWinner: "server_replay_bypass",
+          pathReason: bypassDecision.reason,
+          finalWinningResponseSource: chosenResponseSource,
+        })
+      : null,
   });
   await input.appendChatHistory("assistant", persisted.text, input.sessionId);
   await input.persistSessionTurnSummary(
@@ -562,5 +672,15 @@ export async function maybeHandleSessionReplayDeterministicBypass(
         : {}),
     }),
     sessionReplayDebugContext,
+    diagnosticRecord: withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState)
+      ? attachWinnerToLiveTurnDiagnostic(
+          withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState)!,
+          {
+            pathWinner: "server_replay_bypass",
+            pathReason: bypassDecision.reason,
+            finalWinningResponseSource: chosenResponseSource,
+          },
+        )
+      : null,
   };
 }

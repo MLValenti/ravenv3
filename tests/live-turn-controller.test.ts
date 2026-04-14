@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import type { HistoryMessage } from "../lib/chat-prompt.ts";
 import { createConversationStateSnapshot } from "../lib/chat/conversation-state.ts";
 import { buildTurnPlan } from "../lib/chat/turn-plan.ts";
+import { buildLiveTurnDiagnosticRecord } from "../lib/chat/live-turn-interpretation.ts";
 import { maybeHandleSessionReplayDeterministicBypass } from "../lib/session/live-turn-controller.ts";
 import { createWorkingMemory, type WorkingMemory } from "../lib/session/working-memory.ts";
 
@@ -26,7 +27,25 @@ function createControllerInput(input: {
     conversationState: conversationStateSnapshot,
   });
   const lastUserMessage = [...input.messages].reverse().find((message) => message.role === "user");
+  const previousAssistantMessage =
+    [...input.messages].reverse().find((message) => message.role === "assistant")?.content ?? null;
   const counters: CallbackCounters = { append: 0, summary: 0, persist: 0, logs: 0 };
+  const diagnosticRecord = buildLiveTurnDiagnosticRecord({
+    requestId: "request-live-turn-controller-test",
+    turnId: "turn-live-turn-controller-test",
+    sessionId,
+    interpretationInput: {
+      lastUserMessage: lastUserMessage?.content ?? "",
+      awaitingUser: false,
+      userAnswered: false,
+      verificationJustCompleted: false,
+      sessionPhase: "chat",
+      previousAssistantMessage,
+      currentTopic: conversationStateSnapshot.active_thread,
+    },
+    interactionMode: conversationStateSnapshot.current_mode,
+    activeThreadHint: conversationStateSnapshot.active_thread,
+  });
 
   return {
     counters,
@@ -49,6 +68,7 @@ function createControllerInput(input: {
       sessionId,
       capabilityCatalog: [],
       allowedCheckTypes: [],
+      diagnosticRecord,
       logSessionRouteDebug: () => {
         counters.logs += 1;
       },
@@ -121,6 +141,8 @@ test("live turn controller returns deterministic bypass response and triggers si
 
   assert.ok(result.response);
   assert.equal(result.response?.headers.get("x-raven-source"), "deterministic-scene");
+  assert.equal(result.diagnosticRecord?.pathWinner, "server_replay_bypass");
+  assert.equal(result.diagnosticRecord?.finalWinningResponseSource, "deterministic scene");
   assert.equal(counters.persist, 1);
   assert.equal(counters.append, 1);
   assert.equal(counters.summary, 1);
