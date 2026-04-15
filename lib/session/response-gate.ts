@@ -7,7 +7,11 @@ import {
   type SceneState,
 } from "./scene-state.ts";
 import type { DialogueRouteAct } from "../dialogue/router.ts";
-import { buildPlanningQuestionFallback, type QuestionToneProfile } from "../chat/open-question.ts";
+import {
+  buildHumanQuestionFallback,
+  buildPlanningQuestionFallback,
+  type QuestionToneProfile,
+} from "../chat/open-question.ts";
 import { isCoherentRelationalQuestionAnswer } from "../chat/relational-answer-alignment.ts";
 import { classifyCoreConversationMove } from "../chat/core-turn-move.ts";
 import {
@@ -32,10 +36,7 @@ import {
   isWeakRepairReferent,
   resolveRepairTurn,
 } from "../chat/repair-turn.ts";
-import {
-  isTurnPlanSatisfied,
-  type TurnPlan,
-} from "../chat/turn-plan.ts";
+import { isTurnPlanSatisfied, type TurnPlan } from "../chat/turn-plan.ts";
 import { createResponseGateCandidateBuilder } from "./response-gate-candidates.ts";
 import { buildSceneScaffoldReply } from "./scene-scaffolds.ts";
 
@@ -428,22 +429,72 @@ function isAcceptedProfileBuildingInvitationOpener(text: string): boolean {
   );
 }
 
+function isProfileDisclosureLikeAnswer(text: string): boolean {
+  return /\b(call me|my name is|my name's|i like\b|i like to\b|i enjoy\b|my hobbies are\b|my hobby is\b|i prefer\b|you should know that\b)\b/i.test(
+    normalize(text),
+  );
+}
+
+function isGroundedProfileFollowUpQuestion(userText: string, responseText: string): boolean {
+  return isSafeProfileQuestion(responseText) && hasKeywordOverlap(userText, responseText);
+}
+
 function shouldPreserveInterpretiveProfileBeat(input: ResponseGateInput, text: string): boolean {
+  const inProfileContext =
+    input.sceneState.interaction_mode === "profile_building" ||
+    input.turnPlan?.currentMode === "profile_building";
   if (
-    input.sceneState.interaction_mode !== "profile_building" ||
+    !inProfileContext ||
     input.dialogueAct !== "user_answer"
   ) {
     return false;
   }
+  const normalized = normalize(text);
   if (containsProfileIntakeQuestion(text) || violatesEmbodiedVoice(input, text)) {
+    return false;
+  }
+  if (
+    /^(?:noted|good|understood|heard)\b/i.test(normalized) &&
+    !/\b(that tells me|which tells me|you are reaching for|quiets the noise|not just the hobby label|means|reads like|lands like|not filler|head quieter|head cleaner|quieter and cleaner)\b/i.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  if (
+    /\b(now we're getting somewhere|one of your interests|preferences directly from you)\b/i.test(
+      normalized,
+    )
+  ) {
     return false;
   }
   return (
     hasKeywordOverlap(input.userText, text) ||
-    /\b(that tells me|which tells me|you are reaching for|quiets the noise|not just the hobby label)\b/i.test(
-      normalize(text),
+    /\b(that tells me|which tells me|you are reaching for|quiets the noise|not just the hobby label|not filler|head quieter|head cleaner|quieter and cleaner)\b/i.test(
+      normalized,
     )
   );
+}
+
+function isValidCurrentRoundGameResolution(input: ResponseGateInput, text: string): boolean {
+  if (
+    input.dialogueAct !== "answer_activity_choice" ||
+    input.sceneState.topic_type !== "game_execution"
+  ) {
+    return false;
+  }
+  const normalized = normalize(text).toLowerCase();
+  if (!normalized || /\bi pick\b|\bwe are doing\b/.test(normalized)) {
+    return false;
+  }
+  const hasRoundChoice =
+    /\byou chose (?:rock|paper|scissors|\d+)\b/.test(normalized) ||
+    /\bi (?:threw|chose) (?:rock|paper|scissors|\d+)\b/.test(normalized);
+  const hasRoundOutcome =
+    /\b(beats?|wins?|lose|loses|won|lost|round is mine|you win|i win|this throw|first throw|second throw|consequence is live now)\b/.test(
+      normalized,
+    );
+  return hasRoundChoice && hasRoundOutcome;
 }
 
 function isTaskFulfillmentDue(input: ResponseGateInput): boolean {
@@ -1424,6 +1475,9 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
     );
   }
   if (act === "answer_activity_choice") {
+    if (isValidCurrentRoundGameResolution(input, text)) {
+      return true;
+    }
     if (/\b(stakes?|bet|wager|if i win|if you win|on the line)\b/.test(user)) {
       return /\b(stakes?|bet|wager|if i win|if you win|terms?|set the wager|on the line)\b/.test(
         normalized,
@@ -1509,6 +1563,9 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
     ) {
       if (/\b(start the session|our sessions|what do you want out of this session)\b/i.test(normalized)) {
         return false;
+      }
+      if (shouldPreserveInterpretiveProfileBeat(input, text)) {
+        return true;
       }
       return (
         isSafeProfileQuestion(normalized) ||
@@ -1846,6 +1903,35 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     forced = true;
     reason = "wrong_family_game_open_blocked";
     traceDecision(oldText, text, reason, "buildFallback");
+  }
+
+  if (
+    !forced &&
+    input.turnPlan?.requestedAction === "gather_profile_only_when_needed" &&
+    !input.lastAssistantText &&
+    isProfileBuildingRequest(input.userText) &&
+    !isAcceptedProfileBuildingInvitationOpener(text)
+  ) {
+    text = "What should I call you when I am speaking to you directly?";
+    forced = true;
+    reason = "profile_invitation_opener_restored";
+  }
+
+  if (
+    !forced &&
+    input.turnPlan?.requestedAction === "gather_profile_only_when_needed" &&
+    input.dialogueAct === "user_answer" &&
+    Boolean(input.lastAssistantText && /\?/.test(input.lastAssistantText)) &&
+    isProfileDisclosureLikeAnswer(input.userText) &&
+    !shouldPreserveInterpretiveProfileBeat(input, text) &&
+    !isGroundedProfileFollowUpQuestion(input.userText, text)
+  ) {
+    text = buildHumanQuestionFallback(input.userText, input.toneProfile ?? "neutral", {
+      previousAssistantText: input.lastAssistantText,
+      currentTopic: input.turnPlan?.activeThread || resolveContinuityTopic(input),
+    });
+    forced = true;
+    reason = "profile_answer_follow_up_restored";
   }
 
   if (
@@ -2190,11 +2276,13 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       normalize(input.userText),
     );
   const shouldAllowGamePromptSimilarity = shouldAllowRepeatedGamePrompt(input, text);
+  const shouldAllowCurrentRoundGameResolution = isValidCurrentRoundGameResolution(input, text);
   if (
     input.lastAssistantText &&
     !shouldAllowReplacementTaskSimilarity &&
     !shouldAllowTrainingFollowUpSimilarity &&
     !shouldAllowGamePromptSimilarity &&
+    !shouldAllowCurrentRoundGameResolution &&
     isSemanticallyRepeated(text, input.lastAssistantText)
   ) {
     if (isShortClarificationTurn(input.userText)) {

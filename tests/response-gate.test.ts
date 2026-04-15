@@ -812,6 +812,83 @@ test("response gate preserves coherent relational service answers", () => {
   assert.match(result.text, /verbal obedience|follow-through/i);
 });
 
+test("response gate rewrites relational directive-request role reversal into an actual directive", () => {
+  const conversationState = {
+    ...createConversationStateSnapshot("response-gate-service-directive"),
+    current_mode: "relational_chat" as const,
+    active_thread: "what you can do for me",
+    pending_user_request: "I want you to tell me what to do",
+    current_turn_action: "acknowledge_then_act" as const,
+    current_output_shape: "acknowledgment_plus_modification" as const,
+  };
+  const turnPlan = buildTurnPlan(
+    [
+      { role: "assistant", content: "How can I serve you better?" },
+      { role: "user", content: "I want you to tell me what to do" },
+    ],
+    {
+      conversationState,
+    },
+  );
+
+  const result = applyResponseGate({
+    text: "Then tell me what you can actually do for me.",
+    userText: "I want you to tell me what to do",
+    dialogueAct: "user_answer",
+    lastAssistantText: "How can I serve you better?",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.reason, "turn_plan_misaligned");
+  assert.match(result.text, /start with this|do this|next instruction|hold still|clean yes/i);
+  assert.doesNotMatch(result.text, /\?/);
+  assert.doesNotMatch(result.text, /how can i serve you|what can i do for you|what do you actually want/i);
+});
+
+test("response gate keeps practical tell-me-what-to-do requests out of the relational directive fallback", () => {
+  const messages = [
+    { role: "assistant" as const, content: "How can I help?" },
+    { role: "user" as const, content: "tell me what to do about my broken sink" },
+  ];
+  const conversationState = deriveConversationStateFromMessages({
+    sessionId: "response-gate-practical-directive-near-miss",
+    messages,
+    classifyUserIntent: (text) =>
+      classifyDialogueRoute({ text, awaitingUser: false, currentTopic: null }).act,
+    classifyRouteAct: (text) =>
+      classifyDialogueRoute({ text, awaitingUser: false, currentTopic: null }).act,
+  });
+  const turnPlan = buildTurnPlan(messages, { conversationState });
+
+  const result = applyResponseGate({
+    text: "First check whether the shutoff valves under the sink are fully open, then look for a loose trap or supply-line leak before you take anything apart.",
+    userText: "tell me what to do about my broken sink",
+    dialogueAct: "user_answer",
+    lastAssistantText: "How can I help?",
+    turnPlan,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(turnPlan.currentMode, "normal_chat");
+  assert.notEqual(turnPlan.activeThread, "what you can do for me");
+  assert.equal(result.forced, false);
+  assert.equal(result.reason, "accepted");
+  assert.match(result.text, /shutoff valves|trap|leak/i);
+  assert.doesNotMatch(result.text, /give me one clean yes|hold still|next instruction|what you can do for me/i);
+});
+
 test("response gate enforces user question alignment after fallback rewrites", () => {
   const routed = classifyDialogueRoute({
     text: "how long do i wear it",

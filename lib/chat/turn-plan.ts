@@ -21,7 +21,11 @@ import {
   type UserResponseEnergy,
 } from "./conversation-state.ts";
 import { isClarificationExpansionRequest } from "./repair-turn.ts";
-import { isChatLikeSmalltalk, isProfileBuildingRequest } from "../session/interaction-mode.ts";
+import {
+  isAssistantServiceQuestion,
+  isChatLikeSmalltalk,
+  isProfileBuildingRequest,
+} from "../session/interaction-mode.ts";
 
 type ChatMessageLike = {
   role: "user" | "assistant" | "system";
@@ -380,6 +384,65 @@ function isProfileOrDisclosurePrompt(previousAssistantMessage: string | null): b
 function isDisclosureLikeAnswer(text: string): boolean {
   return /\b(call me|my name is|my name's|i like\b|i like to\b|i enjoy\b|my hobbies are\b|my hobby is\b|i prefer\b|you should know that\b)\b/i.test(
     text,
+  );
+}
+
+function isRelationalDirectiveRequestAnswer(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\b(?:about|for|with|on)\b/.test(normalized) ||
+    /\b(?:broken|sink|toilet|drain|leak|job|project|plan|schedule|task|homework)\b/.test(normalized)
+  ) {
+    return false;
+  }
+  return /^(?:i want you to |i want you to just |just )?(?:tell me what to do|tell me exactly what to do|give me an instruction|give me instructions|give me a directive|give me an order|command me)$/i.test(
+    normalized,
+  );
+}
+
+function isRelationalServiceQuestionContext(text: string | null | undefined): boolean {
+  const normalized = normalize(text ?? "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (!isAssistantServiceQuestion(normalized)) {
+    return false;
+  }
+  return (
+    /\bserve you better\b/.test(normalized) ||
+    /\bwhat can i do for you\b/.test(normalized) ||
+    /\bwhat do you want me to do(?: for you)?\b/.test(normalized) ||
+    /\bwhat do you want from me\b/.test(normalized) ||
+    /\bhow can i be useful to you\b/.test(normalized) ||
+    /\bwhat would make me useful to you\b/.test(normalized) ||
+    /\bbetter (?:sub|submissive) to you\b/.test(normalized)
+  );
+}
+
+function isServiceDirectiveThread(turnPlan: TurnPlan): boolean {
+  return (
+    Boolean(turnPlan.previousAssistantMessage) &&
+    isRelationalServiceQuestionContext(turnPlan.previousAssistantMessage) &&
+    isRelationalDirectiveRequestAnswer(turnPlan.latestUserMessage)
+  );
+}
+
+function containsServiceTurnBack(text: string): boolean {
+  return /\b(how can i serve you|what can i do for you|what do you want from me|ask me directly|tell me why you'?re here|what do you actually want)\b/i.test(
+    text,
+  );
+}
+
+function looksLikeDirectiveResponse(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  if (!normalized || /\?/.test(normalized) || containsServiceTurnBack(text)) {
+    return false;
+  }
+  return /^(?:good\.\s*)?(?:then\s+)?(?:do this|start with this|start by|start with|first|give me one clean yes|answer with one clean yes|hold still|keep still|kneel|stand|sit|take|go|put|lock|wait)\b/.test(
+    normalized,
   );
 }
 
@@ -1003,6 +1066,11 @@ export function isTurnPlanSatisfied(
         ? { ok: true, reason: "planning_answer_continued" }
         : { ok: false, reason: "planning_answer_missed" };
     }
+    if (isServiceDirectiveThread(turnPlan)) {
+      return looksLikeDirectiveResponse(response)
+        ? { ok: true, reason: "service_directive_provided" }
+        : { ok: false, reason: "missing_service_directive" };
+    }
     if (isGroundedAnswerThreadResponse(turnPlan, response)) {
       return { ok: true, reason: "answer_thread_grounded" };
     }
@@ -1062,6 +1130,13 @@ export function buildTurnPlanFallback(
   turnPlan: TurnPlan,
   toneProfile: "neutral" | "friendly" | "dominant",
 ): string {
+  if (turnPlan.requiredMove === "acknowledge_user_answer" && isServiceDirectiveThread(turnPlan)) {
+    const candidates = [
+      "Good. Start with this: give me one clean yes, then hold still and wait for the next instruction.",
+      "Good. Then do this: answer with one clean yes, keep still, and wait for the next instruction.",
+    ];
+    return pickFirstDifferent(turnPlan.previousAssistantMessage, candidates);
+  }
   const planningFallback = buildPlanningQuestionFallback(turnPlan.latestUserMessage, {
     previousAssistantText: turnPlan.previousAssistantMessage,
     currentTopic: turnPlan.activeThread || turnPlan.previousUserMessage,

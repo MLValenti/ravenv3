@@ -430,6 +430,19 @@ type AssistantTraceMeta = {
   finalGameStartQuestionPresent?: boolean;
 };
 
+type SessionTurnDebugEntry = {
+  turnId: string;
+  sourceUserMessageId: number;
+  userText: string;
+  ravenOutputText: string;
+  assistantRenderAppendEvents: number;
+  recoverSkippedAssistantRenderFired: boolean;
+  appendRavenOutputRunsForTurn: number;
+  visibleAssistantStringsShownForTurn: number;
+  createdAt: number;
+  conversationMode: string | null;
+};
+
 function mapAssistantReplySourceToTurnResponseFamily(
   source: AssistantReplySource,
 ): TurnResponseFamily {
@@ -1812,6 +1825,7 @@ export default function SessionPage() {
   const [ravenLines, setRavenLines] = useState<string[]>([]);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [message, setMessage] = useState<string | null>(null);
+  const [sessionTurnLog, setSessionTurnLog] = useState<SessionTurnDebugEntry[]>([]);
   const [dynamicStepCount, setDynamicStepCount] = useState(0);
   const [plannerBusy, setPlannerBusy] = useState(false);
   const [sessionPhase, setSessionPhase] = useState<SessionPhase>("warmup");
@@ -1863,6 +1877,7 @@ export default function SessionPage() {
   const [lastUserMessageId, setLastUserMessageId] = useState(0);
   const [lastEmittedTurnId, setLastEmittedTurnId] = useState(0);
   const [debugMode, setDebugMode] = useState(false);
+  const [showTurnLog, setShowTurnLog] = useState(false);
   const [visionDebugMode, setVisionDebugMode] = useState(false);
   const [objectOverlay, setObjectOverlay] = useState(false);
   const [sttAvailable, setSttAvailable] = useState(false);
@@ -2275,6 +2290,29 @@ export default function SessionPage() {
       timestamp: now(),
       label,
       detail: JSON.stringify(detail),
+    });
+  }
+
+  function updateSessionTurnLog(
+    sourceUserMessageId: number,
+    updater: (entry: SessionTurnDebugEntry | null) => SessionTurnDebugEntry | null,
+  ) {
+    if (sourceUserMessageId <= 0) {
+      return;
+    }
+    setSessionTurnLog((current) => {
+      const index = current.findIndex((entry) => entry.sourceUserMessageId === sourceUserMessageId);
+      const previous = index >= 0 ? current[index] ?? null : null;
+      const next = updater(previous);
+      if (!next) {
+        return current;
+      }
+      if (index < 0) {
+        return [next, ...current].slice(0, 30);
+      }
+      const updated = [...current];
+      updated[index] = next;
+      return updated;
     });
   }
 
@@ -3552,6 +3590,14 @@ export default function SessionPage() {
         ? effectiveTrace.sourceUserMessageId
         : turnGateRef.current.lastUserMessageId;
     const hasRenderableText = renderable.hasRenderableText;
+    updateSessionTurnLog(anchorUserMessageId, (entry) =>
+      entry
+        ? {
+            ...entry,
+            appendRavenOutputRunsForTurn: entry.appendRavenOutputRunsForTurn + 1,
+          }
+        : null,
+    );
     const visibleDecision = shouldAllowVisibleAssistantCommit({
       sourceUserMessageId: anchorUserMessageId,
       normalizedText: normalizeAssistantCommitText(commitText),
@@ -3660,8 +3706,7 @@ export default function SessionPage() {
         at_ms: now(),
       });
     }
-    return {
-      committed: appendCommittedAssistantOutput({
+    const committed = appendCommittedAssistantOutput({
         text: renderable.speechText || renderable.displayText,
         speechText: renderable.speechText,
         displayText: renderable.displayText,
@@ -3669,10 +3714,27 @@ export default function SessionPage() {
         traceMeta: effectiveTrace,
         anchorUserMessageId,
         alreadyCommittedNormalizedText: committedNormalizedText,
-      }),
+      });
+    if (committed) {
+      updateSessionTurnLog(anchorUserMessageId, (entry) =>
+        entry
+          ? {
+              ...entry,
+              ravenOutputText: renderable.displayText || renderable.speechText,
+              assistantRenderAppendEvents: entry.assistantRenderAppendEvents + 1,
+              visibleAssistantStringsShownForTurn: entry.visibleAssistantStringsShownForTurn + 1,
+              conversationMode:
+                sessionMemoryRef.current.conversation_mode?.value ??
+                sceneStateRef.current.interaction_mode,
+            }
+          : null,
+      );
+    }
+    return {
+      committed,
       reason: "committed",
       hasRenderableText,
-      renderedText: renderable.speechText || renderable.displayText,
+      renderedText: renderable.displayText || renderable.speechText,
     };
   }
 
@@ -3686,6 +3748,14 @@ export default function SessionPage() {
       traceMeta && traceMeta.sourceUserMessageId > 0
         ? traceMeta.sourceUserMessageId
         : turnGateRef.current.lastUserMessageId;
+    updateSessionTurnLog(anchorUserMessageId, (entry) =>
+      entry
+        ? {
+            ...entry,
+            recoverSkippedAssistantRenderFired: true,
+          }
+        : null,
+    );
     const visibleDecision = shouldAllowVisibleAssistantCommit({
       sourceUserMessageId: anchorUserMessageId,
       normalizedText: normalizeAssistantCommitText(
@@ -3718,7 +3788,7 @@ export default function SessionPage() {
       rendered_text: renderable.speechText || renderable.displayText,
       at_ms: now(),
     });
-    return appendCommittedAssistantOutput({
+    const recovered = appendCommittedAssistantOutput({
       text: renderable.speechText || renderable.displayText,
       speechText: renderable.speechText,
       displayText: renderable.displayText,
@@ -3727,6 +3797,22 @@ export default function SessionPage() {
       anchorUserMessageId,
       alreadyCommittedNormalizedText: normalizedText || null,
     });
+    if (recovered) {
+      updateSessionTurnLog(anchorUserMessageId, (entry) =>
+        entry
+          ? {
+              ...entry,
+              ravenOutputText: renderable.displayText || renderable.speechText,
+              assistantRenderAppendEvents: entry.assistantRenderAppendEvents + 1,
+              visibleAssistantStringsShownForTurn: entry.visibleAssistantStringsShownForTurn + 1,
+              conversationMode:
+                sessionMemoryRef.current.conversation_mode?.value ??
+                sceneStateRef.current.interaction_mode,
+            }
+          : null,
+      );
+    }
+    return recovered;
   }
 
   function handleEngineEvent(event: StepEngineEvent): boolean {
@@ -4021,6 +4107,20 @@ export default function SessionPage() {
       dialogueAct: routed.act,
       routeReason: routed.reason,
     };
+    updateSessionTurnLog(reducedUserTurn.next.turnGate.lastUserMessageId, (entry) => ({
+      turnId: entry?.turnId ?? requestId,
+      sourceUserMessageId: reducedUserTurn.next.turnGate.lastUserMessageId,
+      userText: text,
+      ravenOutputText: entry?.ravenOutputText ?? "",
+      assistantRenderAppendEvents: entry?.assistantRenderAppendEvents ?? 0,
+      recoverSkippedAssistantRenderFired: entry?.recoverSkippedAssistantRenderFired ?? false,
+      appendRavenOutputRunsForTurn: entry?.appendRavenOutputRunsForTurn ?? 0,
+      visibleAssistantStringsShownForTurn: entry?.visibleAssistantStringsShownForTurn ?? 0,
+      createdAt: entry?.createdAt ?? now(),
+      conversationMode:
+        sessionMemoryRef.current.conversation_mode?.value ??
+        sceneStateRef.current.interaction_mode,
+    }));
     pushTurnTrace("turn.accepted", {
       request_id: requestId,
       session_id: turnGateRef.current.sessionId,
@@ -7375,6 +7475,16 @@ export default function SessionPage() {
             />
             <span>Session debug mode</span>
           </label>
+          {debugMode ? (
+            <label className="field-checkbox">
+              <input
+                type="checkbox"
+                checked={showTurnLog}
+                onChange={(event) => setShowTurnLog(event.target.checked)}
+              />
+              <span>Show turn log</span>
+            </label>
+          ) : null}
           <label className="field-checkbox">
             <input
               type="checkbox"
@@ -7807,6 +7917,32 @@ export default function SessionPage() {
         <h2>Session Memory</h2>
         <pre className="debug-console">{sessionMemorySummary}</pre>
       </div>
+
+      {debugMode && showTurnLog ? (
+        <div className="card">
+          <h2>Session Turn Log</h2>
+          <div className="debug-console">
+            {sessionTurnLog.length === 0 ? <p className="muted">No turn log yet.</p> : null}
+            {sessionTurnLog.map((entry) => (
+              <div key={entry.turnId} className="debug-line">
+                <p>turn_id: {entry.turnId}</p>
+                <p>user_message_id: {entry.sourceUserMessageId}</p>
+                <p>created_at: {new Date(entry.createdAt).toLocaleTimeString()}</p>
+                <p>conversation_mode: {entry.conversationMode ?? "none"}</p>
+                <p>user_text: {entry.userText || "none"}</p>
+                <p>raven_output: {entry.ravenOutputText || "none yet"}</p>
+                <p>assistant_render_count: {entry.assistantRenderAppendEvents}</p>
+                <p>append_runs: {entry.appendRavenOutputRunsForTurn}</p>
+                <p>
+                  recovery_render_fired:{" "}
+                  {entry.recoverSkippedAssistantRenderFired ? "yes" : "no"}
+                </p>
+                <p>visible_strings_shown: {entry.visibleAssistantStringsShownForTurn}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {debugMode ? (
         <div className="card">

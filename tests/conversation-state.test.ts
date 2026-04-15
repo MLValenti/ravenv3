@@ -144,6 +144,77 @@ test("conversation state keeps stable relational threads for get-to-know and ser
   assert.equal(state.active_thread, "what you can do for me");
 });
 
+test("conversation state keeps a relational directive request on the service thread and does not fulfill it early", () => {
+  let state = createConversationStateSnapshot("conversation-state-service-directive");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "How can I serve you better?",
+    ravenIntent: "ask",
+    nowMs: 1,
+  });
+  state = noteConversationUserTurn(state, {
+    text: "I want you to tell me what to do",
+    userIntent: "user_answer",
+    routeAct: "user_answer",
+    nowMs: 2,
+  });
+
+  assert.equal(state.current_mode, "relational_chat");
+  assert.equal(state.active_thread, "what you can do for me");
+  assert.match(state.pending_user_request, /tell me what to do/i);
+  assert.equal(state.request_fulfilled, false);
+
+  state = noteConversationAssistantTurn(state, {
+    text: "Yes. Keep going. Stay with the concrete part of serve, not the wording around it.",
+    ravenIntent: "respond",
+    nowMs: 3,
+  });
+
+  assert.equal(state.request_fulfilled, false);
+  assert.equal(state.last_satisfied_request, "none");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "Good. Start with this: give me one clean yes, then hold still and wait for the next instruction.",
+    ravenIntent: "respond",
+    nowMs: 4,
+  });
+
+  assert.equal(state.request_fulfilled, true);
+  assert.match(state.last_satisfied_request, /tell me what to do/i);
+});
+
+test("conversation state does not route practical tell-me-what-to-do requests into the relational service thread", () => {
+  let state = createConversationStateSnapshot("conversation-state-practical-directive-near-miss");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "How can I help?",
+    ravenIntent: "ask",
+    nowMs: 1,
+  });
+  state = noteConversationUserTurn(state, {
+    text: "tell me what to do about my broken sink",
+    userIntent: "user_answer",
+    routeAct: "user_answer",
+    nowMs: 2,
+  });
+
+  assert.equal(state.current_mode, "normal_chat");
+  assert.notEqual(state.active_thread, "what you can do for me");
+  assert.equal(state.request_fulfilled, false);
+  assert.doesNotMatch(state.pending_user_request, /^none$/i);
+
+  state = noteConversationAssistantTurn(state, {
+    text: "First check whether the shutoff valve under the sink is open and whether the trap is dripping before you pull anything apart.",
+    ravenIntent: "respond",
+    nowMs: 3,
+  });
+
+  assert.equal(state.current_mode, "normal_chat");
+  assert.notEqual(state.active_thread, "what you can do for me");
+  assert.equal(state.request_fulfilled, true);
+  assert.doesNotMatch(state.last_satisfied_request, /what you can do for me/i);
+});
+
 test("conversation state keeps active thread and modification request until it is fulfilled", () => {
   let state = createConversationStateSnapshot("conversation-state-modification");
 

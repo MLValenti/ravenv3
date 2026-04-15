@@ -268,6 +268,58 @@ function inferTone(text: string): string {
   return "steady";
 }
 
+function isRelationalDirectiveRequestAnswer(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (
+    /\b(?:about|for|with|on)\b/.test(normalized) ||
+    /\b(?:broken|sink|toilet|drain|leak|job|project|plan|schedule|task|homework)\b/.test(normalized)
+  ) {
+    return false;
+  }
+  return /^(?:i want you to |i want you to just |just )?(?:tell me what to do|tell me exactly what to do|give me an instruction|give me instructions|give me a directive|give me an order|command me)$/i.test(
+    normalized,
+  );
+}
+
+function isRelationalServiceQuestionContext(text: string | null | undefined): boolean {
+  const normalized = normalize(text ?? "").toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (!isAssistantServiceQuestion(normalized)) {
+    return false;
+  }
+  return (
+    /\bserve you better\b/.test(normalized) ||
+    /\bwhat can i do for you\b/.test(normalized) ||
+    /\bwhat do you want me to do(?: for you)?\b/.test(normalized) ||
+    /\bwhat do you want from me\b/.test(normalized) ||
+    /\bhow can i be useful to you\b/.test(normalized) ||
+    /\bwhat would make me useful to you\b/.test(normalized) ||
+    /\bbetter (?:sub|submissive) to you\b/.test(normalized)
+  );
+}
+
+function looksLikeDirectiveFulfillment(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  if (!normalized || /\?/.test(normalized)) {
+    return false;
+  }
+  if (
+    /\b(how can i serve you|what can i do for you|what do you want from me|ask me directly|tell me why you'?re here|what do you actually want)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return /^(?:good\.\s*)?(?:then\s+)?(?:do this|start with this|start by|start with|first|give me one clean yes|answer with one clean yes|hold still|keep still|kneel|stand|sit|take|go|put|lock|wait)\b/.test(
+    normalized,
+  );
+}
+
 function inferUserResponseEnergy(text: string): UserResponseEnergy {
   const normalized = text.toLowerCase();
   if (/\b(whatever|fine|sure|i guess|if you say so)\b/.test(normalized)) {
@@ -716,6 +768,7 @@ function deriveActiveThread(input: {
   text: string;
   state?: ConversationStateSnapshot | null;
   action: RequestedTurnAction;
+  previousAssistantMessage?: string | null;
 }): string {
   if (isChatLikeSmalltalk(input.text)) {
     return "open_chat";
@@ -742,6 +795,14 @@ function deriveActiveThread(input: {
   const existingThread = resolveExistingThread(input.state);
   if (existingThread !== "none") {
     return existingThread;
+  }
+  if (
+    input.action === "acknowledge_then_act" &&
+    input.previousAssistantMessage &&
+    isRelationalServiceQuestionContext(input.previousAssistantMessage) &&
+    isRelationalDirectiveRequestAnswer(input.text)
+  ) {
+    return "what you can do for me";
   }
   return requestedTopic ?? "none";
 }
@@ -840,9 +901,14 @@ function isRequestFulfilled(input: {
     pendingModification === "none" ||
     pendingModification.length < 4 ||
     extractEntities(pendingModification).some((token) => response.includes(token));
+  const isDirectiveServiceRequest =
+    activeThread === "what you can do for me" && isRelationalDirectiveRequestAnswer(pendingRequest);
 
   if (input.action === "clarify_missing_blocker") {
     return /\?/.test(response);
+  }
+  if (isDirectiveServiceRequest) {
+    return looksLikeDirectiveFulfillment(input.text);
   }
   if (input.outputShape === "thread_summary") {
     return /\b(so far|current thread|already set|still open)\b/i.test(response);
@@ -884,6 +950,7 @@ export function resolveTurnRequestState(input: {
     text: input.text,
     state: input.state,
     action,
+    previousAssistantMessage: input.previousAssistantMessage,
   });
   const pendingUserRequest = derivePendingUserRequest(input.text, action);
   const pendingModification =
@@ -1228,9 +1295,18 @@ function inferMode(input: {
   routeAct?: string | null;
   text: string;
   previousMode: ConversationMode;
+  previousAssistantMessage?: string | null;
 }): ConversationMode {
   const normalized = input.text.toLowerCase();
   if (isAssistantSelfQuestion(normalized) || isMutualGettingToKnowRequest(normalized)) {
+    return "relational_chat";
+  }
+  if (
+    input.routeAct === "user_answer" &&
+    input.previousAssistantMessage &&
+    isRelationalServiceQuestionContext(input.previousAssistantMessage) &&
+    isRelationalDirectiveRequestAnswer(normalized)
+  ) {
     return "relational_chat";
   }
   if (isProfileBuildingRequest(normalized)) {
@@ -1433,6 +1509,7 @@ export function noteConversationUserTurn(
     routeAct: input.routeAct ?? null,
     text,
     previousMode: state.current_mode,
+    previousAssistantMessage,
   });
   const activeTopic = extractTopic(text) ?? (currentMode === "profile_building" ? "profile" : state.active_topic);
   const userGoal = extractGoal(text) ?? state.user_goal;
