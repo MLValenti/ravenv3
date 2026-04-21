@@ -36,3 +36,50 @@ test("conversation eval scores continuity higher when state and replies stay gro
   assert.ok(report.humanlike_flow >= 0.6);
   assert.ok(report.repetition_rate <= 0.1);
 });
+
+test("conversation eval recognizes clean short-follow-up continuity without stale open loops", () => {
+  const state = {
+    ...createConversationStateSnapshot("conversation-eval-short-follow-up"),
+    current_mode: "question_answering" as const,
+    pending_user_request: "go on",
+    important_entities: ["work"],
+    last_satisfied_request: "work",
+    last_assistant_claim: "Then pick one of those three and I will keep the thread on it",
+    recent_window: [
+      { role: "user" as const, content: "work" },
+      { role: "assistant" as const, content: "Good. Is it workload, a person, or a decision you keep circling?" },
+      { role: "user" as const, content: "what do you mean?" },
+      {
+        role: "assistant" as const,
+        content: "I mean the exact part of work that keeps dragging your attention: the amount, the person, or the choice.",
+      },
+      { role: "user" as const, content: "go on" },
+      {
+        role: "assistant" as const,
+        content: "Then pick one of those three and I will keep the thread on it.",
+      },
+    ],
+  };
+
+  const report = evaluateConversationTranscript({
+    turns: [
+      {
+        user: "work",
+        raven: "Good. Is it workload, a person, or a decision you keep circling?",
+      },
+      {
+        user: "what do you mean?",
+        raven: "I mean the exact part of work that keeps dragging your attention: the amount, the person, or the choice.",
+      },
+      {
+        user: "go on",
+        raven: "Then pick one of those three and I will keep the thread on it.",
+      },
+    ],
+    state,
+  });
+
+  assert.ok(report.continuity >= 0.8);
+  assert.ok(report.coherence >= 0.68);
+  assert.ok(report.humanlike_flow >= 0.68);
+});

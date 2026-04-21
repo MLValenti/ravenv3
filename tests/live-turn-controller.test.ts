@@ -313,13 +313,12 @@ test("live turn controller bypasses the model for an explicit chat-switch during
   const result = await maybeHandleSessionReplayDeterministicBypass(input);
   const text = await result.response?.text();
 
-  assert.ok(result.response);
+  assert.equal(result.response, null);
   assert.equal(
     result.sessionReplayDebugContext?.deterministicBypassReason,
-    "high_confidence_open_conversation_candidate",
+    "open_conversation_prefers_model",
   );
-  assert.match(text ?? "", /talk to me normally|just chat|for a minute/i);
-  assert.doesNotMatch(text ?? "", /how long should i make it run|what kind of task|reply done/i);
+  assert.equal(text, undefined);
 });
 
 test("live turn controller bypasses the model for an assistant-self question after task negotiation releases", async () => {
@@ -347,11 +346,10 @@ test("live turn controller bypasses the model for an assistant-self question aft
   const result = await maybeHandleSessionReplayDeterministicBypass(input);
   const text = await result.response?.text();
 
-  assert.ok(result.response);
+  assert.equal(result.response, null);
   assert.equal(
     result.sessionReplayDebugContext?.deterministicBypassReason,
-    "high_confidence_open_conversation_candidate",
+    "open_conversation_prefers_model",
   );
-  assert.match(text ?? "", /what keeps my attention|i like|structure|limits|real/i);
-  assert.doesNotMatch(text ?? "", /fine\\. say what you want|what kind of task|how long should i make it run/i);
+  assert.equal(text, undefined);
 });

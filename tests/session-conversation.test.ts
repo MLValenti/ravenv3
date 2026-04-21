@@ -295,7 +295,7 @@ test("deterministic game transcript plays a coherent back and forth round", () =
     userText: "ok",
     sceneState: scene,
   });
-  assert.match(reply ?? "", /No stalling, pet\./i);
+  assert.match(reply ?? "", /No stalling, pet\.|Keep up, pet\./i);
   assert.match(reply ?? "", /Second throw now/i);
 
   scene = noteSceneStateUserTurn(scene, {

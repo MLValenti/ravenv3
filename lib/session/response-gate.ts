@@ -15,6 +15,7 @@ import {
 import { isCoherentRelationalQuestionAnswer } from "../chat/relational-answer-alignment.ts";
 import { classifyCoreConversationMove } from "../chat/core-turn-move.ts";
 import {
+  isAssistantGeneralPreferenceQuestion,
   isAssistantSelfQuestion,
   isAssistantServiceQuestion,
   isChatSwitchRequest,
@@ -39,6 +40,11 @@ import {
 import { isTurnPlanSatisfied, type TurnPlan } from "../chat/turn-plan.ts";
 import { createResponseGateCandidateBuilder } from "./response-gate-candidates.ts";
 import { buildSceneScaffoldReply } from "./scene-scaffolds.ts";
+import {
+  isExplicitBoundaryAnswer,
+  questionSatisfiedMeaningfully,
+} from "../chat/question-satisfaction.ts";
+import { isHardStructuredScene } from "./conversation-runtime.ts";
 
 export type ResponseGateInput = {
   text: string;
@@ -201,6 +207,37 @@ function splitSentences(text: string): string[] {
     return [];
   }
   return matches.map((item) => item.trim()).filter((item) => item.length > 0);
+}
+
+function isLegitimateClarifyingQuestion(userText: string, answerText: string): boolean {
+  const normalizedAnswer = normalize(answerText);
+  if (!/\?/.test(normalizedAnswer)) {
+    return false;
+  }
+  if (
+    /\b(do you mean|which part|what kind|in what sense|are you asking about|when you say)\b/i.test(
+      normalizedAnswer,
+    )
+  ) {
+    return true;
+  }
+  if (
+    isAssistantGeneralPreferenceQuestion(userText) &&
+    /\b(people|conversation|dynamics?|kinks?|preferences?|style)\b/i.test(normalizedAnswer)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function isDirectQuestionResolved(input: ResponseGateInput, answerText: string): boolean {
+  if (questionSatisfiedMeaningfully(input.userText, answerText)) {
+    return true;
+  }
+  if (isExplicitBoundaryAnswer(answerText)) {
+    return true;
+  }
+  return isLegitimateClarifyingQuestion(input.userText, answerText);
 }
 
 function normalizeForDuplicateCompare(text: string): string {
@@ -1717,6 +1754,42 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       sourcePath,
     });
   };
+  const finalizeCurrentResult = (): ResponseGateResult => {
+    const finalOutput = normalize(text);
+    const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
+    if (forced && replacementChain.length === 0) {
+      replacementChain.push({
+        oldText: normalize(rawModelOutput),
+        newText: finalOutput,
+        reason,
+        sourcePath: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
+      });
+    }
+    appendResponseGateTrace({
+      turnId: null,
+      scenarioLabel: null,
+      rawModelOutput: normalize(rawModelOutput),
+      userText: normalize(input.userText),
+      dialogueAct: input.dialogueAct ?? null,
+      topicType: input.sceneState.topic_type,
+      interactionMode: input.sceneState.interaction_mode,
+      finalOutput,
+      finalMatchesRaw,
+      replaced: !finalMatchesRaw,
+      replacementReason: reason,
+      winningSourceFamily: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
+      preservedCurrentAnswerAfterBlockedFallback,
+      rawAlreadyBad: isKnownBadFamilyText(rawModelOutput),
+      replacementIntroducedBadOutput:
+        !isKnownBadFamilyText(rawModelOutput) && isKnownBadFamilyText(finalOutput),
+      replacementChain,
+    });
+    return {
+      text: finalOutput,
+      forced,
+      reason,
+    };
+  };
   const continuityTopic = resolveContinuityTopic(input);
   const conversationMove = classifyCoreConversationMove({
     userText: input.userText,
@@ -1726,6 +1799,15 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   const activeTaskThread = isActiveTaskThread(input);
   const enforceTurnPlan = shouldEnforceTurnPlan(input);
   const explicitActivityDelegation = isExplicitActivityDelegation(input.userText);
+  const assistantSelfDisclosureTurn =
+    isAssistantSelfQuestion(input.userText) && !isAssistantServiceQuestion(input.userText);
+  const hardStructuredScene = isHardStructuredScene({
+    topic_type: input.sceneState.topic_type,
+    topic_locked: input.sceneState.topic_locked,
+    interaction_mode: input.sceneState.interaction_mode,
+    task_hard_lock_active: input.sceneState.task_hard_lock_active,
+    task_paused: input.sceneState.task_paused,
+  });
   const candidates = createResponseGateCandidateBuilder({
     gateInput: input,
     continuityTopic,
@@ -1772,6 +1854,21 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
           null,
       })
     : null;
+  const openConversationTurn =
+    !hardStructuredScene &&
+    !activeTaskThread &&
+    !isGameStartTurn &&
+    !enforceTurnPlan &&
+    input.sceneState.topic_type !== "game_setup" &&
+    input.sceneState.topic_type !== "game_execution" &&
+    input.sceneState.topic_type !== "reward_negotiation" &&
+    input.sceneState.topic_type !== "reward_window" &&
+    input.dialogueAct !== "task_request" &&
+    input.dialogueAct !== "duration_request" &&
+    input.dialogueAct !== "propose_activity" &&
+    input.dialogueAct !== "answer_activity_choice" &&
+    input.sceneState.interaction_mode === "relational_chat" &&
+    assistantSelfDisclosureTurn;
 
   if (!text || containsBadInternalPhrase(text) || containsIdentityLeak(text)) {
     text = candidates.buildFallback();
@@ -1799,6 +1896,102 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     text = candidates.buildNoVisualClaimFallback();
     forced = true;
     reason = "visual_claim_blocked_by_trust";
+  }
+
+  if (!forced && openConversationTurn) {
+    if (
+      repairResolution &&
+      repairResolution.detected &&
+      !isRepairReplyGrounded(input, text, repairResolution)
+    ) {
+      text =
+        repairResolution.reply ??
+        buildShortClarificationReply({
+          userText: input.userText,
+          interactionMode: input.sceneState.interaction_mode,
+          topicType: input.sceneState.topic_type,
+          lastAssistantText: input.lastAssistantText,
+          lastUserText:
+            input.sessionMemory?.last_user_answer?.value ??
+            input.sessionMemory?.last_user_question?.value ??
+            null,
+          lastUserAnswer: input.sessionMemory?.last_user_answer?.value ?? null,
+          currentTopic: continuityTopic,
+        });
+      forced = true;
+      reason = "repair_resolution_misaligned";
+    }
+
+    if (!forced && isShortClarificationTurn(input.userText) && containsWeakClarificationAnchor(text)) {
+      text = buildShortClarificationReply({
+        userText: input.userText,
+        interactionMode: input.sceneState.interaction_mode,
+        topicType: input.sceneState.topic_type,
+        lastAssistantText: input.lastAssistantText,
+        lastUserText:
+          input.sessionMemory?.last_user_answer?.value ??
+          input.sessionMemory?.last_user_question?.value ??
+          null,
+        lastUserAnswer: input.sessionMemory?.last_user_answer?.value ?? null,
+        currentTopic: continuityTopic,
+      });
+      forced = true;
+      reason = "weak_clarification_anchor";
+    }
+
+    const directQuestionTurn =
+      input.dialogueAct === "user_question" ||
+      isAssistantSelfQuestion(input.userText) ||
+      isMutualGettingToKnowRequest(input.userText);
+    if (!forced && containsStockConversationFallback(text)) {
+      text = candidates.buildOpenConversationFallback();
+      forced = true;
+      reason = "generic_fallback_on_valid_turn";
+    }
+
+    if (
+      !forced &&
+      (containsProceduralConversationTemplate(text) || containsAbstractConversationTemplate(text))
+    ) {
+      text = candidates.buildOpenConversationFallback();
+      forced = true;
+      reason = "procedural_conversation_template";
+    }
+
+    if (!forced && containsThinConversationReply(text)) {
+      text = candidates.buildOpenConversationFallback();
+      forced = true;
+      reason = "thin_conversation_reply";
+    }
+
+    if (!forced && !isDialogueActAligned(input, text)) {
+      const oldText = text;
+      text = input.dialogueAct === "short_follow_up"
+        ? buildShortClarificationReply({
+          userText: input.userText,
+          interactionMode: input.sceneState.interaction_mode,
+          topicType: input.sceneState.topic_type,
+          lastAssistantText: input.lastAssistantText,
+          lastUserText:
+            input.sessionMemory?.last_user_answer?.value ??
+            input.sessionMemory?.last_user_question?.value ??
+            null,
+          lastUserAnswer: input.sessionMemory?.last_user_answer?.value ?? null,
+          currentTopic: continuityTopic,
+        })
+        : candidates.buildOpenConversationFallback();
+      forced = true;
+      reason = "dialogue_act_misaligned";
+      traceDecision(oldText, text, reason, "buildOpenConversationFallback");
+    }
+
+    if (!forced && directQuestionTurn && !isDirectQuestionResolved(input, text)) {
+      text = candidates.buildOpenConversationFallback();
+      forced = true;
+      reason = "direct_question_not_answered";
+    }
+
+    return finalizeCurrentResult();
   }
 
   const planningDriftDetected = !forced && containsGenericPlanningDrift(input, text);
@@ -2382,38 +2575,5 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     traceDecision(oldText, text, reason, "enforceGameStartContract");
   }
 
-  const finalOutput = normalize(text);
-  const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
-  if (forced && replacementChain.length === 0) {
-    replacementChain.push({
-      oldText: normalize(rawModelOutput),
-      newText: finalOutput,
-      reason,
-      sourcePath: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
-    });
-  }
-  appendResponseGateTrace({
-    turnId: null,
-    scenarioLabel: null,
-    rawModelOutput: normalize(rawModelOutput),
-    userText: normalize(input.userText),
-    dialogueAct: input.dialogueAct ?? null,
-    topicType: input.sceneState.topic_type,
-    interactionMode: input.sceneState.interaction_mode,
-    finalOutput,
-    finalMatchesRaw,
-    replaced: !finalMatchesRaw,
-    replacementReason: reason,
-    winningSourceFamily: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
-    preservedCurrentAnswerAfterBlockedFallback,
-    rawAlreadyBad: isKnownBadFamilyText(rawModelOutput),
-    replacementIntroducedBadOutput: !isKnownBadFamilyText(rawModelOutput) && isKnownBadFamilyText(finalOutput),
-    replacementChain,
-  });
-
-  return {
-    text: finalOutput,
-    forced,
-    reason,
-  };
+  return finalizeCurrentResult();
 }

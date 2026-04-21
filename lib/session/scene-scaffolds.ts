@@ -42,6 +42,7 @@ import {
   selectDeterministicTaskTemplate,
 } from "./task-script.ts";
 import {
+  isAssistantGeneralPreferenceQuestion,
   isAssistantServiceQuestion,
   isAssistantPreferenceQuestion,
   isAssistantSelfQuestion,
@@ -75,6 +76,7 @@ import {
 } from "./mode-style.ts";
 import { buildShortClarificationReply } from "./short-follow-up.ts";
 import {
+  buildAssistantSelfDisclosureReply,
   buildAssistantPreferenceReply,
   buildAssistantServiceReply,
   buildPlanningQuestionFallback,
@@ -924,6 +926,9 @@ export function buildRelationalChatReply(
   }
   if (isAssistantPreferenceQuestion(normalized)) {
     return buildAssistantPreferenceReply(userText);
+  }
+  if (isAssistantGeneralPreferenceQuestion(normalized)) {
+    return buildAssistantSelfDisclosureReply(userText);
   }
   if (/\b(favorite thing to talk about|enjoy talking about|kinds of things do you like talking about)\b/i.test(normalized)) {
     return "Patterns, pressure, ambition, desire, motive, and the things people usually dodge when they should say them cleanly. I like talk with some nerve in it. What do you naturally lean toward?";

@@ -5,21 +5,13 @@ import {
   isChatSwitchRequest,
   isMutualGettingToKnowRequest,
 } from "./interaction-mode.ts";
-
-const DETERMINISTIC_TOPIC_TYPES = new Set<SceneTopicType>([
-  "game_setup",
-  "game_execution",
-  "reward_window",
-  "reward_negotiation",
-  "task_negotiation",
-  "task_execution",
-  "task_terms_negotiation",
-  "duration_negotiation",
-  "verification_in_progress",
-]);
+import {
+  isHardStructuredScene,
+  isStructuredSceneTopic,
+} from "./conversation-runtime.ts";
 
 export function isDeterministicSceneTopic(topicType: SceneTopicType): boolean {
-  return DETERMINISTIC_TOPIC_TYPES.has(topicType);
+  return isStructuredSceneTopic(topicType);
 }
 
 function normalizeTurnText(text: string | null | undefined): string {
@@ -81,9 +73,13 @@ export function explainBypassModelForSceneTurn(input: {
   }
 
   const isExplicitDeterministicMode =
-    interactionMode === "task_planning" ||
-    interactionMode === "locked_task_execution" ||
-    interactionMode === "game";
+    isHardStructuredScene({
+      topic_type: input.sceneState.topic_type,
+      topic_locked: input.sceneState.topic_locked,
+      interaction_mode: interactionMode,
+      task_hard_lock_active: input.sceneState.task_hard_lock_active,
+      task_paused: false,
+    });
   const isHighConfidenceOpenConversationTurn =
     latestUserText.length > 0 &&
     (
@@ -95,8 +91,8 @@ export function explainBypassModelForSceneTurn(input: {
   if (input.hasDeterministicCandidate) {
     if (isHighConfidenceOpenConversationTurn) {
       return {
-        bypass: true,
-        reason: "high_confidence_open_conversation_candidate",
+        bypass: false,
+        reason: "open_conversation_prefers_model",
       };
     }
     return {

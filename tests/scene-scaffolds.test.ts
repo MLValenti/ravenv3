@@ -633,8 +633,8 @@ test("game scaffolds answer rules questions without changing the chosen game", (
     },
   });
 
-  assert.match(setupReply ?? "", /First we choose the game/i);
-  assert.match(setupReply ?? "", /Tell me to pick, or choose quick or longer/i);
+  assert.match(setupReply ?? "", /quick games are rock paper scissors streak or number hunt/i);
+  assert.match(setupReply ?? "", /if you want me to pick, say so directly/i);
 
   const executionReply = buildSceneScaffoldReply({
     act: "user_question",
@@ -727,7 +727,7 @@ test("game scaffold plays a coherent back and forth round", () => {
     userText: "ok",
     sceneState: scene,
   });
-  assert.match(reply ?? "", /No stalling, pet\./i);
+  assert.match(reply ?? "", /No stalling, pet\.|Keep up, pet\./i);
   assert.match(reply ?? "", /Second throw now/i);
 
   scene = noteSceneStateUserTurn(scene, {

@@ -6,6 +6,7 @@ import {
   formatRollingSummaryText,
   noteConversationAssistantTurn,
   noteConversationUserTurn,
+  normalizeConversationStateSnapshot,
 } from "../lib/chat/conversation-state.ts";
 
 test("conversation state tracks topic, goal, facts, loops, and tone across turns", () => {
@@ -250,6 +251,176 @@ test("conversation state keeps active thread and modification request until it i
   assert.equal(state.request_fulfilled, true);
   assert.equal(state.pending_modification, "none");
   assert.match(state.last_satisfied_request, /add journaling before bed/i);
+});
+
+test("conversation state does not fulfill a favorite-color question with evasive anchoring", () => {
+  let state = createConversationStateSnapshot("conversation-state-favorite-color-evasive");
+
+  state = noteConversationUserTurn(state, {
+    text: "what is your favorite color?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+
+  assert.equal(state.current_mode, "relational_chat");
+  assert.equal(state.pending_user_request, "what is your favorite color?");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "If you mean your favorite color, I care less about the label and more about how it actually shows up between people.",
+    ravenIntent: "respond",
+    nowMs: 2,
+  });
+
+  assert.equal(state.request_fulfilled, false);
+  assert.equal(state.pending_user_request, "what is your favorite color?");
+  assert.ok(state.unanswered_questions.some((question) => /favorite color/i.test(question)));
+  assert.ok(state.open_loops.some((loop) => /favorite color/i.test(loop)));
+});
+
+test("conversation state clears pending request after a concrete favorite-color answer", () => {
+  let state = createConversationStateSnapshot("conversation-state-favorite-color-fulfilled");
+
+  state = noteConversationUserTurn(state, {
+    text: "what is your favorite color?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+
+  state = noteConversationAssistantTurn(state, {
+    text: "Black. Clean, severe, and impossible to soften by accident.",
+    ravenIntent: "respond",
+    nowMs: 2,
+  });
+
+  assert.equal(state.request_fulfilled, true);
+  assert.equal(state.pending_user_request, "none");
+  assert.equal(state.pending_modification, "none");
+  assert.match(state.last_satisfied_request, /favorite color/i);
+  assert.equal(state.unanswered_questions.length, 0);
+  assert.equal(state.open_loops.some((loop) => /favorite color/i.test(loop)), false);
+});
+
+test("conversation state replaces stale unresolved questions when the user switches topics", () => {
+  let state = createConversationStateSnapshot("conversation-state-topic-switch");
+
+  state = noteConversationUserTurn(state, {
+    text: "what are your kinks?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+
+  state = noteConversationAssistantTurn(state, {
+    text: "I like control with purpose, restraint that changes the room, and obedience that still has some nerve in it.",
+    ravenIntent: "respond",
+    nowMs: 2,
+  });
+
+  assert.equal(state.request_fulfilled, true);
+  assert.equal(state.pending_user_request, "none");
+
+  state = noteConversationUserTurn(state, {
+    text: "what is your favorite color?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 3,
+  });
+
+  assert.equal(state.pending_user_request, "what is your favorite color?");
+  assert.equal(state.unanswered_questions.some((question) => /kinks/i.test(question)), false);
+  assert.equal(state.open_loops.some((loop) => /kinks/i.test(loop)), false);
+});
+
+test("conversation state expires repair context after the assistant answers a clarification", () => {
+  let state = createConversationStateSnapshot("conversation-state-repair-expiry");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "You said none, but that answer usually hides something.",
+    ravenIntent: "respond",
+    nowMs: 1,
+  });
+  state = noteConversationUserTurn(state, {
+    text: "what do you mean?",
+    userIntent: "user_short_follow_up",
+    routeAct: "short_follow_up",
+    nowMs: 2,
+  });
+
+  assert.match(state.repair_context, /source=previous_assistant/i);
+
+  state = noteConversationAssistantTurn(state, {
+    text: "I mean your last answer sounded like a cover instead of the real point.",
+    ravenIntent: "respond",
+    nowMs: 3,
+  });
+
+  assert.equal(state.repair_context, "none");
+
+  state = noteConversationUserTurn(state, {
+    text: "what is your favorite color?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 4,
+  });
+
+  assert.equal(state.repair_context, "none");
+});
+
+test("conversation state does not turn a tiny repair follow-up into a pending request or stale loop", () => {
+  let state = createConversationStateSnapshot("conversation-state-tiny-repair");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "You keep circling the edge of it instead of saying it cleanly.",
+    ravenIntent: "respond",
+    nowMs: 1,
+  });
+  state = noteConversationUserTurn(state, {
+    text: "what?",
+    userIntent: "user_short_follow_up",
+    routeAct: "short_follow_up",
+    nowMs: 2,
+  });
+
+  assert.equal(state.pending_user_request, "none");
+  assert.equal(state.unanswered_questions.length, 0);
+  assert.equal(state.open_loops.length, 0);
+  assert.match(state.repair_context, /source=previous_assistant/i);
+});
+
+test("conversation state ignores vague assistant task phrasing as a durable commitment", () => {
+  let state = createConversationStateSnapshot("conversation-state-vague-task-phrasing");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "If you want a task, we can plan one around whatever direction matters tonight. There is a task you want to tackle in this new direction, but we do not need to lock it in yet.",
+    ravenIntent: "respond",
+    nowMs: 1,
+  });
+
+  assert.equal(state.recent_commitments_or_tasks.length, 0);
+  assert.equal(state.open_loops.length, 0);
+  assert.equal(state.last_satisfied_request, "none");
+});
+
+test("conversation state normalization enforces fulfilled-versus-pending invariants", () => {
+  const normalized = normalizeConversationStateSnapshot(
+    {
+      session_id: "conversation-state-normalize-invariants",
+      pending_user_request: "what is your favorite color?",
+      last_satisfied_request: "what is your favorite color?",
+      request_fulfilled: true,
+      unanswered_questions: ["what is your favorite color?"],
+      open_loops: ["what is your favorite color?"],
+      recent_window: [{ role: "assistant", content: "Black." }],
+      last_assistant_claim: "Black.",
+    },
+    "conversation-state-normalize-invariants",
+  );
+
+  assert.equal(normalized.pending_user_request, "none");
+  assert.match(normalized.last_satisfied_request, /favorite color/i);
+  assert.equal(normalized.open_loops.some((loop) => /favorite color/i.test(loop)), false);
 });
 
 test("structured rolling summary preserves topic history, commitments, and unresolved items across long conversations", () => {

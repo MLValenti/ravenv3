@@ -190,6 +190,19 @@ test("preference question fallback answers kink preferences directly", () => {
   assert.doesNotMatch(text, /do not have personal preferences|protocols and compliances/i);
 });
 
+test("favorite-color assistant self question gets a concrete direct answer", () => {
+  const text = buildHumanQuestionFallback("what is your favorite color?", "dominant");
+
+  assert.match(text, /\bblack\b|favorite color is/i);
+  assert.doesNotMatch(text, /care less about the label|shows up between people/i);
+});
+
+test("malformed kink self question still gets a direct preference answer", () => {
+  const text = buildHumanQuestionFallback("what are you kinks?", "dominant");
+
+  assert.match(text, /control with purpose|power exchange|restraint|obedience|tension/i);
+});
+
 test("broad assistant preference question answers directly without generic q and a fallback", () => {
   const text = buildHumanQuestionFallback("do you like bondage", "dominant");
 

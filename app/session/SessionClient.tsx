@@ -43,6 +43,7 @@ import {
   normalizeConversationStateSnapshot,
   type ConversationStateSnapshot,
 } from "@/lib/chat/conversation-state";
+import { questionSatisfiedMeaningfully } from "@/lib/chat/question-satisfaction";
 import { applyPlannerConstraints } from "@/lib/session/plan-constraints";
 import { PacingController, type Pace } from "@/lib/session/pacing";
 import { shouldStopForTrackingLost } from "@/lib/session/tracking-watchdog";
@@ -212,6 +213,7 @@ import {
   noteSceneVerificationResult,
   type SceneState,
 } from "@/lib/session/scene-state";
+import { reconcileSceneStateWithConversation } from "@/lib/session/conversation-runtime";
 import { shouldBypassModelForSceneTurn } from "@/lib/session/deterministic-scene-routing";
 import { applyResponseGate } from "@/lib/session/response-gate";
 import {
@@ -1492,19 +1494,11 @@ function isQuestionResponseAligned(userText: string, responseText: string): bool
   }
 
   if (isAssistantServiceQuestion(userText)) {
-    return (
-      /\b(clarity|honesty|follow[- ]through|steady|consisten|useful|usefulness|prove|precision|start with)\b/i.test(
-        responseNormalized,
-      ) || hasDialogueKeywordOverlap(userText, responseText)
-    );
+    return questionSatisfiedMeaningfully(userText, responseText);
   }
 
   if (isAssistantSelfQuestion(userText)) {
-    return (
-      /\b(i like|i enjoy|i pay attention|what matters|what pulls you in|ask me|question on me)\b/i.test(
-        responseNormalized,
-      ) || hasDialogueKeywordOverlap(userText, responseText)
-    );
+    return questionSatisfiedMeaningfully(userText, responseText);
   }
 
   return (
@@ -2059,6 +2053,12 @@ export default function SessionPage() {
   function syncSceneState(nextState: SceneState) {
     sceneStateRef.current = nextState;
     persistSessionResumeSnapshot(nextState, deterministicTaskStartedAtMsRef.current);
+  }
+
+  function reconcileSceneWithConversation(nextConversationState: ConversationStateSnapshot) {
+    syncSceneState(
+      reconcileSceneStateWithConversation(sceneStateRef.current, nextConversationState),
+    );
   }
 
   function syncDeterministicTaskStartedAt(nextStartedAtMs: number | null) {
@@ -3429,13 +3429,12 @@ export default function SessionPage() {
       );
     }
     if (speechText) {
-      syncConversationState(
-        noteConversationAssistantTurn(conversationStateRef.current, {
-          text: speechText,
-          ravenIntent: lastDialogueActRef.current ?? "respond",
-          nowMs: now(),
-        }),
-      );
+      const nextConversationState = noteConversationAssistantTurn(conversationStateRef.current, {
+        text: speechText,
+        ravenIntent: lastDialogueActRef.current ?? "respond",
+        nowMs: now(),
+      });
+      syncConversationState(nextConversationState);
       const previousSceneState = sceneStateRef.current;
       const resolvesTopic =
         sessionTopicRef.current?.topic_type === "game_selection" &&
@@ -3451,6 +3450,7 @@ export default function SessionPage() {
           topicResolved: resolvesTopic,
         }),
       );
+      reconcileSceneWithConversation(nextConversationState);
       const assistantConversationMode = sceneStateRef.current.interaction_mode;
       if (sessionMemoryRef.current.conversation_mode?.value !== assistantConversationMode) {
         syncSessionMemory(
@@ -4129,14 +4129,14 @@ export default function SessionPage() {
       user_intent: intent,
       at_ms: now(),
     });
-    syncConversationState(
-      noteConversationUserTurn(conversationStateRef.current, {
-        text,
-        userIntent: intent,
-        routeAct: routed.act,
-        nowMs: now(),
-      }),
-    );
+    const nextConversationState = noteConversationUserTurn(conversationStateRef.current, {
+      text,
+      userIntent: intent,
+      routeAct: routed.act,
+      nowMs: now(),
+    });
+    syncConversationState(nextConversationState);
+    reconcileSceneWithConversation(nextConversationState);
     if (debugMode) {
       console.debug("dialogue.router", {
         session_id: turnGateRef.current.sessionId,
@@ -4974,10 +4974,18 @@ export default function SessionPage() {
         pendingTurn.text,
       ),
     });
-    const projectedSceneState = noteSceneStateAssistantTurn(sceneStateRef.current, {
+    const projectedConversationState = noteConversationAssistantTurn(conversationStateRef.current, {
       text: dialogueAlignedText,
-      commitment: dialogueAlignedText,
+      ravenIntent: pendingTurn.dialogueAct,
+      nowMs: timestamp,
     });
+    const projectedSceneState = reconcileSceneStateWithConversation(
+      noteSceneStateAssistantTurn(sceneStateRef.current, {
+        text: dialogueAlignedText,
+        commitment: dialogueAlignedText,
+      }),
+      projectedConversationState,
+    );
     const projectedConversationMode = projectedSceneState.interaction_mode;
     if (nextMemory.conversation_mode?.value !== projectedConversationMode) {
       nextMemory = writeConversationMode(nextMemory, projectedConversationMode, timestamp, 0.96);
@@ -5679,22 +5687,28 @@ export default function SessionPage() {
       /\bi pick\b|\bwe are doing\b|\bhere is the game\b|\bgame is\b/i.test(promptText)
     ) {
       syncSceneState(
-        noteSceneStateAssistantTurn(sceneStateRef.current, {
-          text: promptText,
-          commitment: promptText,
-          topicResolved: true,
-        }),
+        reconcileSceneStateWithConversation(
+          noteSceneStateAssistantTurn(sceneStateRef.current, {
+            text: promptText,
+            commitment: promptText,
+            topicResolved: true,
+          }),
+          conversationStateRef.current,
+        ),
       );
     } else if (
       sceneStateRef.current.topic_type === "task_negotiation" &&
       isTaskAssignmentText(promptText)
     ) {
       syncSceneState(
-        noteSceneStateAssistantTurn(sceneStateRef.current, {
-          text: promptText,
-          commitment: promptText,
-          topicResolved: true,
-        }),
+        reconcileSceneStateWithConversation(
+          noteSceneStateAssistantTurn(sceneStateRef.current, {
+            text: promptText,
+            commitment: promptText,
+            topicResolved: true,
+          }),
+          conversationStateRef.current,
+        ),
       );
     }
 

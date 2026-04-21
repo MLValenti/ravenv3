@@ -167,6 +167,21 @@ test("relational chat keeps conversational turns on the model path", () => {
   assert.equal(bypass, false);
 });
 
+test("assistant self questions prefer the model even if a deterministic candidate exists", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "general_request",
+      topic_locked: false,
+      interaction_mode: "relational_chat",
+    }),
+    dialogueAct: "user_question",
+    hasDeterministicCandidate: true,
+    latestUserText: "what is your favorite color?",
+  });
+
+  assert.equal(bypass, false);
+});
+
 test("non-hard-locked task execution does not bypass the model without a scaffold", () => {
   const bypass = shouldBypassModelForSceneTurn({
     sceneState: sceneStatePatch({

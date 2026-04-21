@@ -12,6 +12,16 @@ function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
+export function normalizeAssistantSelfQuestionText(text: string): string {
+  return normalize(text)
+    .replace(/\bwhat are you kinks\b/g, "what are your kinks")
+    .replace(/\bwhat are you fetishes\b/g, "what are your fetishes")
+    .replace(/\bwhat are you toys\b/g, "what are your toys")
+    .replace(/\bwhat are you preferences\b/g, "what are your preferences")
+    .replace(/\bwhat(?:'s| is) you favorite\b/g, "what is your favorite")
+    .replace(/\bwhat are you favorite\b/g, "what are your favorite");
+}
+
 function cleanPreferenceTopic(value: string | null | undefined): string | null {
   if (!value) {
     return null;
@@ -71,7 +81,7 @@ export function isAssistantTrainingRequest(text: string): boolean {
 }
 
 export function extractAssistantPreferenceTopic(text: string): string | null {
-  const normalized = normalize(text);
+  const normalized = normalizeAssistantSelfQuestionText(text);
   if (!normalized) {
     return null;
   }
@@ -82,6 +92,7 @@ export function extractAssistantPreferenceTopic(text: string): string | null {
     normalized.match(/\bdo you enjoy\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bwhat(?:'s| is) your favorite\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bwhat are your favorite\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhat are (?:your|you)\s+(kinks|fetishes|toys)\b/i)?.[1],
     normalized.match(/\bwhich\s+([^?.!,]{2,80})\s+do you like\b/i)?.[1],
     normalized.match(/\bwhat kind of\s+([^?.!,]{2,80})\s+are you into\b/i)?.[1],
   ];
@@ -96,7 +107,7 @@ export function extractAssistantPreferenceTopic(text: string): string | null {
 }
 
 export function isAssistantPreferenceQuestion(text: string): boolean {
-  const normalized = normalize(text);
+  const normalized = normalizeAssistantSelfQuestionText(text);
   if (!normalized) {
     return false;
   }
@@ -110,15 +121,59 @@ export function isAssistantPreferenceQuestion(text: string): boolean {
   );
 }
 
+export function extractAssistantGeneralPreferenceTopic(text: string): string | null {
+  const normalized = normalizeAssistantSelfQuestionText(text);
+  if (!normalized) {
+    return null;
+  }
+
+  const captures = [
+    normalized.match(/\bwhat(?:'s| is) your favorite\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhat are your favorite\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhat do you like(?:\s+about)?\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhat do you enjoy\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhat are you into(?:\s+about)?\s+([^?.!,]{2,80})/i)?.[1],
+  ];
+
+  for (const capture of captures) {
+    const topic = cleanPreferenceTopic(capture);
+    if (topic) {
+      return topic;
+    }
+  }
+
+  return null;
+}
+
+export function isAssistantGeneralPreferenceQuestion(text: string): boolean {
+  const normalized = normalizeAssistantSelfQuestionText(text);
+  if (!normalized) {
+    return false;
+  }
+  if (isAssistantPreferenceQuestion(normalized)) {
+    return true;
+  }
+  if (extractAssistantGeneralPreferenceTopic(normalized)) {
+    return true;
+  }
+  return (
+    /\bwhat do you like\b/i.test(normalized) ||
+    /\bwhat do you enjoy\b/i.test(normalized) ||
+    /\bwhat are you into\b/i.test(normalized) ||
+    /\btell me about your preferences\b/i.test(normalized) ||
+    /\bwhat are your preferences\b/i.test(normalized)
+  );
+}
+
 export function isAssistantServiceQuestion(text: string): boolean {
-  const normalized = normalize(text);
+  const normalized = normalizeAssistantSelfQuestionText(text);
   if (!normalized) {
     return false;
   }
   if (isAssistantTrainingRequest(normalized)) {
     return true;
   }
-  if (isAssistantPreferenceQuestion(normalized)) {
+  if (isAssistantPreferenceQuestion(normalized) || isAssistantGeneralPreferenceQuestion(normalized)) {
     return false;
   }
   if (ASSISTANT_SERVICE_QUESTION_PATTERNS.some((pattern) => pattern.test(normalized))) {
@@ -185,14 +240,14 @@ export function isMutualGettingToKnowRequest(text: string): boolean {
 }
 
 export function isAssistantSelfQuestion(text: string): boolean {
-  const normalized = normalize(text);
+  const normalized = normalizeAssistantSelfQuestionText(text);
   if (!normalized) {
     return false;
   }
   if (isAssistantServiceQuestion(normalized)) {
     return true;
   }
-  if (isAssistantPreferenceQuestion(normalized)) {
+  if (isAssistantPreferenceQuestion(normalized) || isAssistantGeneralPreferenceQuestion(normalized)) {
     return true;
   }
   return /\b(tell me more about you|what(?:'s| is) your favorite thing to talk about|what do you like|what are you into|what should i know about you|tell me about yourself|what do you enjoy talking about|what kinds of things do you like talking about|what matters to you|what are you like|what kinks do you like|what fetishes do you like|what toys do you like|what kind of kinks are you into|what kind of fetishes are you into|what kind of toys are you into|which kinks do you like|which toys do you like)\b/i.test(

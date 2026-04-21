@@ -3,6 +3,7 @@ import {
   isAssistantServiceQuestion,
   isMutualGettingToKnowRequest,
 } from "../session/interaction-mode.ts";
+import { questionSatisfiedMeaningfully } from "./question-satisfaction.ts";
 
 function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
@@ -51,20 +52,7 @@ export function isCoherentAssistantServiceAnswer(
   if (!isAssistantServiceQuestion(userText) || containsRelationalPromptResidue(responseText)) {
     return false;
   }
-  const normalized = normalize(responseText);
-  const qualityAnswer =
-    /\b(clarity|honesty|follow[- ]through|steady|steadiness|consisten|useful|usefulness|obedience|precision|verbal obedience|trainable)\b/.test(
-      normalized,
-    ) &&
-    /\b(i want|i pay attention|start with|you can|practice|say|do what you promise|hold steady)\b/.test(
-      normalized,
-    );
-  const directExpectationAnswer =
-    /\b(what i want|what i expect|from you|obedience|obeyed|show me|prove it|earn it|do as told)\b/.test(
-      normalized,
-    ) &&
-    /\b(you|your)\b/.test(normalized);
-  return qualityAnswer || directExpectationAnswer;
+  return questionSatisfiedMeaningfully(userText, responseText);
 }
 
 export function isCoherentAssistantSelfAnswer(
@@ -74,10 +62,7 @@ export function isCoherentAssistantSelfAnswer(
   if (!isAssistantSelfQuestion(userText) || containsRelationalPromptResidue(responseText)) {
     return false;
   }
-  const normalized = normalize(responseText);
-  return /\b(i like|i enjoy|i pay attention|what matters|what pulls you in|what keeps my attention|the part that is real|ask me|question on me)\b/.test(
-    normalized,
-  );
+  return questionSatisfiedMeaningfully(userText, responseText);
 }
 
 export function isCoherentRelationalQuestionAnswer(

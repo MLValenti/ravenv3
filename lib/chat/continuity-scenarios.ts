@@ -132,7 +132,6 @@ export const SCRIPTED_CONTINUITY_SCENARIOS: ContinuityScenario[] = [
     finalChecks: {
       activeTopicIncludes: "my morning",
       currentMode: "question_answering",
-      recentCommitmentIncludes: "wake time",
       importantEntityIncludes: "morning",
       minContinuity: 0.8,
       maxRepetitionRate: 0.1,

@@ -2,14 +2,22 @@ import type { DialogueRouteAct } from "../dialogue/router.ts";
 import {
   isAssistantServiceQuestion,
   isAssistantSelfQuestion,
+  isChatSwitchRequest,
   isChatLikeSmalltalk,
   isNormalChatRequest,
   isProfileBuildingRequest,
+  isRelationalOfferStatement,
   isMutualGettingToKnowRequest,
   normalizeInteractionMode,
   type InteractionMode,
 } from "../session/interaction-mode.ts";
 import { detectRepairTurnKind, resolveRepairTurn } from "./repair-turn.ts";
+import {
+  extractHighSignalTokens,
+  isQuestionText,
+  questionSatisfiedMeaningfully,
+  shouldReplaceOpenQuestion,
+} from "./question-satisfaction.ts";
 
 export type ConversationMode = InteractionMode;
 
@@ -244,13 +252,7 @@ function extractFacts(text: string): string[] {
 
 function extractEntities(text: string): string[] {
   const requestedTopic = extractTopic(text);
-  const tokens =
-    normalize(text)
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter((token) => token.length >= 4 && !STOP_WORDS.has(token))
-      .slice(0, 6) ?? [];
+  const tokens = extractHighSignalTokens(text, 6).filter((token) => !STOP_WORDS.has(token));
   return trimList([...(requestedTopic ? [requestedTopic] : []), ...tokens], 8);
 }
 
@@ -845,6 +847,9 @@ function derivePendingUserRequest(text: string, action: RequestedTurnAction): st
   if (action === "clarify_missing_blocker") {
     return "none";
   }
+  if (detectRepairTurnKind(text)) {
+    return "none";
+  }
   return normalize(text) || "none";
 }
 
@@ -927,7 +932,13 @@ function isRequestFulfilled(input: {
     return hasThreadReference && hasModificationReference && !/^\s*(what|which|do)\b/i.test(response);
   }
   if (input.action === "answer_direct_question") {
-    return hasRequestReference || hasThreadReference;
+    if (input.pendingUserRequest !== "none") {
+      return questionSatisfiedMeaningfully(input.pendingUserRequest, input.text);
+    }
+    if (input.activeThread !== "none") {
+      return questionSatisfiedMeaningfully(input.activeThread, input.text);
+    }
+    return false;
   }
   return hasThreadReference || hasRequestReference;
 }
@@ -1062,9 +1073,7 @@ export function normalizeRelationalContinuityState(value: unknown): RelationalCo
 }
 
 function isQuestion(text: string): boolean {
-  return (
-    /\?/.test(text) || /^(what|why|how|when|where|who|which|can|could|would|will)\b/i.test(text)
-  );
+  return isQuestionText(text);
 }
 
 function createStructuredRollingSummary(): StructuredRollingSummary {
@@ -1309,6 +1318,12 @@ function inferMode(input: {
   ) {
     return "relational_chat";
   }
+  if (isRelationalOfferStatement(normalized)) {
+    return "relational_chat";
+  }
+  if (isChatSwitchRequest(normalized)) {
+    return "normal_chat";
+  }
   if (isProfileBuildingRequest(normalized)) {
     return "profile_building";
   }
@@ -1317,6 +1332,17 @@ function inferMode(input: {
   }
   if (input.routeAct === "task_request") {
     return "task_planning";
+  }
+  if (
+    input.previousMode === "relational_chat" &&
+    (
+      input.userIntent === "user_question" ||
+      input.userIntent === "user_short_follow_up" ||
+      input.userIntent === "user_answer" ||
+      input.userIntent === "user_ack"
+    )
+  ) {
+    return "relational_chat";
   }
   if (input.userIntent === "user_question" || input.userIntent === "user_short_follow_up") {
     return "question_answering";
@@ -1331,22 +1357,74 @@ function inferMode(input: {
 }
 
 function questionSatisfied(question: string, assistantText: string): boolean {
-  const questionTokens = extractEntities(question);
-  const answer = normalize(assistantText).toLowerCase();
-  if (questionTokens.length === 0) {
-    return answer.length > 0;
+  return questionSatisfiedMeaningfully(question, assistantText);
+}
+
+function applyConversationStateInvariants(
+  state: ConversationStateSnapshot,
+): ConversationStateSnapshot {
+  const next = { ...state };
+  next.unanswered_questions = trimList(next.unanswered_questions, 8);
+  next.recent_commitments_or_tasks = trimList(next.recent_commitments_or_tasks, 8);
+  next.important_entities = trimList(next.important_entities, 8);
+  next.open_loops = trimList(
+    [...next.unanswered_questions, ...next.recent_commitments_or_tasks].filter(Boolean),
+    8,
+  );
+  if (next.request_fulfilled) {
+    const satisfied = next.last_satisfied_request !== "none" ? next.last_satisfied_request : next.pending_user_request;
+    next.last_satisfied_request = satisfied || "none";
+    next.pending_user_request = "none";
+    next.pending_modification = "none";
+    next.unanswered_questions = next.unanswered_questions.filter(
+      (question) => !questionSatisfiedMeaningfully(question, next.last_assistant_claim),
+    );
+    next.open_loops = trimList(
+      [...next.unanswered_questions, ...next.recent_commitments_or_tasks].filter(Boolean),
+      8,
+    );
+  } else if (
+    next.pending_user_request !== "none" &&
+    next.last_satisfied_request !== "none" &&
+    normalize(next.pending_user_request).toLowerCase() === normalize(next.last_satisfied_request).toLowerCase()
+  ) {
+    next.last_satisfied_request = "none";
   }
-  return questionTokens.some((token) => answer.includes(token));
+  const lastUserMessage =
+    [...next.recent_window].reverse().find((entry) => entry.role === "user")?.content ?? "";
+  if (!detectRepairTurnKind(lastUserMessage)) {
+    next.repair_context = "none";
+  }
+  next.rolling_summary = buildRollingSummary(next);
+  return next;
 }
 
 function extractCommitments(text: string): string[] {
-  const matches = [
-    ...text.matchAll(
-      /\b(?:you will|next|start by|start with|we will|i want you to|pick|choose|report|lock in)\b[^.!?]{3,120}/gi,
-    ),
-    ...text.matchAll(/\b(?:task|challenge|checkpoint)\b[^.!?]{6,120}/gi),
-  ];
-  return trimList(matches.map((match) => normalize(match[0])));
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => normalize(sentence))
+    .filter(Boolean);
+  const commitments = sentences.filter((sentence) => {
+    if (sentence.includes("?")) {
+      return false;
+    }
+    if (
+      /\b(task you want to tackle|new direction|if you want a task|if you want a plan|we can plan|we can talk)\b/i.test(
+        sentence,
+      )
+    ) {
+      return false;
+    }
+    return (
+      /\bhere is your task\b/i.test(sentence) ||
+      /\breport back\b/i.test(sentence) ||
+      /\bcheck in once halfway\b/i.test(sentence) ||
+      /^(?:(?:good|next)[,.\s]*)?(?:start by|start with|you will|we will|i want you to|pick|choose|lock in)\b/i.test(
+        sentence,
+      )
+    );
+  });
+  return trimList(commitments);
 }
 
 export function createConversationStateSnapshot(
@@ -1490,8 +1568,7 @@ export function normalizeConversationStateSnapshot(
         ? raw.updated_at
         : Date.now(),
   };
-  normalized.rolling_summary = buildRollingSummary(normalized);
-  return normalized;
+  return applyConversationStateInvariants(normalized);
 }
 
 export function noteConversationUserTurn(
@@ -1499,6 +1576,7 @@ export function noteConversationUserTurn(
   input: UserTurnInput,
 ): ConversationStateSnapshot {
   const text = normalize(input.text);
+  const isRepairTurn = Boolean(detectRepairTurnKind(text));
   const previousAssistantMessage =
     [...state.recent_window]
       .reverse()
@@ -1515,8 +1593,10 @@ export function noteConversationUserTurn(
   const userGoal = extractGoal(text) ?? state.user_goal;
   const facts = trimList([...state.recent_facts_from_user, ...extractFacts(text)]);
   const entities = trimList([...state.important_entities, ...extractEntities(text)], 8);
-  const unanswered = isQuestion(text)
-    ? trimList([...state.unanswered_questions, text], 8)
+  const unanswered = isQuestion(text) && !isRepairTurn
+    ? shouldReplaceOpenQuestion(state.pending_user_request, text)
+      ? [text]
+      : trimList([...state.unanswered_questions, text], 8)
     : state.unanswered_questions;
   const previousRelational = normalizeRelationalContinuityState(state.relational_continuity);
   const vulnerability = inferUserVulnerabilityOrDefensiveness(text);
@@ -1579,7 +1659,7 @@ export function noteConversationUserTurn(
     current_turn_action: requestState.action,
     last_conversation_topic: activeTopic || state.last_conversation_topic || "none",
     last_user_stated_topic: extractTopic(text) ?? state.last_user_stated_topic,
-    repair_context: repairResolution?.repairContext ?? state.repair_context,
+    repair_context: repairResolution?.repairContext ?? "none",
     relational_continuity: {
       ...previousRelational,
       raven_stance_in_current_exchange: inferRavenStance({
@@ -1605,7 +1685,7 @@ export function noteConversationUserTurn(
     8,
   );
   next.rolling_summary = buildRollingSummaryWithTransition(state, next);
-  return next;
+  return applyConversationStateInvariants(next);
 }
 
 export function noteConversationAssistantTurn(
@@ -1660,6 +1740,7 @@ export function noteConversationAssistantTurn(
     recent_commitments_or_tasks: commitments,
     unanswered_questions: remainingQuestions,
     last_raven_intent: normalize(input.ravenIntent) || "respond",
+    pending_user_request: requestFulfilled ? "none" : state.pending_user_request,
     pending_modification: requestFulfilled ? "none" : state.pending_modification,
     last_satisfied_request: requestFulfilled ? state.pending_user_request : state.last_satisfied_request,
     current_output_shape: inferAssistantOutputShape(text, state.current_output_shape),
@@ -1669,6 +1750,7 @@ export function noteConversationAssistantTurn(
     last_assistant_referent_candidate:
       repairResolution.lastAssistantReferentCandidate ?? "none",
     last_conversation_topic: state.active_topic || state.last_conversation_topic || "none",
+    repair_context: "none",
     relational_continuity: {
       ...previousRelational,
       raven_stance_in_current_exchange: inferRavenStance({
@@ -1705,7 +1787,7 @@ export function noteConversationAssistantTurn(
     8,
   );
   next.rolling_summary = buildRollingSummaryWithTransition(state, next);
-  return next;
+  return applyConversationStateInvariants(next);
 }
 
 export function buildConversationStateBlock(state: ConversationStateSnapshot): string {

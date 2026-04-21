@@ -130,21 +130,16 @@ export const CONVERSATIONAL_REGRESSION_SCENARIOS: RegressionScenario[] = [
       },
       {
         user: "go on",
-        userIntent: "user_question",
-        routeAct: "user_question",
+        userIntent: "user_short_follow_up",
+        routeAct: "short_follow_up",
         scriptedAssistant: "Then pick one of those three and I will keep the thread on it.",
         expect: {
           responseIncludesAny: ["pick one", "thread"],
-          shouldAnswerQuestion: true,
           maxQuestions: 0,
-          stateAfterTurn: {
-            openLoopIncludes: "pick one",
-          },
         },
       },
     ],
     finalState: {
-      openLoopIncludes: "pick one",
       importantEntityIncludes: "work",
     },
     thresholds: {

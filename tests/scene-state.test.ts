@@ -421,6 +421,30 @@ test("mutual get-to-know request routes into profile-building mode", () => {
   assert.equal(state.topic_locked, false);
 });
 
+test("favorite-color question routes into relational chat instead of generic qa", () => {
+  const state = noteSceneStateUserTurn(createSceneState(), {
+    text: "what is your favorite color?",
+    act: "user_question",
+    sessionTopic: null,
+  });
+
+  assert.equal(state.interaction_mode, "relational_chat");
+  assert.equal(state.topic_type, "general_request");
+  assert.equal(state.topic_locked, false);
+});
+
+test("malformed assistant self question still routes into relational chat", () => {
+  const state = noteSceneStateUserTurn(createSceneState(), {
+    text: "what are you kinks?",
+    act: "user_question",
+    sessionTopic: null,
+  });
+
+  assert.equal(state.interaction_mode, "relational_chat");
+  assert.equal(state.topic_type, "general_request");
+  assert.equal(state.topic_locked, false);
+});
+
 test("profile-building fallback rotates instead of repeating the same question", () => {
   let state = noteSceneStateUserTurn(createSceneState(), {
     text: "I want you to get to know me better",

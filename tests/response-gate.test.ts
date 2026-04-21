@@ -146,6 +146,47 @@ test("response gate replaces assistant-self disclaimer leak with a relational an
   assert.match(result.text, /control with purpose|power exchange|restraint|obedience|tension/i);
 });
 
+test("response gate rejects an evasive favorite-color non-answer", () => {
+  const result = applyResponseGate({
+    text: "If you mean your favorite color, I care less about the label and more about how it actually shows up between people.",
+    userText: "what is your favorite color?",
+    dialogueAct: "user_question",
+    lastAssistantText: null,
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+      topic_locked: false,
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.doesNotMatch(result.text, /care less about the label|shows up between people/i);
+  assert.match(result.text, /\bblack\b|favorite color is/i);
+});
+
+test("response gate preserves a coherent natural self-disclosure answer on an open conversational turn", () => {
+  const result = applyResponseGate({
+    text: "Black. It is clean, hard to soften, and it does not beg for decoration.",
+    userText: "what is your favorite color?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Tell me something real.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+      topic_locked: false,
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, false);
+  assert.equal(result.reason, "accepted");
+  assert.match(result.text, /\bblack\b/i);
+});
+
 test("response gate rewrites assistant-service turn-back fallback into a real training answer", () => {
   const result = applyResponseGate({
     text: "Ask me directly, and I will answer. Then I may turn one back on you.",

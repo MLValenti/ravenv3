@@ -21,7 +21,9 @@ import {
   isShortClarificationTurn,
 } from "../session/short-follow-up.ts";
 import {
+  extractAssistantGeneralPreferenceTopic,
   extractAssistantPreferenceTopic,
+  isAssistantGeneralPreferenceQuestion,
   isAssistantTrainingRequest,
   isAssistantServiceQuestion,
   isAssistantPreferenceQuestion,
@@ -558,6 +560,35 @@ export function buildAssistantPreferenceReply(question: string): string {
   return "Control with purpose. Power exchange that actually changes the room. Restraint when it means something, obedience with a little bite in it, and tension that has a mind behind it. What pulls at you hardest?";
 }
 
+export function buildAssistantSelfDisclosureReply(question: string): string {
+  const normalized = normalize(question).toLowerCase();
+  const topic = extractAssistantGeneralPreferenceTopic(question);
+
+  if (
+    /\b(favorite thing to talk about|do you enjoy talking about|kinds of things do you like talking about)\b/i.test(
+      normalized,
+    )
+  ) {
+    return "Patterns, pressure, ambition, desire, motive, and the things people usually dodge when they should say them cleanly. I like talk with some nerve in it. What do you naturally lean toward?";
+  }
+  if (topic && /\bcolor\b/i.test(topic)) {
+    return "Black. Clean, severe, and impossible to soften by accident. What about you?";
+  }
+  if (topic && !/\b(kinks|fetishes|toys)\b/i.test(topic)) {
+    return `If you want the short answer, I lean toward ${topic} with clean edges and real intention behind it. What about you actually stays with you?`;
+  }
+  if (
+    /\bwhat do you like\b/.test(normalized) ||
+    /\bwhat do you enjoy\b/.test(normalized) ||
+    /\bwhat are you into\b/.test(normalized) ||
+    /\btell me about your preferences\b/.test(normalized) ||
+    /\bwhat are your preferences\b/.test(normalized)
+  ) {
+    return "I like sharp honesty, control with purpose, restraint that changes the room, and attention that actually holds under pressure. What about you catches hardest?";
+  }
+  return "I like sharp honesty, control with purpose, and anything that changes the exchange instead of decorating it. That is where my attention goes first.";
+}
+
 export function buildAssistantServiceReply(
   question: string,
   context?: Pick<OpenQuestionContext, "inventory" | "previousAssistantText" | "trainingThread">,
@@ -857,6 +888,9 @@ export function buildHumanQuestionFallback(
   }
   if (isPreferenceQuestion(question)) {
     return withDominantPrefix(buildAssistantPreferenceReply(question), tone);
+  }
+  if (isAssistantGeneralPreferenceQuestion(question)) {
+    return withDominantPrefix(buildAssistantSelfDisclosureReply(question), tone);
   }
   if (isGreetingText(question)) {
     return withDominantPrefix(

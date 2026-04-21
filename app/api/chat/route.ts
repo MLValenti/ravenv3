@@ -382,54 +382,8 @@ function buildPromptRouteConversationState(
   state: ConversationStateSnapshot,
   mode: PromptRouteMode,
 ): ConversationStateSnapshot {
-  if (mode === "default") {
-    return state;
-  }
-  if (mode === "fresh_greeting") {
-    return {
-      ...state,
-      active_topic: "open_chat",
-      current_mode: "normal_chat",
-      recent_commitments_or_tasks: [],
-      unanswered_questions: [],
-      open_loops: [],
-      active_thread: "open_chat",
-      pending_user_request: "none",
-      pending_modification: "none",
-      current_turn_action: "continue_active_thread",
-      current_output_shape: "continuation_paragraph",
-      request_fulfilled: false,
-      rolling_summary: {
-        ...state.rolling_summary,
-        active_topic: "open_chat",
-        recent_topic_history: [],
-        commitments_or_assigned_tasks: [],
-        unresolved_questions: [],
-        open_loops: [],
-      },
-    };
-  }
-  return {
-    ...state,
-    active_topic: "relational_chat",
-    current_mode: "relational_chat",
-    recent_commitments_or_tasks: [],
-    unanswered_questions: [],
-    open_loops: [],
-    active_thread: state.active_thread === "none" ? "relational_chat" : state.active_thread,
-    pending_modification: "none",
-    current_turn_action: "interpret_and_reflect",
-    current_output_shape: "short_interpretation",
-    request_fulfilled: false,
-    rolling_summary: {
-      ...state.rolling_summary,
-      active_topic: "relational_chat",
-      recent_topic_history: [],
-      commitments_or_assigned_tasks: [],
-      unresolved_questions: [],
-      open_loops: [],
-    },
-  };
+  void mode;
+  return state;
 }
 
 function logSessionRouteDebug(payload: Record<string, unknown>): void {
@@ -1084,7 +1038,7 @@ async function buildPreparedMessages(
       ? buildVoiceContinuityBlock(promptConversationState)
       : undefined,
     contextPolicy: {
-      suppressPriorDialogue: promptRouteMode !== "default",
+      suppressPriorDialogue: false,
     },
   });
 

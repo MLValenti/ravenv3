@@ -14,6 +14,7 @@ import { classifyDialogueRoute } from "../lib/dialogue/router.ts";
 import { createCommitmentState } from "../lib/session/commitment-engine.ts";
 import { classifyUserIntent } from "../lib/session/intent-router.ts";
 import { isGoalOrIntentStatement } from "../lib/session/interaction-mode.ts";
+import { reconcileSceneStateWithConversation } from "../lib/session/conversation-runtime.ts";
 import { shouldBypassModelForSceneTurn } from "../lib/session/deterministic-scene-routing.ts";
 import { applyResponseGate } from "../lib/session/response-gate.ts";
 import { buildSceneScaffoldReply } from "../lib/session/scene-scaffolds.ts";
@@ -111,6 +112,13 @@ function answerForPrompt(prompt: string): string {
   return "lock";
 }
 
+function reconcileHarnessScene(state: HarnessState): void {
+  if (!state.conversation) {
+    return;
+  }
+  state.scene = reconcileSceneStateWithConversation(state.scene, state.conversation);
+}
+
 function applyUserTurn(state: HarnessState, userText: string): string {
   const currentMemory = state.memory ?? createSessionMemory();
   const currentConversation =
@@ -148,6 +156,7 @@ function applyUserTurn(state: HarnessState, userText: string): string {
     sessionTopic: route.nextTopic,
     inventory: state.inventory,
   });
+  reconcileHarnessScene(state);
 
   const scaffolded = buildSceneScaffoldReply({
     act: route.act,
@@ -215,6 +224,7 @@ function applyUserTurn(state: HarnessState, userText: string): string {
     ravenIntent: route.act,
     nowMs: Date.now() + 1,
   });
+  reconcileHarnessScene(state);
   state.outputs.push(gated.text);
   return gated.text;
 }
@@ -292,6 +302,7 @@ function applySessionPathDebugTurn(
     sessionTopic: reducedUserTurn.route.nextTopic,
     inventory: state.inventory,
   });
+  reconcileHarnessScene(state);
 
   const scaffolded = buildSceneScaffoldReply({
     act: reducedUserTurn.route.act,
@@ -364,6 +375,7 @@ function applySessionPathDebugTurn(
     ravenIntent: reducedUserTurn.route.act,
     nowMs: Date.now() + 1,
   });
+  reconcileHarnessScene(state);
   state.outputs.push(gated.text);
 
   const finalCommittedAssistantText = gated.text;
@@ -605,6 +617,7 @@ test("ui harness short clarification turn emits one clarification family only", 
     scene: createSceneState(),
     gate: createTurnGate("ui-harness-short-clarify"),
     outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-short-clarify"),
   };
 
   const reply = applyUserTurn(state, "what?");
@@ -612,6 +625,9 @@ test("ui harness short clarification turn emits one clarification family only", 
   assert.doesNotMatch(reply, /first move|pacing|end point first/i);
   assert.doesNotMatch(reply, /my little pet returns/i);
   assert.equal(state.outputs.length, 1);
+  assert.equal(state.conversation?.pending_user_request, "none");
+  assert.equal(state.conversation?.last_satisfied_request, "none");
+  assert.equal(state.conversation?.open_loops.length, 0);
 });
 
 test("ui harness short follow-up uses the recent question context and does not reset", () => {
@@ -2168,6 +2184,45 @@ test("ui harness answers assistant-self question directly without task contamina
   assert.equal(state.scene.interaction_mode, "relational_chat");
 });
 
+test("ui harness answers favorite-color questions concretely and clears pending request state", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-favorite-color"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-favorite-color"),
+    memory: createSessionMemory(),
+  };
+
+  const reply = applyUserTurn(state, "what is your favorite color?");
+
+  assert.match(reply, /\bblack\b|favorite color is/i);
+  assert.doesNotMatch(reply, /care less about the label|shows up between people|here is your task/i);
+  assert.equal(state.scene.interaction_mode, "relational_chat");
+  assert.equal(state.conversation?.current_mode, "relational_chat");
+  assert.equal(state.conversation?.request_fulfilled, true);
+  assert.equal(state.conversation?.pending_user_request, "none");
+  assert.match(state.conversation?.last_satisfied_request ?? "", /favorite color/i);
+});
+
+test("ui harness keeps conversation and scene state aligned after a direct self question", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-direct-question-alignment"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-direct-question-alignment"),
+    memory: createSessionMemory(),
+  };
+
+  const reply = applyUserTurn(state, "what is your favorite color?");
+
+  assert.match(reply, /\bblack\b|favorite color is/i);
+  assert.equal(state.scene.interaction_mode, state.conversation?.current_mode);
+  assert.equal(state.scene.topic_type, "general_request");
+  assert.equal(state.conversation?.pending_user_request, "none");
+  assert.notEqual(state.conversation?.last_satisfied_request, state.conversation?.pending_user_request);
+  assert.equal(state.conversation?.open_loops.some((loop) => /favorite color/i.test(loop)), false);
+});
+
 test("ui harness answers kink preference question directly without disclaimer drift", () => {
   const state: HarnessState = {
     scene: createSceneState(),
@@ -2180,6 +2235,66 @@ test("ui harness answers kink preference question directly without disclaimer dr
   assert.match(reply, /control with purpose|power exchange|restraint|obedience|tension/i);
   assert.doesNotMatch(reply, /does not have personal preferences|enforces protocols|here is your task/i);
   assert.equal(state.scene.interaction_mode, "relational_chat");
+});
+
+test("ui harness routes malformed self questions into the same relational lane", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-malformed-kink-question"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-malformed-kink-question"),
+  };
+
+  const reply = applyUserTurn(state, "what are you kinks?");
+
+  assert.match(reply, /control with purpose|restraint|obedience|tension/i);
+  assert.equal(state.scene.interaction_mode, "relational_chat");
+  assert.equal(state.conversation?.current_mode, "relational_chat");
+});
+
+test("ui harness closes an answered kink question before switching to favorite color", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-kink-then-color"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-kink-then-color"),
+    memory: createSessionMemory(),
+  };
+
+  const firstReply = applyUserTurn(state, "what are your kinks?");
+  assert.match(firstReply, /control with purpose|restraint|obedience|tension/i);
+  assert.equal(state.conversation?.pending_user_request, "none");
+
+  const secondReply = applyUserTurn(state, "what is your favorite color?");
+
+  assert.match(secondReply, /\bblack\b|favorite color is/i);
+  assert.equal(state.conversation?.pending_user_request, "none");
+  assert.equal(
+    state.conversation?.unanswered_questions.some((question) => /kinks/i.test(question)),
+    false,
+  );
+  assert.equal(state.conversation?.open_loops.some((loop) => /kinks/i.test(loop)), false);
+});
+
+test("ui harness does not create sticky commitments from vague assistant task wording", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-vague-task-wording"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-vague-task-wording"),
+  };
+
+  state.conversation = noteConversationAssistantTurn(state.conversation, {
+    text: "If you want a task, we can plan one. There is a task you want to tackle in this new direction, but we do not need to lock it yet.",
+    ravenIntent: "respond",
+    nowMs: Date.now(),
+  });
+  reconcileHarnessScene(state);
+
+  assert.equal(state.conversation.recent_commitments_or_tasks.length, 0);
+  assert.equal(state.conversation.open_loops.length, 0);
+  assert.equal(state.scene.topic_type, "none");
+  assert.equal(state.scene.interaction_mode, state.conversation.current_mode);
 });
 
 test("ui harness answers broad bondage preference question directly without generic fallback drift", () => {
