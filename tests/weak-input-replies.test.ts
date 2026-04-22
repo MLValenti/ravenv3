@@ -17,7 +17,7 @@ test("greeting uses deterministic dominant opener", () => {
 test("how are you uses deterministic dominant status reply", () => {
   assert.equal(
     buildDeterministicDominantWeakInputReply("how are you"),
-    "Sharp enough. Now tell me why you're here.",
+    "I'm good. Sharp, a little watchful. What about you?",
   );
 });
 

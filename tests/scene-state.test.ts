@@ -392,7 +392,7 @@ test("task planning can unlock to general conversation on unrelated user questio
 
   assert.equal(state.topic_type, "general_request");
   assert.equal(state.topic_locked, false);
-  assert.equal(state.interaction_mode, "question_answering");
+  assert.equal(state.interaction_mode, "normal_chat");
   assert.equal(state.task_paused, true);
 });
 
@@ -503,10 +503,47 @@ test("normal question keeps normal conversation mode until explicit task intent 
     sessionTopic: null,
   });
 
-  assert.equal(state.interaction_mode, "question_answering");
+  assert.equal(state.interaction_mode, "normal_chat");
   assert.equal(state.topic_type, "general_request");
   assert.equal(state.topic_locked, false);
   assert.equal(state.task_progress, "none");
+});
+
+test("better-sub thread does not dominate a later how-are-you question", () => {
+  let state = noteSceneStateUserTurn(createSceneState(), {
+    text: "what would make me a better sub?",
+    act: "user_question",
+    sessionTopic: null,
+  });
+
+  state = noteSceneStateAssistantTurn(state, {
+    text: "Start with honesty and steadiness instead of performance.",
+  });
+
+  state = noteSceneStateUserTurn(state, {
+    text: "how are you today?",
+    act: "user_question",
+    sessionTopic: null,
+  });
+
+  assert.equal(state.interaction_mode, "normal_chat");
+  assert.equal(state.topic_type, "general_request");
+  assert.equal(state.topic_locked, false);
+  assert.equal(state.agreed_goal || "none", "none");
+});
+
+test("smalltalk questions stay in normal chat routing", () => {
+  for (const text of ["how are you?", "how are you today?", "you good?", "what's up?"]) {
+    const state = noteSceneStateUserTurn(createSceneState(), {
+      text,
+      act: "user_question",
+      sessionTopic: null,
+    });
+
+    assert.equal(state.interaction_mode, "normal_chat");
+    assert.equal(state.topic_type, "general_request");
+    assert.equal(state.topic_locked, false);
+  }
 });
 
 test("old unfinished non-hard-locked task does not hijack a later normal chat request", () => {

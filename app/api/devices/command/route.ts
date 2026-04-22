@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server.js";
 
-import { blockIfEmergencyStopped } from "../../../lib/action-route-guard.ts";
-import { parseDeviceCommandRequest } from "../../../lib/devices/action-schema.ts";
-import { getDeviceService } from "../../../lib/devices/device-service.ts";
+import { blockIfEmergencyStopped } from "../../../../lib/action-route-guard.ts";
+import { parseDeviceCommandRequest } from "../../../../lib/devices/action-schema.ts";
+import { getDeviceService } from "../../../../lib/devices/device-service.ts";
 
 export const runtime = "nodejs";
 

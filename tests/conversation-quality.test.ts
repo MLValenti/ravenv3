@@ -528,7 +528,7 @@ test("dominant shaping forces a deterministic opener for how-are-you drift", () 
   });
 
   assert.equal(shaped.noop, false);
-  assert.equal(shaped.text, "Sharp enough. Now tell me why you're here.");
+  assert.equal(shaped.text, "I'm good. Sharp, a little watchful. What about you?");
 });
 
 test("output shaping strips preference disclaimer drift and answers the kink question directly", () => {

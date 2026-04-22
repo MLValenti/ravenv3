@@ -502,7 +502,7 @@ function buildGameSetupReply(input: SceneScaffoldInput): string {
     );
   const planningDetourBridge = buildPlanningQuestionFallback(input.userText, {
     previousAssistantText: input.sceneState.last_assistant_text || null,
-    currentTopic: input.sceneState.agreed_goal || input.sceneState.summary || null,
+    currentTopic: input.sceneState.agreed_goal || null,
   });
   const hasSpeedChoiceCue = /\b(quick|faster|fast|short|longer|few minutes)\b/i.test(
     normalizedUserText,
@@ -641,8 +641,14 @@ function buildTaskReply(input: SceneScaffoldInput): string {
       sceneState.task_spec.request_kind === "replacement"
     )
   ) {
+    const requestedTaskDomain =
+      sceneState.user_requested_task_domain === "none"
+        ? sceneState.locked_task_domain
+        : sceneState.user_requested_task_domain;
+    const requestedTaskLabel =
+      requestedTaskDomain === "none" ? "different" : formatTaskDomainLabel(requestedTaskDomain);
     return [
-      `I heard the request for a ${formatTaskDomainLabel(sceneState.user_requested_task_domain)} task.`,
+      `I heard the request for a ${requestedTaskLabel} task.`,
       sceneState.reason_for_lock,
       `Right now, ${sceneState.next_expected_user_action}.`,
     ]
@@ -732,7 +738,11 @@ function buildTaskReply(input: SceneScaffoldInput): string {
     if (sceneState.task_spec.requested_domain === "device") {
       return "You asked for a device task, but I do not have a clean device fit yet. Tell me what device or item is actually available.";
     }
-    return `Be specific. I do not have a clean ${formatTaskDomainLabel(sceneState.task_spec.requested_domain)} task from that yet. Give me the missing constraint or the time window.`;
+    const requestedDomainLabel =
+      sceneState.task_spec.requested_domain === "none"
+        ? "matching"
+        : formatTaskDomainLabel(sceneState.task_spec.requested_domain);
+    return `Be specific. I do not have a clean ${requestedDomainLabel} task from that yet. Give me the missing constraint or the time window.`;
   }
   if (
     /\b(what do you have|this time|new task|another task|what can i do next|what do you want me to do|what do i need to do|ready for the next task|next task|try another task|something different for me to do|come up with something different)\b/i.test(
@@ -1662,7 +1672,7 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
     return buildRelationalChatReply(
       input.userText,
       input.inventory ?? [],
-      input.sessionMemory?.last_assistant_message?.value ?? null,
+      input.sceneState.last_assistant_text || null,
       input.sceneState.active_training_thread,
     );
   }
@@ -1674,7 +1684,7 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
     return buildRelationalChatReply(
       input.userText,
       input.inventory ?? [],
-      input.sessionMemory?.last_assistant_message?.value ?? null,
+      input.sceneState.last_assistant_text || null,
       input.sceneState.active_training_thread,
     );
   }

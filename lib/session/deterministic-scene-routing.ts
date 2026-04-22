@@ -2,8 +2,10 @@ import type { SceneState, SceneTopicType } from "./scene-state.ts";
 import type { DialogueRouteAct } from "../dialogue/router.ts";
 import {
   isAssistantSelfQuestion,
+  isChatLikeSmalltalk,
   isChatSwitchRequest,
   isMutualGettingToKnowRequest,
+  isNormalChatRequest,
 } from "./interaction-mode.ts";
 import {
   isHardStructuredScene,
@@ -24,6 +26,40 @@ function isFreshGreetingTurn(text: string): boolean {
 
 function isTaskScopedNegotiationQuestion(text: string): boolean {
   return /\b(task|duration|minute|minutes|hour|hours|proof|prove|verification|verify|different task|another task|new task|what kind of task|what task|do i need proof|what counts as proof|wear|use)\b/.test(
+    text,
+  );
+}
+
+function isFreshDirectConversationTurn(text: string, dialogueAct: DialogueRouteAct): boolean {
+  if (!text) {
+    return false;
+  }
+  if (isFreshGreetingTurn(text) || isNormalChatRequest(text) || isChatLikeSmalltalk(text)) {
+    return true;
+  }
+  if (isAssistantSelfQuestion(text) || isMutualGettingToKnowRequest(text) || isChatSwitchRequest(text)) {
+    return true;
+  }
+  return dialogueAct === "user_question" && !isGenuineTaskContinuationTurn(text, dialogueAct);
+}
+
+function isGenuineGameContinuationTurn(text: string, dialogueAct: DialogueRouteAct): boolean {
+  if (dialogueAct === "propose_activity" || dialogueAct === "answer_activity_choice") {
+    return true;
+  }
+  return /\b(you pick|different game|another round|one more round|my move|i choose|i pick|rock|paper|scissors|number hunt|word chain|truth|dare|guess|rules|explain the game|what's the game|whats the game|my guess|first throw)\b/.test(
+    text,
+  );
+}
+
+function isGenuineProfileContinuationTurn(text: string, dialogueAct: DialogueRouteAct): boolean {
+  if (isMutualGettingToKnowRequest(text)) {
+    return true;
+  }
+  if (dialogueAct === "short_follow_up") {
+    return true;
+  }
+  return /\b(about me|learn about me|get to know me|i like|i prefer|call me|usually|people miss|i am|i'm)\b/.test(
     text,
   );
 }
@@ -57,18 +93,47 @@ export function explainBypassModelForSceneTurn(input: {
     input.sceneState.topic_locked &&
     interactionMode === "task_planning" &&
     input.sceneState.topic_type === "task_negotiation";
+  const staleLockedGame =
+    input.sceneState.topic_locked &&
+    interactionMode === "game" &&
+    input.sceneState.topic_type === "game_execution";
+  const staleLockedProfile =
+    input.sceneState.interaction_mode === "profile_building" &&
+    !input.sceneState.task_hard_lock_active;
 
   if (
     staleLockedTaskNegotiation &&
     latestUserText &&
-    (isFreshGreetingTurn(latestUserText) ||
-      (input.dialogueAct === "user_question" &&
-        !isGenuineTaskContinuationTurn(latestUserText, input.dialogueAct)))
+    isFreshDirectConversationTurn(latestUserText, input.dialogueAct)
   ) {
     // A stale replayed task setup must not trap a fresh greeting or direct question.
     return {
       bypass: false,
       reason: "fresh_question_or_greeting_releases_stale_task_negotiation_lock",
+    };
+  }
+
+  if (
+    staleLockedGame &&
+    latestUserText &&
+    isFreshDirectConversationTurn(latestUserText, input.dialogueAct) &&
+    !isGenuineGameContinuationTurn(latestUserText, input.dialogueAct)
+  ) {
+    return {
+      bypass: false,
+      reason: "fresh_conversation_releases_stale_game_lock",
+    };
+  }
+
+  if (
+    staleLockedProfile &&
+    latestUserText &&
+    isFreshDirectConversationTurn(latestUserText, input.dialogueAct) &&
+    !isGenuineProfileContinuationTurn(latestUserText, input.dialogueAct)
+  ) {
+    return {
+      bypass: false,
+      reason: "fresh_conversation_releases_stale_profile_lock",
     };
   }
 

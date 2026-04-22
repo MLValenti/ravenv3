@@ -92,6 +92,7 @@ export type ReplayScenarioCategory =
   | "inventory"
   | "repair"
   | "rendering"
+  | "conversation_continuity"
   | "mixed";
 
 export type ReplayExecutor = "synthetic" | "browser_live";
@@ -148,6 +149,7 @@ export type ReplayScenarioDefinition = {
 export type ReplayCandidateTrace = {
   family: TurnResponseFamily | "scene_fallback";
   sourceFunction:
+    | "buildHumanQuestionFallback"
     | "buildShortClarificationReply"
     | "buildSceneScaffoldReply"
     | "buildSceneFallback"
@@ -439,12 +441,13 @@ function asMemoryWrites(value: unknown): SessionMemoryWriteRecord[] {
       if (typeof row.key !== "string" || typeof row.value !== "string") {
         return null;
       }
-      return {
+      const record: SessionMemoryWriteRecord = {
         key: row.key,
         value: row.value,
         kind: typeof row.kind === "string" ? row.kind : undefined,
         category: typeof row.category === "string" ? row.category : undefined,
-      } satisfies SessionMemoryWriteRecord;
+      };
+      return record;
     })
     .filter((entry): entry is SessionMemoryWriteRecord => entry !== null);
 }
@@ -494,7 +497,14 @@ async function prepareBrowserReplayPage(
   });
   const page = await context.newPage();
   await page.addInitScript(
-    ([testHookKey, debugKey, consentKey, inventoryStorageKey, initialInventory]) => {
+    (values) => {
+      const [
+        testHookKey,
+        debugKey,
+        consentKey,
+        inventoryStorageKey,
+        initialInventory,
+      ] = values as [string, string, string, string, SessionInventoryItem[] | undefined];
       window.localStorage.clear();
       window.sessionStorage.clear();
       window.localStorage.setItem(testHookKey, "1");
@@ -520,7 +530,8 @@ async function prepareBrowserReplayPage(
   );
   await page.goto(`${baseUrl}/session`, { waitUntil: "domcontentloaded" });
   await page.evaluate(
-    ([inventoryStorageKey, initialInventory]) => {
+    (values) => {
+      const [inventoryStorageKey, initialInventory] = values as [string, SessionInventoryItem[] | undefined];
       window.localStorage.setItem(inventoryStorageKey, JSON.stringify(initialInventory ?? []));
     },
     [SESSION_INVENTORY_STORAGE_KEY, inventory ?? []],
@@ -536,6 +547,7 @@ async function prepareBrowserReplayPage(
     await inventoryCard.waitFor({ state: "visible" });
     await page.waitForFunction(
       (expectedInventory) => {
+        const normalizedInventory = expectedInventory ?? [];
         const cards = Array.from(document.querySelectorAll(".card"));
         const inventoryCardElement = cards.find((card) =>
           card.textContent?.includes("Session Inventory"),
@@ -544,7 +556,7 @@ async function prepareBrowserReplayPage(
           return false;
         }
         const text = inventoryCardElement.textContent ?? "";
-        return expectedInventory.every((item) => {
+        return normalizedInventory.every((item) => {
           const label = typeof item.label === "string" ? item.label : "";
           const notes = typeof item.notes === "string" ? item.notes : "";
           return (label && text.includes(label)) || (notes && text.includes(notes));
@@ -579,20 +591,22 @@ async function collectBrowserTurnEvents(
       acceptedUserMessageId = asNumber(acceptedEntry.detail.user_message_id);
       acceptedRequestId = asString(acceptedEntry.detail.request_id, "");
     }
-    if (acceptedUserMessageId !== null || acceptedRequestId) {
+    const liveAcceptedRequestId = acceptedRequestId ?? "";
+    if (acceptedUserMessageId !== null || liveAcceptedRequestId.length > 0) {
       matched = fresh.filter((entry) => {
         const eventUserMessageId = asNumber(entry.detail.user_message_id);
         const eventRequestId = asString(entry.detail.request_id, "");
         return (
           (acceptedUserMessageId !== null && eventUserMessageId === acceptedUserMessageId) ||
-          (acceptedRequestId.length > 0 && eventRequestId === acceptedRequestId)
+          (liveAcceptedRequestId.length > 0 && eventRequestId === liveAcceptedRequestId)
         );
       });
       const hasCommitted = matched.some((entry) => entry.label === "turn.append.committed");
       const hasSelected = matched.some((entry) => entry.label === "turn.response.selected");
       if (hasCommitted && hasSelected) {
-        if (retainedAcceptedEntry && !matched.some((entry) => entry.raw === retainedAcceptedEntry.raw)) {
-          matched = [...matched, retainedAcceptedEntry];
+        const acceptedTraceEntry = retainedAcceptedEntry;
+        if (acceptedTraceEntry && !matched.some((entry) => entry.raw === acceptedTraceEntry.raw)) {
+          matched = [...matched, acceptedTraceEntry];
         }
         if (stableSinceMs === null) {
           stableSinceMs = Date.now();

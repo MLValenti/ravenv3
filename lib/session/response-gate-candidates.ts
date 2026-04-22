@@ -322,20 +322,6 @@ export function createResponseGateCandidateBuilder(
       });
     }
     if (
-      gateInput.sceneState.interaction_mode === "profile_building" ||
-      isProfileBuildingRequest(gateInput.userText)
-    ) {
-      return (
-        buildSceneFallback(
-          gateInput.sceneState,
-          gateInput.userText,
-          gateInput.sessionMemory,
-          gateInput.inventory,
-        ) ??
-        "Fine. Give me one thing I should understand about you, or tell me what I should get right about you first."
-      );
-    }
-    if (
       (gateInput.sceneState.interaction_mode === "normal_chat" ||
         gateInput.sceneState.interaction_mode === "question_answering") &&
       (gateInput.sceneState.topic_type === "none" ||

@@ -423,6 +423,98 @@ test("conversation state normalization enforces fulfilled-versus-pending invaria
   assert.equal(normalized.open_loops.some((loop) => /favorite color/i.test(loop)), false);
 });
 
+test("fresh smalltalk question overrides stale better-sub thread residue", () => {
+  let state = createConversationStateSnapshot("conversation-state-smalltalk-reset");
+
+  state = noteConversationUserTurn(state, {
+    text: "what would make me a better sub?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+
+  assert.match(state.active_thread, /better sub/i);
+
+  state = noteConversationUserTurn(state, {
+    text: "how are you today?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 2,
+  });
+
+  assert.equal(state.current_mode, "normal_chat");
+  assert.equal(state.active_topic, "none");
+  assert.equal(state.active_thread, "open_chat");
+  assert.equal(state.pending_user_request, "how are you today?");
+  assert.deepEqual(state.unanswered_questions, ["how are you today?"]);
+  assert.deepEqual(state.open_loops, ["how are you today?"]);
+  assert.equal(state.important_entities.includes("today"), false);
+  assert.equal(state.important_entities.includes("asked"), false);
+  assert.equal(state.important_entities.some((entity) => /better sub|better/.test(entity)), false);
+});
+
+test("meta complaint repair keeps the original missed question live", () => {
+  let state = createConversationStateSnapshot("conversation-state-meta-repair");
+
+  state = noteConversationUserTurn(state, {
+    text: "how are you today?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+
+  state = noteConversationAssistantTurn(state, {
+    text: "Keep going.",
+    ravenIntent: "respond",
+    nowMs: 2,
+  });
+
+  assert.equal(state.request_fulfilled, false);
+  assert.equal(state.pending_user_request, "how are you today?");
+
+  state = noteConversationUserTurn(state, {
+    text: "i asked you that?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 3,
+  });
+
+  assert.equal(state.current_mode, "normal_chat");
+  assert.equal(state.pending_user_request, "how are you today?");
+  assert.deepEqual(state.unanswered_questions, ["how are you today?"]);
+  assert.deepEqual(state.open_loops, ["how are you today?"]);
+  assert.match(state.repair_context, /source=previous_assistant/i);
+  assert.equal(state.important_entities.includes("asked"), false);
+});
+
+test("natural how-are-you answer fulfills cleanly without stale thread carryover", () => {
+  let state = createConversationStateSnapshot("conversation-state-how-are-you-natural");
+
+  state = noteConversationUserTurn(state, {
+    text: "what would make me a better sub?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+  state = noteConversationUserTurn(state, {
+    text: "how are you today?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 2,
+  });
+  state = noteConversationAssistantTurn(state, {
+    text: "I'm good today. A little sharp, a little watchful. What about you?",
+    ravenIntent: "respond",
+    nowMs: 3,
+  });
+
+  assert.equal(state.request_fulfilled, true);
+  assert.equal(state.pending_user_request, "none");
+  assert.match(state.last_satisfied_request, /how are you today/i);
+  assert.equal(state.current_mode, "normal_chat");
+  assert.equal(state.open_loops.length, 0);
+});
+
 test("structured rolling summary preserves topic history, commitments, and unresolved items across long conversations", () => {
   let state = createConversationStateSnapshot("conversation-state-long");
 

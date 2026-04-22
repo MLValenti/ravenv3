@@ -25,11 +25,25 @@ import {
   type TurnGateState,
 } from "./turn-gate.ts";
 import { isConversationArrivalAnswer } from "./session-memory.ts";
+import {
+  beginAssistantRuntimeRequest,
+  clearAssistantRuntimeForAcceptedUserTurn,
+  commitVisibleAssistantTurn,
+  createAssistantTurnRuntimeState,
+  finishAssistantRuntimeRequest,
+  getActiveAssistantRuntimeRequestId,
+  hasVisibleAssistantCommit,
+  registerAssistantRuntimeFinalize,
+  type AssistantGuardDecision,
+  type AssistantTurnRuntimeState,
+  type AssistantVisibleTurnEntry,
+} from "./assistant-turn-guard.ts";
 
 export type SessionStateContract = {
   turnGate: TurnGateState;
   workingMemory: WorkingMemory;
   sessionTopic: SessionTopic | null;
+  assistantRuntime: AssistantTurnRuntimeState;
 };
 
 export type UserTurnReduceResult = {
@@ -53,6 +67,7 @@ export function createSessionStateContract(sessionId?: string): SessionStateCont
     turnGate: gate,
     workingMemory: createWorkingMemory(),
     sessionTopic: null,
+    assistantRuntime: createAssistantTurnRuntimeState(),
   };
 }
 
@@ -123,6 +138,10 @@ export function reduceUserTurn(
       turnGate: nextGate,
       workingMemory: nextWorkingMemory,
       sessionTopic: route.nextTopic,
+      assistantRuntime: clearAssistantRuntimeForAcceptedUserTurn(
+        state.assistantRuntime,
+        nextGate.lastUserMessageId,
+      ),
     },
     intent,
     route,
@@ -210,5 +229,117 @@ export function reduceAssistantEmission(
     turnGate: nextGate,
     workingMemory: nextWorkingMemory,
     sessionTopic: nextWorkingMemory.session_topic,
+    assistantRuntime: state.assistantRuntime,
   };
+}
+
+export function reduceBeginAssistantRequest(
+  state: SessionStateContract,
+  input: {
+    kind: "turn" | "model";
+    sourceUserMessageId: number;
+    requestId: string;
+  },
+): { next: SessionStateContract; decision: AssistantGuardDecision } {
+  const reduced = beginAssistantRuntimeRequest(
+    state.assistantRuntime,
+    input.kind,
+    input.sourceUserMessageId,
+    input.requestId,
+  );
+  return {
+    next:
+      reduced.next === state.assistantRuntime
+        ? state
+        : {
+            ...state,
+            assistantRuntime: reduced.next,
+          },
+    decision: reduced.decision,
+  };
+}
+
+export function reduceFinishAssistantRequest(
+  state: SessionStateContract,
+  input: {
+    kind: "turn" | "model";
+    sourceUserMessageId: number;
+    requestId: string;
+  },
+): SessionStateContract {
+  return {
+    ...state,
+    assistantRuntime: finishAssistantRuntimeRequest(
+      state.assistantRuntime,
+      input.kind,
+      input.sourceUserMessageId,
+      input.requestId,
+    ),
+  };
+}
+
+export function reduceRegisterAssistantFinalize(
+  state: SessionStateContract,
+  requestId: string,
+): { next: SessionStateContract; decision: AssistantGuardDecision } {
+  const reduced = registerAssistantRuntimeFinalize(state.assistantRuntime, requestId);
+  return {
+    next:
+      reduced.next === state.assistantRuntime
+        ? state
+        : {
+            ...state,
+            assistantRuntime: reduced.next,
+          },
+    decision: reduced.decision,
+  };
+}
+
+export function reduceVisibleAssistantCommit(
+  state: SessionStateContract,
+  input: {
+    anchorUserMessageId: number;
+    requestId: string | null | undefined;
+    renderedText: string;
+    turnIdEstimate: number;
+    committedAtMs: number;
+    generationPath: string;
+    recovered?: boolean;
+  },
+): {
+  next: SessionStateContract;
+  decision: AssistantGuardDecision & { normalizedText: string };
+} {
+  const reduced = commitVisibleAssistantTurn(state.assistantRuntime, input);
+  return {
+    next:
+      reduced.next === state.assistantRuntime
+        ? state
+        : {
+            ...state,
+            assistantRuntime: reduced.next,
+          },
+    decision: reduced.decision,
+  };
+}
+
+export function selectHasVisibleAssistantCommit(
+  state: SessionStateContract,
+  sourceUserMessageId: number,
+): boolean {
+  return hasVisibleAssistantCommit(state.assistantRuntime, sourceUserMessageId);
+}
+
+export function selectActiveAssistantRequestId(
+  state: SessionStateContract,
+  kind: "turn" | "model",
+  sourceUserMessageId: number,
+): string | null {
+  return getActiveAssistantRuntimeRequestId(state.assistantRuntime, kind, sourceUserMessageId);
+}
+
+export function selectLastCommittedAssistantTurn(
+  state: SessionStateContract,
+): AssistantVisibleTurnEntry | null {
+  return state.assistantRuntime.lastCommittedTurn;
 }

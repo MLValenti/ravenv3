@@ -95,6 +95,7 @@ import {
   normalizeInteractionMode,
   type InteractionMode,
 } from "./interaction-mode.ts";
+import { detectRepairTurnKind } from "../chat/repair-turn.ts";
 import {
   buildChatSwitchReply,
   buildRelationalTurnBack,
@@ -789,6 +790,12 @@ function resolveInteractionMode(input: {
   previousMode: InteractionMode;
   hasActiveTrainingThread: boolean;
 }): InteractionMode {
+  if (detectRepairTurnKind(input.text)) {
+    if (input.previousMode === "relational_chat" || input.previousMode === "profile_building") {
+      return input.previousMode;
+    }
+    return "normal_chat";
+  }
   if (input.effectiveTopicType === "task_execution") {
     if (
       input.effectiveTaskProgress === "assigned" &&
@@ -816,6 +823,9 @@ function resolveInteractionMode(input: {
   }
   if (isProfileBuildingRequest(input.text)) {
     return "profile_building";
+  }
+  if (isNormalChatRequest(input.text) || isChatLikeSmalltalk(input.text)) {
+    return "normal_chat";
   }
   if (input.act === "short_follow_up") {
     if (input.previousMode === "locked_task_execution") {
@@ -853,23 +863,20 @@ function resolveInteractionMode(input: {
   ) {
     return "game";
   }
-  if (input.effectiveTopicType === "task_execution") {
-    return input.taskHardLockActive ? "locked_task_execution" : "task_planning";
-  }
   if (input.effectiveTopicType === "task_negotiation") {
     return "task_planning";
   }
-    if (input.effectiveTopicType === "duration_negotiation") {
-      return "question_answering";
+  if (input.effectiveTopicType === "duration_negotiation") {
+    return "question_answering";
+  }
+  if (input.act === "user_question") {
+    if (input.previousMode === "relational_chat") {
+      return "relational_chat";
     }
-    if (input.act === "user_question") {
-      if (input.previousMode === "relational_chat") {
-        return "relational_chat";
-      }
-      return "question_answering";
+    if (isGeneralConversationQuestion(input.text) && input.previousMode === "normal_chat") {
+      return "normal_chat";
     }
-  if (isNormalChatRequest(input.text) || isChatLikeSmalltalk(input.text)) {
-    return "normal_chat";
+    return "question_answering";
   }
   if (input.previousMode === "profile_building") {
     return "profile_building";
@@ -1775,6 +1782,8 @@ export function noteSceneStateUserTurn(
     effectiveTopicType === "game_setup" ||
     effectiveTopicType === "game_execution" ||
     nextInteractionMode === "profile_building";
+  const freshOpenChatTurn =
+    !detectRepairTurnKind(input.text) && (isNormalChatRequest(input.text) || isChatLikeSmalltalk(input.text));
   return {
     ...state,
     interaction_mode: nextInteractionMode,
@@ -1791,7 +1800,9 @@ export function noteSceneStateUserTurn(
     game_reward_state: effectiveGameRewardState,
     free_pass_count: effectiveFreePassCount,
     agreed_goal:
-      gameExecutionEscalatesToTask && effectiveTopicType === "task_negotiation"
+      freshOpenChatTurn
+        ? ""
+        : gameExecutionEscalatesToTask && effectiveTopicType === "task_negotiation"
         ? ""
         : inferGoal(input.text, state.agreed_goal),
     stakes: nextStakes,
@@ -2519,7 +2530,6 @@ export function buildSceneFallback(
         inventory,
         previousAssistantText:
           state.last_assistant_text ||
-          sessionMemory?.last_assistant_message?.value ||
           state.last_profile_prompt ||
           null,
         trainingThread: state.active_training_thread,

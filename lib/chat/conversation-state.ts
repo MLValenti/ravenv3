@@ -256,6 +256,10 @@ function extractEntities(text: string): string[] {
   return trimList([...(requestedTopic ? [requestedTopic] : []), ...tokens], 8);
 }
 
+function isFreshOpenChatTurn(text: string): boolean {
+  return !detectRepairTurnKind(text) && (isNormalChatRequest(text) || isChatLikeSmalltalk(text));
+}
+
 function inferTone(text: string): string {
   const normalized = text.toLowerCase();
   if (/\b(confused|unsure|not sure|lost)\b/.test(normalized)) {
@@ -654,6 +658,9 @@ function deriveRequestedAction(input: {
   if (isSummaryRequest(normalized)) {
     return "summarize_current_thread";
   }
+  if (detectRepairTurnKind(normalized)) {
+    return "expand_previous_answer";
+  }
   if (hasTopicShiftCue(normalized) && extractTopic(normalized)) {
     return "shift_topic";
   }
@@ -843,12 +850,18 @@ function hasEnoughContextForAction(input: {
   }
 }
 
-function derivePendingUserRequest(text: string, action: RequestedTurnAction): string {
+function derivePendingUserRequest(
+  text: string,
+  action: RequestedTurnAction,
+  state?: ConversationStateSnapshot | null,
+): string {
   if (action === "clarify_missing_blocker") {
     return "none";
   }
   if (detectRepairTurnKind(text)) {
-    return "none";
+    return state?.pending_user_request && state.pending_user_request !== "none"
+      ? state.pending_user_request
+      : "none";
   }
   return normalize(text) || "none";
 }
@@ -963,7 +976,7 @@ export function resolveTurnRequestState(input: {
     action,
     previousAssistantMessage: input.previousAssistantMessage,
   });
-  const pendingUserRequest = derivePendingUserRequest(input.text, action);
+  const normalizedPendingUserRequest = derivePendingUserRequest(input.text, action, input.state);
   const pendingModification =
     action === "modify_existing_idea" || action === "revise_previous_plan"
       ? extractPendingModification(input.text)
@@ -979,7 +992,7 @@ export function resolveTurnRequestState(input: {
   return {
     action: hasSufficientContextToAct ? action : "clarify_missing_blocker",
     activeThread,
-    pendingUserRequest,
+    pendingUserRequest: normalizedPendingUserRequest,
     pendingModification,
     outputShape: deriveOutputShape(hasSufficientContextToAct ? action : "clarify_missing_blocker"),
     hasSufficientContextToAct,
@@ -1307,6 +1320,12 @@ function inferMode(input: {
   previousAssistantMessage?: string | null;
 }): ConversationMode {
   const normalized = input.text.toLowerCase();
+  if (detectRepairTurnKind(normalized)) {
+    if (input.previousMode === "relational_chat" || input.previousMode === "profile_building") {
+      return input.previousMode;
+    }
+    return "normal_chat";
+  }
   if (isAssistantSelfQuestion(normalized) || isMutualGettingToKnowRequest(normalized)) {
     return "relational_chat";
   }
@@ -1327,6 +1346,9 @@ function inferMode(input: {
   if (isProfileBuildingRequest(normalized)) {
     return "profile_building";
   }
+  if (isNormalChatRequest(normalized) || isChatLikeSmalltalk(normalized)) {
+    return "normal_chat";
+  }
   if (input.routeAct === "propose_activity" || input.routeAct === "answer_activity_choice") {
     return "game";
   }
@@ -1346,9 +1368,6 @@ function inferMode(input: {
   }
   if (input.userIntent === "user_question" || input.userIntent === "user_short_follow_up") {
     return "question_answering";
-  }
-  if (isNormalChatRequest(normalized) || isChatLikeSmalltalk(normalized)) {
-    return "normal_chat";
   }
   if (input.previousMode === "profile_building") {
     return "profile_building";
@@ -1577,6 +1596,7 @@ export function noteConversationUserTurn(
 ): ConversationStateSnapshot {
   const text = normalize(input.text);
   const isRepairTurn = Boolean(detectRepairTurnKind(text));
+  const freshOpenChatTurn = isFreshOpenChatTurn(text);
   const previousAssistantMessage =
     [...state.recent_window]
       .reverse()
@@ -1589,10 +1609,15 @@ export function noteConversationUserTurn(
     previousMode: state.current_mode,
     previousAssistantMessage,
   });
-  const activeTopic = extractTopic(text) ?? (currentMode === "profile_building" ? "profile" : state.active_topic);
+  const extractedTopic = extractTopic(text);
+  const activeTopic = freshOpenChatTurn
+    ? "none"
+    : extractedTopic ?? (currentMode === "profile_building" ? "profile" : state.active_topic);
   const userGoal = extractGoal(text) ?? state.user_goal;
   const facts = trimList([...state.recent_facts_from_user, ...extractFacts(text)]);
-  const entities = trimList([...state.important_entities, ...extractEntities(text)], 8);
+  const entities = freshOpenChatTurn
+    ? trimList(extractEntities(text), 8)
+    : trimList([...state.important_entities, ...extractEntities(text)], 8);
   const unanswered = isQuestion(text) && !isRepairTurn
     ? shouldReplaceOpenQuestion(state.pending_user_request, text)
       ? [text]
@@ -1658,7 +1683,7 @@ export function noteConversationUserTurn(
     request_fulfilled: false,
     current_turn_action: requestState.action,
     last_conversation_topic: activeTopic || state.last_conversation_topic || "none",
-    last_user_stated_topic: extractTopic(text) ?? state.last_user_stated_topic,
+    last_user_stated_topic: extractedTopic ?? (freshOpenChatTurn ? "none" : state.last_user_stated_topic),
     repair_context: repairResolution?.repairContext ?? "none",
     relational_continuity: {
       ...previousRelational,

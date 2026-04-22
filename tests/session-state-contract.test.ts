@@ -4,8 +4,14 @@ import assert from "node:assert/strict";
 import {
   createSessionStateContract,
   projectTurnGateUi,
+  reduceBeginAssistantRequest,
   reduceAssistantEmission,
+  reduceFinishAssistantRequest,
+  reduceRegisterAssistantFinalize,
   reduceUserTurn,
+  reduceVisibleAssistantCommit,
+  selectActiveAssistantRequestId,
+  selectHasVisibleAssistantCommit,
 } from "../lib/session/session-state-contract.ts";
 
 test("session state contract reduces user turn atomically", () => {
@@ -61,3 +67,69 @@ test("session state contract assistant emission increments turn ids and updates 
   assert.match(state.workingMemory.last_assistant_commitment, /hold still for 30 minutes/i);
 });
 
+test("session state contract keeps assistant request ownership in one runtime state", () => {
+  let state = createSessionStateContract("contract-request-runtime");
+  state = reduceUserTurn(state, {
+    text: "how are you today?",
+    nowMs: 1_000,
+  }).next;
+
+  const started = reduceBeginAssistantRequest(state, {
+    kind: "turn",
+    sourceUserMessageId: 1,
+    requestId: "req-1",
+  });
+  assert.equal(started.decision.allow, true);
+  state = started.next;
+  assert.equal(selectActiveAssistantRequestId(state, "turn", 1), "req-1");
+
+  state = reduceFinishAssistantRequest(state, {
+    kind: "turn",
+    sourceUserMessageId: 1,
+    requestId: "req-1",
+  });
+  assert.equal(selectActiveAssistantRequestId(state, "turn", 1), null);
+});
+
+test("session state contract blocks duplicate visible assistant commits on the same turn", () => {
+  let state = createSessionStateContract("contract-visible-commit");
+  state = reduceUserTurn(state, {
+    text: "how are you today?",
+    nowMs: 1_000,
+  }).next;
+
+  const first = reduceVisibleAssistantCommit(state, {
+    anchorUserMessageId: 1,
+    requestId: "req-1",
+    renderedText: "I'm good. Sharp, a little watchful. What about you?",
+    turnIdEstimate: 1,
+    committedAtMs: 1_001,
+    generationPath: "model",
+  });
+  assert.equal(first.decision.allow, true);
+  state = first.next;
+  assert.equal(selectHasVisibleAssistantCommit(state, 1), true);
+
+  const second = reduceVisibleAssistantCommit(state, {
+    anchorUserMessageId: 1,
+    requestId: "req-2",
+    renderedText: "Enough hovering, pet. Tell me what you actually want.",
+    turnIdEstimate: 1,
+    committedAtMs: 1_002,
+    generationPath: "fallback",
+  });
+  assert.equal(second.decision.allow, false);
+  assert.equal(second.decision.reason, "second_visible_reply_same_turn");
+});
+
+test("session state contract finalize registration is idempotent per request", () => {
+  let state = createSessionStateContract("contract-finalize");
+
+  const first = reduceRegisterAssistantFinalize(state, "req-1");
+  assert.equal(first.decision.allow, true);
+  state = first.next;
+
+  const second = reduceRegisterAssistantFinalize(state, "req-1");
+  assert.equal(second.decision.allow, false);
+  assert.equal(second.decision.reason, "duplicate_finalize");
+});

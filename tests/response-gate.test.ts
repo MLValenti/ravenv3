@@ -669,6 +669,27 @@ test("response gate accepts how-are-you reply as aligned social answer", () => {
   assert.match(result.text, /sharp enough|why you're here/i);
 });
 
+test("response gate accepts a natural smalltalk answer without stale thread poisoning", () => {
+  const result = applyResponseGate({
+    text: "I'm good today. A little sharp, a little watchful. What about you?",
+    userText: "how are you today?",
+    dialogueAct: "user_question",
+    lastAssistantText: "What would make you a better sub to me?",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "normal_chat",
+      topic_type: "general_request",
+      topic_locked: false,
+      agreed_goal: "none",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, false);
+  assert.equal(result.reason, "accepted");
+  assert.match(result.text, /i(?:'m| am) good today|sharp|watchful|what about you/i);
+});
+
 test("response gate replaces duplicate output with a fallback when needed", () => {
   const routed = classifyDialogueRoute({
     text: "lets play a game",

@@ -292,7 +292,7 @@ export function isNormalChatRequest(text: string): boolean {
   if (!normalized) {
     return false;
   }
-  return /\b(just chat|let'?s chat|talk normally|talk for a bit|switch topics|talk about something else|how are you|what do you think)\b/i.test(
+  return /\b(just chat|let'?s chat|talk normally|talk for a bit|switch topics|talk about something else|how are you|how are you doing|how's it going|hows it going|you good|what'?s up|whats up|what do you think)\b/i.test(
     normalized,
   );
 }

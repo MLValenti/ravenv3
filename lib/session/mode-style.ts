@@ -138,7 +138,7 @@ export function buildOpenChatGreetingForInput(text: string): string {
 }
 
 export function buildHowAreYouOpenReply(): string {
-  return "Sharp enough. Now tell me why you're here.";
+  return "I'm good. Sharp, a little watchful. What about you?";
 }
 
 export function buildOpenChatNudge(): string {

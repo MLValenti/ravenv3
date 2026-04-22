@@ -123,7 +123,7 @@ export const CONVERSATIONAL_REGRESSION_SCENARIOS: RegressionScenario[] = [
           shouldAnswerQuestion: true,
           maxQuestions: 0,
           stateAfterTurn: {
-            currentMode: "question_answering",
+            currentMode: "normal_chat",
             importantEntityIncludes: "work",
           },
         },
@@ -567,7 +567,7 @@ export const CONVERSATIONAL_REGRESSION_SCENARIOS: RegressionScenario[] = [
           shouldAnswerQuestion: true,
           maxQuestions: 0,
           stateAfterTurn: {
-            currentMode: "question_answering",
+            currentMode: "normal_chat",
           },
         },
       },

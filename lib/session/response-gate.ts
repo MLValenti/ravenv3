@@ -1658,7 +1658,9 @@ function isDialogueActAligned(input: ResponseGateInput, text: string): boolean {
       }
     }
     if (/\bhow are you(?: today)?\b/i.test(user)) {
-      return /\b(i am good|sharp|awake|paying attention|on yours)\b/i.test(normalized);
+      return /\b(i(?:'m| am) (?:good|okay|ok|fine|well)|sharp|watchful|awake|paying attention|on yours|what about you)\b/i.test(
+        normalized,
+      );
     }
     if (isBareOpinionFollowUp(input.userText) && input.lastAssistantText) {
       return /\b(hesitation|truth was in the last line|more exposed than you meant|something real under it|actually change you)\b/i.test(

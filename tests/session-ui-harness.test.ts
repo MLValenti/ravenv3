@@ -563,7 +563,7 @@ test("ui harness how-are-you gets a human status reply instead of scaffold langu
   const reply = applyUserTurn(state, "how are you");
   assert.match(reply, /i am good|sharp|paying attention|what is on yours/i);
   assert.doesNotMatch(reply, /live hinge|outline|start talking|state the angle cleanly/i);
-  assert.equal(state.scene.interaction_mode, "question_answering");
+  assert.equal(state.scene.interaction_mode, "normal_chat");
 });
 
 test("ui harness basic question gets a direct open-chat answer path", () => {
@@ -628,6 +628,67 @@ test("ui harness short clarification turn emits one clarification family only", 
   assert.equal(state.conversation?.pending_user_request, "none");
   assert.equal(state.conversation?.last_satisfied_request, "none");
   assert.equal(state.conversation?.open_loops.length, 0);
+});
+
+test("ui harness fresh how-are-you question overrides stale better-sub residue", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-better-sub-then-how-are-you"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-better-sub-then-how-are-you"),
+    memory: createSessionMemory(),
+  };
+
+  applyUserTurn(state, "what would make me a better sub?");
+  const reply = applyUserTurn(state, "how are you today?");
+
+  assert.match(reply, /\b(i(?:'m| am) good|sharp|watchful|what about you|on yours)\b/i);
+  assert.equal(state.scene.interaction_mode, "normal_chat");
+  assert.equal(state.conversation?.current_mode, "normal_chat");
+  assert.equal(state.conversation?.active_topic, "none");
+  assert.equal(state.conversation?.active_thread, "open_chat");
+  assert.equal(state.conversation?.pending_user_request, "none");
+  assert.equal(state.conversation?.open_loops.length, 0);
+  assert.equal(state.conversation?.important_entities.includes("today"), false);
+});
+
+test("ui harness meta complaint keeps the original missed smalltalk question live", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-meta-complaint-keeps-original-question"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-meta-complaint-keeps-original-question"),
+    memory: createSessionMemory(),
+  };
+
+  state.conversation = noteConversationUserTurn(state.conversation, {
+    text: "how are you today?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+  reconcileHarnessScene(state);
+
+  state.conversation = noteConversationAssistantTurn(state.conversation, {
+    text: "Keep going.",
+    ravenIntent: "respond",
+    nowMs: 2,
+  });
+  reconcileHarnessScene(state);
+
+  state.conversation = noteConversationUserTurn(state.conversation, {
+    text: "i asked you that?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 3,
+  });
+  reconcileHarnessScene(state);
+
+  assert.equal(state.conversation.pending_user_request, "how are you today?");
+  assert.deepEqual(state.conversation.unanswered_questions, ["how are you today?"]);
+  assert.deepEqual(state.conversation.open_loops, ["how are you today?"]);
+  assert.match(state.conversation.repair_context, /source=previous_assistant/i);
+  assert.equal(state.scene.interaction_mode, state.conversation.current_mode);
 });
 
 test("ui harness short follow-up uses the recent question context and does not reset", () => {
@@ -1244,7 +1305,7 @@ test("ui harness sustains a six-turn greeting to training conversation without w
   const replies = turns.map((turn) => applyUserTurn(state, turn));
 
   assert.match(replies[0] ?? "", /enough hovering|what you actually want|there you are|chat, a plan, or a game/i);
-  assert.match(replies[1] ?? "", /sharp enough|why you're here/i);
+  assert.match(replies[1] ?? "", /i(?:'m| am) good|sharp|watchful|what about you/i);
   assert.match(
     replies[2] ?? "",
     /training|obedience|drill|one clean sentence|permission|cuffs|collar|plug|rule/i,

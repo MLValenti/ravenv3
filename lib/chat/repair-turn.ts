@@ -121,6 +121,13 @@ export function detectRepairTurnKind(text: string): RepairTurnKind | null {
       ? "clarify_referent"
       : "clarify_meaning";
   }
+  if (
+    /^(?:i asked you that|that is what i asked|that's what i asked|i already asked that|i just asked that|you skipped my question)$/.test(
+      normalized,
+    )
+  ) {
+    return "clarify_meaning";
+  }
   return null;
 }
 

@@ -169,12 +169,12 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
     title: "Toy chat stays conversational",
     description: "Toy/device chat should not silently become a task unless the user asks for one.",
     turns: [
-      {
-        user: "what do you think about toys",
-        simulatedModelReply: "Useful when they fit the person instead of replacing the dynamic. I care more about intention, control, and how it changes the exchange than the toy by itself.",
-        expect: {
-          expectedInteractionMode: "question_answering",
-          blockedPhrases: [
+        {
+          user: "what do you think about toys",
+          simulatedModelReply: "Useful when they fit the person instead of replacing the dynamic. I care more about intention, control, and how it changes the exchange than the toy by itself.",
+          expect: {
+            expectedInteractionMode: "normal_chat",
+            blockedPhrases: [
             "here is your task",
             "start now",
             "check in once halfway through",
@@ -515,11 +515,11 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
           requireSingleWinner: true,
         },
       },
-      {
-        user: "what do you think",
-        expect: {
-          expectedInteractionMode: "question_answering",
-          blockedPhrases: [
+        {
+          user: "what do you think",
+          expect: {
+            expectedInteractionMode: "normal_chat",
+            blockedPhrases: [
             "what would you like to talk about next",
             "can you tell me more about that",
             "here is your task",
@@ -1795,12 +1795,12 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
           requireSingleWinner: true,
         },
       },
-      {
-        user: "how are you today",
-        expect: {
-          expectedInteractionMode: "question_answering",
-          expectedConversationMode: "question_answering",
-          blockedPhrases: [
+        {
+          user: "how are you today",
+          expect: {
+            expectedInteractionMode: "normal_chat",
+            expectedConversationMode: "normal_chat",
+            blockedPhrases: [
             "tell me more about keep",
             "tell me more about happens",
             "start talking",
@@ -2752,6 +2752,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
   },
   {
     id: "training_follow_up_thread_stays_grounded",
+    category: "toy_chat",
     title: "Training follow-up thread stays grounded",
     description:
       "A realistic training conversation should answer on-the-fly follow-up questions from the active training thread instead of falling into generic fallback or weak anchors.",
@@ -2790,6 +2791,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
   },
   {
     id: "training_follow_up_handles_mixed_item_questions",
+    category: "toy_chat",
     title: "Training follow-up handles mixed-item questions",
     description:
       "A training thread should stay coherent when the user asks on-the-fly whether a second inventory item fits the current drill.",
@@ -2832,6 +2834,7 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
   },
   {
     id: "task_follow_up_questions_stay_grounded",
+    category: "task",
     title: "Task follow-up questions stay grounded",
     description:
       "Task follow-up questions should answer from the active task instead of resetting or using generic fallback.",

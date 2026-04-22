@@ -43,6 +43,8 @@ const LOW_VALUE_ENTITY_TOKENS = new Set([
   "question",
   "talk",
   "thread",
+  "asked",
+  "today",
 ]);
 
 const DIRECT_SELF_DISCLOSURE_PATTERN =
@@ -118,6 +120,34 @@ const PREFERENCE_DOMAIN_GROUPS: Array<{ pattern: RegExp; aliases: RegExp[] }> = 
 
 function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isSocialStatusQuestion(text: string): boolean {
+  const normalized = normalize(text);
+  if (!normalized) {
+    return false;
+  }
+  return /^(?:how are you(?: doing)?(?: today)?|how(?:'s| is) it going(?: today)?|you good|what(?:'s| is) up)\??$/.test(
+    normalized,
+  );
+}
+
+function isSocialStatusAnswer(text: string): boolean {
+  const normalized = normalize(text);
+  if (!normalized) {
+    return false;
+  }
+  if (isExplicitBoundaryAnswer(normalized)) {
+    return true;
+  }
+  return (
+    /\b(i(?:'m| am)|doing|feeling)\s+(?:good|okay|ok|fine|well|sharp|watchful|awake|steady|tired|rough|better)\b/i.test(
+      normalized,
+    ) ||
+    /\b(a little|a bit)\s+(?:sharp|watchful|tired|off|better|rough)\b/i.test(normalized) ||
+    /\bwhat about you\b/i.test(normalized) ||
+    /\bon yours\b/i.test(normalized)
+  );
 }
 
 export function isQuestionText(text: string): boolean {
@@ -254,6 +284,9 @@ export function questionSatisfiedMeaningfully(questionText: string, answerText: 
   }
   if (detectRepairTurnKind(normalizedQuestion)) {
     return true;
+  }
+  if (isSocialStatusQuestion(normalizedQuestion)) {
+    return isSocialStatusAnswer(normalizedAnswer);
   }
   if (isDirectAssistantSelfAnswer(normalizedQuestion, normalizedAnswer)) {
     return true;

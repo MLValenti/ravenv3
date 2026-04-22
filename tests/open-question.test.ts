@@ -179,7 +179,7 @@ test("broad continuation variants use context instead of literal deictic words",
 test("how are you stays human instead of falling into process scaffolding", () => {
   const text = buildHumanQuestionFallback("how are you?", "dominant");
 
-  assert.match(text, /sharp enough|why you're here/i);
+  assert.match(text, /i(?:'m| am) good|sharp|watchful|what about you/i);
   assert.doesNotMatch(text, /live hinge|outline|start with/i);
 });
 

@@ -196,3 +196,50 @@ test("non-hard-locked task execution does not bypass the model without a scaffol
 
   assert.equal(bypass, false);
 });
+
+test("fresh casual question releases stale game execution lock", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "game_execution",
+      topic_locked: true,
+      scene_type: "game",
+      interaction_mode: "game",
+    }),
+    dialogueAct: "user_question",
+    hasDeterministicCandidate: true,
+    latestUserText: "how are you today?",
+  });
+
+  assert.equal(bypass, false);
+});
+
+test("fresh casual question releases stale profile-building lock", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "general_request",
+      topic_locked: false,
+      interaction_mode: "profile_building",
+    }),
+    dialogueAct: "user_question",
+    hasDeterministicCandidate: true,
+    latestUserText: "what's up?",
+  });
+
+  assert.equal(bypass, false);
+});
+
+test("actual game move still bypasses inside active game execution", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "game_execution",
+      topic_locked: true,
+      scene_type: "game",
+      interaction_mode: "game",
+    }),
+    dialogueAct: "answer_activity_choice",
+    hasDeterministicCandidate: true,
+    latestUserText: "rock",
+  });
+
+  assert.equal(bypass, true);
+});

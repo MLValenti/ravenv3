@@ -44,6 +44,7 @@ import {
   type ConversationStateSnapshot,
 } from "@/lib/chat/conversation-state";
 import { questionSatisfiedMeaningfully } from "@/lib/chat/question-satisfaction";
+import { detectRepairTurnKind } from "@/lib/chat/repair-turn";
 import { applyPlannerConstraints } from "@/lib/session/plan-constraints";
 import { PacingController, type Pace } from "@/lib/session/pacing";
 import { shouldStopForTrackingLost } from "@/lib/session/tracking-watchdog";
@@ -137,7 +138,6 @@ import { inspectGameStartContract } from "@/lib/session/game-start-contract";
 import {
   chooseDeliveredAssistantText,
   sanitizeSessionVisibleAssistantText,
-  shouldAllowVisibleAssistantCommit,
   shouldPreferServerTurnContract,
   shouldPreserveQueuedUserTurnOnSessionStart,
   shouldRecoverSkippedAssistantRender,
@@ -256,21 +256,16 @@ import {
   type TurnGateState,
 } from "@/lib/session/turn-gate";
 import {
-  beginTurnRequest,
-  canCommitAssistantReplay,
-  canCommitAnchoredAssistantTurn,
-  canCommitAssistantTurn,
-  finishTurnRequest,
-  markAssistantReplay,
-  markAssistantTurnCommitted,
-  normalizeAssistantCommitText,
-  registerStreamFinalize,
-} from "@/lib/session/assistant-turn-guard";
-import {
   createSessionStateContract,
   projectTurnGateUi,
+  reduceBeginAssistantRequest,
   reduceAssistantEmission,
+  reduceFinishAssistantRequest,
+  reduceRegisterAssistantFinalize,
   reduceUserTurn,
+  reduceVisibleAssistantCommit,
+  selectActiveAssistantRequestId,
+  selectHasVisibleAssistantCommit,
   type SessionStateContract,
 } from "@/lib/session/session-state-contract";
 import {
@@ -1211,7 +1206,7 @@ function fallbackRespondText(intent: UserIntent, userText: string, memorySummary
   if (intent === "user_short_follow_up") {
     return buildShortClarificationReply({
       userText,
-      interactionMode: "question_answering",
+      interactionMode: detectRepairTurnKind(userText) ? "normal_chat" : "question_answering",
     });
   }
   if (intent === "user_refusal_or_confusion") {
@@ -1764,16 +1759,9 @@ export default function SessionPage() {
   const recentVerifySummariesRef = useRef<string[]>([]);
   const pendingVerificationRef = useRef<PendingVerification | null>(null);
   const activeAssistantTraceRef = useRef<AssistantTraceMeta | null>(null);
-  const inFlightTurnRequestRef = useRef<Map<number, string>>(new Map());
-  const inFlightModelRequestRef = useRef<Map<number, string>>(new Map());
-  const committedAssistantTurnRef = useRef<Map<number, { requestId: string; normalizedText: string }>>(
-    new Map(),
+  const assistantRuntimeRef = useRef<SessionStateContract["assistantRuntime"]>(
+    createSessionStateContract().assistantRuntime,
   );
-  const visibleAssistantTurnRef = useRef<Map<number, string>>(new Map());
-  const lastAssistantReplayRef = useRef<{ anchorUserMessageId: number; normalizedText: string } | null>(
-    null,
-  );
-  const finalizedRequestIdsRef = useRef<Set<string>>(new Set());
   const lastDeviceExecutionSummaryRef = useRef<string | null>(null);
   const clarifiedMessageIdRef = useRef<number | null>(null);
   const awaitingUserSinceRef = useRef<number | null>(null);
@@ -1995,6 +1983,7 @@ export default function SessionPage() {
       turnGate: turnGateRef.current,
       workingMemory: workingMemoryRef.current,
       sessionTopic: sessionTopicRef.current,
+      assistantRuntime: assistantRuntimeRef.current,
     };
   }
 
@@ -2002,10 +1991,70 @@ export default function SessionPage() {
     turnGateRef.current = next.turnGate;
     workingMemoryRef.current = next.workingMemory;
     sessionTopicRef.current = next.sessionTopic;
+    assistantRuntimeRef.current = next.assistantRuntime;
     const projected = projectTurnGateUi(next.turnGate);
     setAwaitingUser(projected.awaitingUser);
     setLastUserMessageId(projected.lastUserMessageId);
     setLastEmittedTurnId(projected.lastAssistantTurnId);
+  }
+
+  function beginManagedAssistantRequest(
+    kind: "turn" | "model",
+    sourceUserMessageId: number,
+    requestId: string,
+  ) {
+    const reduced = reduceBeginAssistantRequest(currentContractState(), {
+      kind,
+      sourceUserMessageId,
+      requestId,
+    });
+    applyContractState(reduced.next);
+    return reduced.decision;
+  }
+
+  function finishManagedAssistantRequest(
+    kind: "turn" | "model",
+    sourceUserMessageId: number,
+    requestId: string,
+  ) {
+    applyContractState(
+      reduceFinishAssistantRequest(currentContractState(), {
+        kind,
+        sourceUserMessageId,
+        requestId,
+      }),
+    );
+  }
+
+  function registerManagedAssistantFinalize(requestId: string) {
+    const reduced = reduceRegisterAssistantFinalize(currentContractState(), requestId);
+    applyContractState(reduced.next);
+    return reduced.decision;
+  }
+
+  function hasManagedVisibleAssistantCommit(sourceUserMessageId: number): boolean {
+    return selectHasVisibleAssistantCommit(currentContractState(), sourceUserMessageId);
+  }
+
+  function getManagedAssistantRequestId(
+    kind: "turn" | "model",
+    sourceUserMessageId: number,
+  ): string | null {
+    return selectActiveAssistantRequestId(currentContractState(), kind, sourceUserMessageId);
+  }
+
+  function commitManagedVisibleAssistantTurn(input: {
+    anchorUserMessageId: number;
+    requestId: string | null | undefined;
+    renderedText: string;
+    turnIdEstimate: number;
+    committedAtMs: number;
+    generationPath: string;
+    recovered?: boolean;
+  }) {
+    const reduced = reduceVisibleAssistantCommit(currentContractState(), input);
+    applyContractState(reduced.next);
+    return reduced.decision;
   }
 
   function syncConversationState(next: ConversationStateSnapshot) {
@@ -3388,7 +3437,6 @@ export default function SessionPage() {
     actionParsed: ReturnType<typeof parseDeviceActionRequest>;
     traceMeta: AssistantTraceMeta | null;
     anchorUserMessageId: number;
-    alreadyCommittedNormalizedText?: string | null;
   }): boolean {
     const {
       text,
@@ -3397,30 +3445,7 @@ export default function SessionPage() {
       actionParsed,
       traceMeta,
       anchorUserMessageId,
-      alreadyCommittedNormalizedText,
     } = input;
-    if (alreadyCommittedNormalizedText && anchorUserMessageId > 0) {
-      markAssistantTurnCommitted(
-        committedAssistantTurnRef.current,
-        {
-          requestId: traceMeta?.requestId?.trim() || `anchored-${anchorUserMessageId}`,
-          sourceUserMessageId: anchorUserMessageId,
-        },
-        alreadyCommittedNormalizedText,
-      );
-    }
-    if (speechText || displayText) {
-      lastAssistantReplayRef.current = markAssistantReplay(
-        anchorUserMessageId,
-        normalizeAssistantCommitText(speechText || displayText),
-      );
-      if (anchorUserMessageId > 0) {
-        visibleAssistantTurnRef.current.set(
-          anchorUserMessageId,
-          normalizeAssistantCommitText(speechText || displayText),
-        );
-      }
-    }
     if (displayText) {
       setRavenLines((current) => trimToSize([...current, displayText], 20));
       recentRavenOutputsRef.current = trimToSize(
@@ -3580,7 +3605,7 @@ export default function SessionPage() {
     committed: boolean;
     reason: string;
     hasRenderableText: boolean;
-    renderedText: string;
+      renderedText: string;
   } {
     const effectiveTrace = traceMeta ?? activeAssistantTraceRef.current;
     const renderable = prepareSessionVisibleOutput(text, effectiveTrace);
@@ -3598,74 +3623,15 @@ export default function SessionPage() {
           }
         : null,
     );
-    const visibleDecision = shouldAllowVisibleAssistantCommit({
-      sourceUserMessageId: anchorUserMessageId,
-      normalizedText: normalizeAssistantCommitText(commitText),
-      existingVisibleNormalizedText: visibleAssistantTurnRef.current.get(anchorUserMessageId) ?? null,
-    });
-    if (commitText && !visibleDecision.allow) {
-      pushTurnTrace("turn.append.blocked", {
-        request_id: effectiveTrace?.requestId ?? "none",
-        session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
-        user_message_id: anchorUserMessageId,
-        step_id: effectiveTrace?.stepId ?? "none",
-        reason: visibleDecision.reason,
-        source: effectiveTrace?.source ?? "scripted",
-        generation_path: effectiveTrace?.generationPath ?? "local",
-        committed_text: commitText,
-        at_ms: now(),
-      });
-      return {
-        committed: false,
-        reason: `visible_blocked:${visibleDecision.reason}`,
-        hasRenderableText,
-        renderedText: renderable.speechText || renderable.displayText,
-      };
-    }
-    if (commitText) {
-      const replayDecision = canCommitAssistantReplay(
-        lastAssistantReplayRef.current,
-        anchorUserMessageId,
-        commitText,
-      );
-      if (!replayDecision.allow) {
-        pushTurnTrace("turn.append.blocked", {
-          request_id: effectiveTrace?.requestId ?? "none",
-          session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
-          user_message_id: anchorUserMessageId,
-          step_id: effectiveTrace?.stepId ?? "none",
-          reason: replayDecision.reason,
-          source: effectiveTrace?.source ?? "scripted",
-          generation_path: effectiveTrace?.generationPath ?? "local",
-          committed_text: commitText,
-          at_ms: now(),
-        });
-        return {
-          committed: false,
-          reason: `replay_blocked:${replayDecision.reason}`,
-          hasRenderableText,
-          renderedText: renderable.speechText || renderable.displayText,
-        };
-      }
-    }
-    let committedNormalizedText: string | null = null;
     if (commitText && anchorUserMessageId > 0) {
-      const commitDecision =
-        effectiveTrace && effectiveTrace.sourceUserMessageId > 0
-          ? canCommitAssistantTurn(
-              committedAssistantTurnRef.current,
-              {
-                requestId: effectiveTrace.requestId,
-                sourceUserMessageId: effectiveTrace.sourceUserMessageId,
-              },
-              commitText,
-            )
-          : canCommitAnchoredAssistantTurn(
-              committedAssistantTurnRef.current,
-              anchorUserMessageId,
-              effectiveTrace?.requestId ?? null,
-              commitText,
-            );
+      const commitDecision = commitManagedVisibleAssistantTurn({
+        anchorUserMessageId,
+        requestId: effectiveTrace?.requestId ?? null,
+        renderedText: commitText,
+        turnIdEstimate: effectiveTrace?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
+        committedAtMs: now(),
+        generationPath: effectiveTrace?.generationPath ?? "local",
+      });
       if (!commitDecision.allow) {
         pushTurnTrace("turn.append.blocked", {
           request_id: effectiveTrace?.requestId ?? "none",
@@ -3686,7 +3652,6 @@ export default function SessionPage() {
           renderedText: renderable.speechText || renderable.displayText,
         };
       }
-      committedNormalizedText = commitDecision.normalizedText;
       pushTurnTrace("turn.append.committed", {
         request_id: effectiveTrace?.requestId ?? `anchored-${anchorUserMessageId}`,
         session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
@@ -3713,7 +3678,6 @@ export default function SessionPage() {
         actionParsed: renderable.actionParsed,
         traceMeta: effectiveTrace,
         anchorUserMessageId,
-        alreadyCommittedNormalizedText: committedNormalizedText,
       });
     if (committed) {
       updateSessionTurnLog(anchorUserMessageId, (entry) =>
@@ -3756,27 +3720,37 @@ export default function SessionPage() {
           }
         : null,
     );
-    const visibleDecision = shouldAllowVisibleAssistantCommit({
-      sourceUserMessageId: anchorUserMessageId,
-      normalizedText: normalizeAssistantCommitText(
-        renderable.speechText || renderable.displayText,
-      ),
-      existingVisibleNormalizedText: visibleAssistantTurnRef.current.get(anchorUserMessageId) ?? null,
-    });
-    if (!visibleDecision.allow) {
+    if (hasManagedVisibleAssistantCommit(anchorUserMessageId)) {
       pushTurnTrace("turn.append.recovery_blocked", {
         request_id: traceMeta?.requestId ?? "none",
         session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
         user_message_id: anchorUserMessageId,
         step_id: traceMeta?.stepId ?? "none",
-        reason: visibleDecision.reason,
+        reason: "visible_commit_already_present",
         at_ms: now(),
       });
       return false;
     }
-    const normalizedText = normalizeAssistantCommitText(
-      renderable.speechText || renderable.displayText,
-    );
+    const commitDecision = commitManagedVisibleAssistantTurn({
+      anchorUserMessageId,
+      requestId: traceMeta?.requestId ?? null,
+      renderedText: renderable.speechText || renderable.displayText,
+      turnIdEstimate: traceMeta?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
+      committedAtMs: now(),
+      generationPath: traceMeta?.generationPath ?? "recovery",
+      recovered: true,
+    });
+    if (!commitDecision.allow) {
+      pushTurnTrace("turn.append.recovery_blocked", {
+        request_id: traceMeta?.requestId ?? "none",
+        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
+        user_message_id: anchorUserMessageId,
+        step_id: traceMeta?.stepId ?? "none",
+        reason: commitDecision.reason,
+        at_ms: now(),
+      });
+      return false;
+    }
     pushTurnTrace("turn.append.recovered", {
       request_id: traceMeta?.requestId ?? "none",
       session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
@@ -3795,7 +3769,6 @@ export default function SessionPage() {
       actionParsed: renderable.actionParsed,
       traceMeta,
       anchorUserMessageId,
-      alreadyCommittedNormalizedText: normalizedText || null,
     });
     if (recovered) {
       updateSessionTurnLog(anchorUserMessageId, (entry) =>
@@ -3854,7 +3827,7 @@ export default function SessionPage() {
         sourceUserMessageId,
         lastAssistantUserMessageId: turnGateRef.current.lastAssistantUserMessageId,
         visibleAssistantAlreadyCommitted:
-          (visibleAssistantTurnRef.current.get(sourceUserMessageId) ?? null) !== null,
+          hasManagedVisibleAssistantCommit(sourceUserMessageId),
       })
           ? recoverSkippedAssistantRender(
               event.text,
@@ -4093,11 +4066,6 @@ export default function SessionPage() {
     setLastUserResponse(text);
     setUserReplied(true);
     const requestId = createRequestId("turn");
-    lastAssistantReplayRef.current = null;
-    committedAssistantTurnRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
-    visibleAssistantTurnRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
-    inFlightTurnRequestRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
-    inFlightModelRequestRef.current.delete(reducedUserTurn.next.turnGate.lastUserMessageId);
     pendingUserTurnRef.current = {
       messageId: reducedUserTurn.next.turnGate.lastUserMessageId,
       requestId,
@@ -4200,7 +4168,7 @@ export default function SessionPage() {
     requestId: string,
     sourceUserMessageId: number,
   ): Promise<string> {
-    const finalizeGuard = registerStreamFinalize(finalizedRequestIdsRef.current, requestId);
+    const finalizeGuard = registerManagedAssistantFinalize(requestId);
     if (!finalizeGuard.allow) {
       pushTurnTrace("turn.stream.duplicate_finalize_blocked", {
         request_id: requestId,
@@ -4295,11 +4263,7 @@ export default function SessionPage() {
     if (!consent || !settings.ollamaBaseUrl || !settings.ollamaModel) {
       return null;
     }
-    const modelRequestGuard = beginTurnRequest(
-      inFlightModelRequestRef.current,
-      sourceUserMessageId,
-      requestId,
-    );
+    const modelRequestGuard = beginManagedAssistantRequest("model", sourceUserMessageId, requestId);
     if (!modelRequestGuard.allow) {
       pushTurnTrace("turn.model.blocked", {
         request_id: requestId,
@@ -4415,7 +4379,7 @@ export default function SessionPage() {
     }).catch(() => null);
 
     if (!response?.ok) {
-      finishTurnRequest(inFlightModelRequestRef.current, sourceUserMessageId, requestId);
+      finishManagedAssistantRequest("model", sourceUserMessageId, requestId);
       return null;
     }
     const generationPath = response.headers.get("x-raven-generation-path")?.trim() || "model";
@@ -4503,7 +4467,7 @@ export default function SessionPage() {
       void refreshPromptDebug().catch(() => undefined);
     }
     if (response.headers.get("x-raven-noop") === "1") {
-      finishTurnRequest(inFlightModelRequestRef.current, sourceUserMessageId, requestId);
+      finishManagedAssistantRequest("model", sourceUserMessageId, requestId);
       return {
         node: {
           id: `respond-noop-${sourceUserMessageId}`,
@@ -4532,7 +4496,7 @@ export default function SessionPage() {
     }
 
     const text = await readStreamedAssistantText(response, requestId, sourceUserMessageId);
-    finishTurnRequest(inFlightModelRequestRef.current, sourceUserMessageId, requestId);
+    finishManagedAssistantRequest("model", sourceUserMessageId, requestId);
     if (text === SESSION_CHAT_NOOP_SENTINEL) {
       return {
         node: {
@@ -5294,7 +5258,7 @@ export default function SessionPage() {
     if (!recovery.text) {
       return false;
     }
-    finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+    finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
     activeAssistantTraceRef.current = {
       requestId: pendingTurn.requestId,
       sessionId: turnGateRef.current.sessionId,
@@ -5567,8 +5531,8 @@ export default function SessionPage() {
     if (!pendingTurn) {
       return;
     }
-    const turnRequestGuard = beginTurnRequest(
-      inFlightTurnRequestRef.current,
+    const turnRequestGuard = beginManagedAssistantRequest(
+      "turn",
       pendingTurn.messageId,
       pendingTurn.requestId,
     );
@@ -5596,7 +5560,7 @@ export default function SessionPage() {
     if (!prepared) {
       lastHandledUserMessageIdRef.current = pendingTurn.messageId;
       pendingUserTurnRef.current = null;
-      finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+      finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
       return;
     }
     const selectedNode = prepared.node;
@@ -5604,7 +5568,7 @@ export default function SessionPage() {
     const promptText = nodePromptText(selectedNode);
     const emitDecision = canEmitAssistant(turnGateRef.current, selectedNode.id, promptText);
     if (!emitDecision.allow) {
-      finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+      finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
       return;
     }
 
@@ -5646,7 +5610,7 @@ export default function SessionPage() {
         sourceUserMessageId: pendingTurn.messageId,
         lastAssistantUserMessageId: turnGateRef.current.lastAssistantUserMessageId,
         visibleAssistantAlreadyCommitted:
-          (visibleAssistantTurnRef.current.get(pendingTurn.messageId) ?? null) !== null,
+          hasManagedVisibleAssistantCommit(pendingTurn.messageId),
       })
     ) {
       recoveredRender = recoverSkippedAssistantRender(
@@ -5677,7 +5641,7 @@ export default function SessionPage() {
       setMessage("Raven generated a reply, but rendering was skipped. Check the trace for details.");
       lastHandledUserMessageIdRef.current = pendingTurn.messageId;
       pendingUserTurnRef.current = null;
-      finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+      finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
       return;
     }
     activeAssistantTraceRef.current = null;
@@ -5726,7 +5690,7 @@ export default function SessionPage() {
     syncSessionPhase(updatedContract.turnGate);
     lastHandledUserMessageIdRef.current = pendingTurn.messageId;
     pendingUserTurnRef.current = null;
-    finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+    finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
   }
 
   async function runStandalonePendingTurn() {
@@ -5894,8 +5858,7 @@ export default function SessionPage() {
     clarifiedMessageIdRef.current = null;
     activeAskSlotRef.current = null;
     recentVerifySummariesRef.current = [];
-    lastAssistantReplayRef.current = null;
-    visibleAssistantTurnRef.current.clear();
+    assistantRuntimeRef.current = createSessionStateContract().assistantRuntime;
     recentDialogueRef.current = preserveQueuedUserTurn ? preservedRecentDialogue : [];
     topicAnchorRef.current = preserveQueuedUserTurn ? preservedTopicAnchor : null;
     setDynamicStepCount(0);
@@ -5993,8 +5956,8 @@ export default function SessionPage() {
         });
         setLastDialogueAct(dialogueDecision.act);
 
-        const turnRequestGuard = beginTurnRequest(
-          inFlightTurnRequestRef.current,
+        const turnRequestGuard = beginManagedAssistantRequest(
+          "turn",
           pendingTurn.messageId,
           pendingTurn.requestId,
         );
@@ -6099,7 +6062,7 @@ export default function SessionPage() {
         }
 
         if (!selectedNode) {
-          finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+          finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
           if (
             dialogueDecision.act === "answer_user_question" ||
             dialogueDecision.act === "clarify_once" ||
@@ -6187,7 +6150,7 @@ export default function SessionPage() {
           });
         } finally {
           activeAssistantTraceRef.current = null;
-          finishTurnRequest(inFlightTurnRequestRef.current, pendingTurn.messageId, pendingTurn.requestId);
+          finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
         }
         if (!runtime.active || disposedRef.current) {
           return;
@@ -7340,7 +7303,7 @@ export default function SessionPage() {
         return;
       }
       if (now() - pendingTurn.acceptedAtMs >= 1500) {
-        const activeRequestId = inFlightTurnRequestRef.current.get(pendingTurn.messageId);
+        const activeRequestId = getManagedAssistantRequestId("turn", pendingTurn.messageId);
         if (activeRequestId === pendingTurn.requestId) {
           if (forceIdlePendingTurnRecovery(pendingTurn, "watchdog_timeout_recovered")) {
             return;
