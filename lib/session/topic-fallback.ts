@@ -47,7 +47,7 @@ export function buildTopicFallback(
 ): string {
   const conversationFallback = buildCoreConversationReply({
     userText,
-    currentTopic: workingMemory.session_topic?.label ?? sceneState?.agreed_goal ?? null,
+    currentTopic: workingMemory.session_topic?.summary ?? sceneState?.agreed_goal ?? null,
   });
   const topic = workingMemory.session_topic;
   if (topic?.topic_type === "game_selection" && topic.topic_state === "open") {
@@ -68,11 +68,11 @@ export function buildTopicFallback(
     return buildRelationalChatReply(userText);
   }
   if (isTopicInitiationRequest(userText)) {
-    return buildTopicInitiationReply({
-      userText,
-      currentTopic: topic?.label ?? null,
-      tone: "neutral",
-    });
+      return buildTopicInitiationReply({
+        userText,
+        currentTopic: topic?.summary ?? null,
+        tone: "neutral",
+      });
   }
   if (/\bwhat do you want (?:from me|me to do|to do)\b/i.test(userText)) {
     return buildHumanQuestionFallback(userText, "neutral", {

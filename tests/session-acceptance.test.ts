@@ -136,3 +136,31 @@ test("acceptance 5 inconclusive verification retries once then continues without
   const blocked = canEmitAssistant(gate, "verify-1", "Verification stayed inconclusive. Continuing.");
   assert.equal(blocked.allow, false);
 });
+
+test("acceptance 6 simple direct question gets a direct answer before any follow-up", () => {
+  const transcript = [
+    "User: how are you?",
+    "Raven: I'm good. Alert, steady, and paying attention. What about you?",
+  ];
+
+  assert.match(transcript[1], /\bi'?m good\b|\balert\b|\bsteady\b/i);
+  assert.doesNotMatch(
+    transcript[1],
+    /what would you like to talk about next|tell me more about that|ask the exact question/i,
+  );
+});
+
+test("acceptance 7 what do you mean clarifies the prior point instead of resetting the thread", () => {
+  const transcript = [
+    "Raven: The part that matters is whether the hesitation is real.",
+    "User: what do you mean?",
+    "Raven: I mean the hesitation tells me whether it actually costs you something.",
+  ];
+
+  assert.match(transcript[2], /\bi mean\b/i);
+  assert.match(transcript[2], /hesitation|costs you something/i);
+  assert.doesNotMatch(
+    transcript[2],
+    /what would you like to talk about next|ask the exact question|start talking/i,
+  );
+});

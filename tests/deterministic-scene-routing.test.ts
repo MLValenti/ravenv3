@@ -63,6 +63,21 @@ test("fresh direct question escapes stale locked task negotiation replay", () =>
   assert.equal(bypass, false);
 });
 
+test("stale task context does not steal a fresh casual turn", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "task_negotiation",
+      topic_locked: true,
+      interaction_mode: "task_planning",
+    }),
+    dialogueAct: "other",
+    hasDeterministicCandidate: true,
+    latestUserText: "how are you today?",
+  });
+
+  assert.equal(bypass, false);
+});
+
 test("fresh greeting escapes stale locked task negotiation replay", () => {
   const bypass = shouldBypassModelForSceneTurn({
     sceneState: sceneStatePatch({
@@ -208,6 +223,22 @@ test("fresh casual question releases stale game execution lock", () => {
     dialogueAct: "user_question",
     hasDeterministicCandidate: true,
     latestUserText: "how are you today?",
+  });
+
+  assert.equal(bypass, false);
+});
+
+test("stale game context does not steal a fresh casual turn", () => {
+  const bypass = shouldBypassModelForSceneTurn({
+    sceneState: sceneStatePatch({
+      topic_type: "game_execution",
+      topic_locked: true,
+      scene_type: "game",
+      interaction_mode: "game",
+    }),
+    dialogueAct: "other",
+    hasDeterministicCandidate: true,
+    latestUserText: "tell me more about you",
   });
 
   assert.equal(bypass, false);

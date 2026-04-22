@@ -182,16 +182,21 @@ async function runTaskUiSmoke(baseUrl: string) {
     await page.waitForFunction(() => {
       const schedule = document.querySelector<HTMLSelectElement>("#task-schedule");
       const days = document.querySelector<HTMLInputElement>("#task-days");
-      return schedule?.value === "daily" && Boolean(days) && days.offsetParent !== null;
+      return schedule?.value === "daily" && days !== null && days.offsetParent !== null;
     });
     await page.locator("#task-days").fill("1");
     await page.locator("#task-occurrences-per-day").fill("1");
     await page.getByRole("button", { name: "Create task" }).click();
 
-    const taskCard = page.locator(".task-card").filter({
-      has: page.getByText(taskTitle, { exact: true }),
-      has: page.getByRole("button", { name: "Submit progress" }),
-    }).first();
+    const taskCard = page
+      .locator(".task-card")
+      .filter({
+        has: page.getByText(taskTitle, { exact: true }),
+      })
+      .filter({
+        has: page.getByRole("button", { name: "Submit progress" }),
+      })
+      .first();
     await taskCard.waitFor({ state: "visible" });
 
     logStep("Submitting manual evidence");

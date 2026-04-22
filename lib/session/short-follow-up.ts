@@ -516,7 +516,7 @@ function buildDirectClarificationReply(
 
 function shouldPreferRepairReply(
   resolution: ReturnType<typeof resolveRepairTurn>,
-): boolean {
+): resolution is ReturnType<typeof resolveRepairTurn> & { reply: string } {
   if (!resolution.detected || !resolution.reply) {
     return false;
   }

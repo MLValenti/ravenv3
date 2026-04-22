@@ -1667,7 +1667,10 @@ export function noteSceneStateUserTurn(
     effectiveTopicType === "task_execution" && nextTaskProgress !== "completed"
       ? state.task_hard_lock_active && !shouldPauseActiveTask
       : false;
-  const taskSpecSceneFields = {
+  const taskSpecSceneFields: Pick<
+    TaskSpec,
+    "current_task_domain" | "locked_task_domain" | "can_replan_task" | "reason_for_lock"
+  > = {
     current_task_domain: effectiveTaskDomain,
     locked_task_domain:
       topicLocked &&

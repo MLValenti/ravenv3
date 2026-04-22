@@ -342,6 +342,20 @@ export function commitVisibleAssistantTurn(
     };
   }
 
+  if (
+    state.lastCommittedTurn &&
+    state.lastCommittedTurn.sourceUserMessageId > input.anchorUserMessageId
+  ) {
+    return {
+      next: state,
+      decision: {
+        allow: false,
+        reason: "older_than_last_committed_visible_turn",
+        normalizedText,
+      },
+    };
+  }
+
   const existingVisibleNormalizedText = state.visibleTurns.get(input.anchorUserMessageId) ?? null;
   if (existingVisibleNormalizedText) {
     return {

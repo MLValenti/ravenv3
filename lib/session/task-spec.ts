@@ -1959,12 +1959,12 @@ export function noteTaskSpecUserTurn(current: TaskSpec, input: TaskSpecUpdateInp
   const inventoryContext = resolveInventoryContext(
     input.inventory,
     inventoryContextSourceText,
-    nextRequestedDomain !== "none" ? nextRequestedDomain : input.currentTaskDomain,
+    nextRequestedDomain,
   );
   const selectedInventoryItem = findInventoryItemForTask(
     input.inventory ?? [],
     inventoryContextSourceText,
-    taskKindForDomain(nextRequestedDomain !== "none" ? nextRequestedDomain : input.currentTaskDomain),
+    taskKindForDomain(nextRequestedDomain),
   );
   const inventorySuggestedDomain = suggestedDomainFromInventoryItem(selectedInventoryItem);
   const correctedRequestedDomain =

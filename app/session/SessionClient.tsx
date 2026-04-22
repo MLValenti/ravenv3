@@ -138,6 +138,7 @@ import { inspectGameStartContract } from "@/lib/session/game-start-contract";
 import {
   chooseDeliveredAssistantText,
   sanitizeSessionVisibleAssistantText,
+  shouldAcceptAssistantTurnOwnership,
   shouldPreferServerTurnContract,
   shouldPreserveQueuedUserTurnOnSessionStart,
   shouldRecoverSkippedAssistantRender,
@@ -4566,7 +4567,28 @@ export default function SessionPage() {
         rawGameStartQuestionPresent,
         finalGameStartQuestionPresent,
       },
-    };
+      };
+  }
+
+  function shouldUseServerOwnedPendingTurnPath(): boolean {
+    return sceneStateRef.current.topic_type !== "verification_in_progress";
+  }
+
+  function shouldAllowLocalIdleRecoveryForPendingTurn(): boolean {
+    return !shouldUseServerOwnedPendingTurnPath();
+  }
+
+  function shouldRenderPreparedAssistantTurn(pendingTurn: PendingUserTurn): {
+    allow: boolean;
+    reason: string;
+  } {
+    return shouldAcceptAssistantTurnOwnership({
+      sourceUserMessageId: pendingTurn.messageId,
+      requestId: pendingTurn.requestId,
+      latestUserMessageId: turnGateRef.current.lastUserMessageId,
+      activeTurnRequestId: getManagedAssistantRequestId("turn", pendingTurn.messageId),
+      pendingTurnRequestId: pendingUserTurnRef.current?.requestId ?? null,
+    });
   }
 
   async function buildRespondNodeForPendingTurn(
@@ -4625,6 +4647,162 @@ export default function SessionPage() {
     workingMemoryRef.current = nextWorkingMemory;
 
     const phase = syncSessionPhase(turnGateRef.current);
+    if (shouldUseServerOwnedPendingTurnPath()) {
+      const generated = await generateSessionRespondText(
+        pendingTurn.text,
+        pendingTurn.intent,
+        pendingTurn.dialogueAct,
+        pendingTurn.requestId,
+        pendingTurn.messageId,
+      );
+      if (!generated || generated.node.type !== "respond_step") {
+        return null;
+      }
+      const responseText = generated.node.text.trim();
+      if (!responseText || responseText === SESSION_CHAT_NOOP_SENTINEL) {
+        return null;
+      }
+
+      const timestamp = now();
+      const commitmentAct: DialogueRouteAct =
+        sceneStateRef.current.topic_type === "game_execution" &&
+        pendingTurn.dialogueAct === "answer_activity_choice"
+          ? "acknowledgement"
+          : pendingTurn.dialogueAct;
+      const commitmentDecision = applyCommitmentDecision({
+        current: commitmentRef.current,
+        act: commitmentAct,
+        candidateText: responseText,
+        userText: pendingTurn.text,
+        nowMs: timestamp,
+      });
+      const projectedConversationState = noteConversationAssistantTurn(conversationStateRef.current, {
+        text: responseText,
+        ravenIntent: pendingTurn.dialogueAct,
+        nowMs: timestamp,
+      });
+      const projectedSceneState = reconcileSceneStateWithConversation(
+        noteSceneStateAssistantTurn(sceneStateRef.current, {
+          text: responseText,
+          commitment: responseText,
+        }),
+        projectedConversationState,
+      );
+      const projectedConversationMode = projectedSceneState.interaction_mode;
+      if (nextMemory.conversation_mode?.value !== projectedConversationMode) {
+        nextMemory = writeConversationMode(nextMemory, projectedConversationMode, timestamp, 0.96);
+        memoryWritesAttempted = [
+          ...memoryWritesAttempted,
+          { key: "conversation_mode", value: projectedConversationMode },
+        ];
+        memoryWritesCommitted = [
+          ...memoryWritesCommitted,
+          { key: "conversation_mode", value: projectedConversationMode },
+        ];
+        syncSessionMemory(
+          nextMemory,
+          `assistant commit -> conversation_mode=${projectedConversationMode}`,
+        );
+      }
+      const nextCommitmentState =
+        commitmentDecision.next.locked &&
+        isResponseAlignedWithCommitment(commitmentDecision.next, responseText)
+          ? createCommitmentState()
+          : commitmentDecision.next;
+      commitmentRef.current = nextCommitmentState;
+
+      const nextTurnId = turnGateRef.current.lastAssistantTurnId + 1;
+      const selectedFamily = mapAssistantReplySourceToTurnResponseFamily(generated.trace.source);
+      const finalized = finalizeTurnResponse({
+        text: responseText,
+        userText: pendingTurn.text,
+        nextTurnId,
+        phase,
+        memory: nextMemory,
+        interactionMode: projectedSceneState.interaction_mode,
+        selectedFamily,
+        availableFamilies: [selectedFamily],
+        responseGateForced: false,
+        responseMode: pendingTurn.dialogueAct === "short_follow_up" ? "short_follow_up" : "default",
+      });
+      const finalGameStartInspection = inspectGameStartContract(
+        finalized.text,
+        projectedSceneState.game_template_id,
+      );
+      pushTurnTrace("turn.response.selected", {
+        request_id: pendingTurn.requestId,
+        session_id: turnGateRef.current.sessionId,
+        user_message_id: pendingTurn.messageId,
+        detected_intent: pendingTurn.intent,
+        dialogue_act: pendingTurn.dialogueAct,
+        active_thread: conversationStateRef.current.active_thread,
+        active_topic: conversationStateRef.current.active_topic,
+        continuity_context_present:
+          conversationStateRef.current.active_thread !== "none" ||
+          conversationStateRef.current.last_conversation_topic !== "none",
+        conversation_mode: nextMemory.conversation_mode?.value ?? "none",
+        interaction_mode: projectedSceneState.interaction_mode,
+        topic_type: projectedSceneState.topic_type,
+        game_progress: projectedSceneState.game_progress,
+        task_progress: projectedSceneState.task_progress,
+        memory_writes_attempted: memoryWritesAttempted,
+        memory_writes_committed: memoryWritesCommitted,
+        fallback_chosen: false,
+        fallback_reason: "server_authoritative_path",
+        task_paused: sceneStateRef.current.task_paused,
+        lock_active:
+          sceneStateRef.current.task_hard_lock_active &&
+          sceneStateRef.current.topic_type === "task_execution" &&
+          sceneStateRef.current.task_progress !== "completed",
+        summary_route_selected: false,
+        profile_question_route_selected: false,
+        chat_switch_route_selected: false,
+        short_follow_up_route_selected: pendingTurn.dialogueAct === "short_follow_up",
+        task_or_persona_path: selectedFamily,
+        final_output_source: finalized.finalOutputSource,
+        output_generator_families: [selectedFamily],
+        more_than_one_output_generator_fired: finalized.multipleGeneratorsFired,
+        reflection_appended: finalized.reflectionAppended,
+        game_start_detected: finalGameStartInspection.detected,
+        raw_game_start_detected: generated.trace.rawGameStartDetected ?? false,
+        raw_game_start_question_present: generated.trace.rawGameStartQuestionPresent ?? false,
+        gated_game_start_question_present:
+          generated.trace.finalGameStartQuestionPresent ?? finalGameStartInspection.hasPlayablePrompt,
+        final_game_start_question_present:
+          generated.trace.finalGameStartQuestionPresent ?? finalGameStartInspection.hasPlayablePrompt,
+        final_mode_written: nextMemory.conversation_mode?.value ?? "none",
+        forbidden_internal_string_blocked: false,
+        post_processing_modified_output:
+          truncateWords(responseText) !== truncateWords(finalized.text),
+        at_ms: now(),
+      });
+      const text = truncateWords(finalized.text);
+      const commitment = deriveCommitment(commitmentAct, text, workingMemoryRef.current);
+      workingMemoryRef.current = noteWorkingMemoryAssistantTurn(workingMemoryRef.current, {
+        commitment: commitment.text,
+        topicResolved: commitment.topicResolved,
+      });
+      sessionTopicRef.current = workingMemoryRef.current.session_topic;
+      if (commitment.topicResolved) {
+        topicAnchorRef.current = null;
+      }
+
+      return {
+        node: {
+          id: `respond-${pendingTurn.messageId}-${stepIndex}`,
+          type: "respond_step",
+          text,
+          phase,
+          sourceIntent: pendingTurn.intent,
+        },
+        trace: {
+          ...generated.trace,
+          finalOutputSource: finalized.finalOutputSource,
+          outputGeneratorCount: 1,
+        },
+      };
+    }
+
     const shortFollowUpReply =
       pendingTurn.dialogueAct === "short_follow_up"
         ? buildShortClarificationReply({
@@ -5129,6 +5307,13 @@ export default function SessionPage() {
     source: TurnResponseFamily;
     deterministicRail: string;
   } {
+    if (!shouldAllowLocalIdleRecoveryForPendingTurn()) {
+      return {
+        text: null,
+        source: "scene_fallback",
+        deterministicRail: "idle_recovery_disabled_for_server_owned_turn",
+      };
+    }
     const lastAssistantText =
       recentRavenOutputsRef.current[recentRavenOutputsRef.current.length - 1] ??
       sceneStateRef.current.last_profile_prompt ??
@@ -5254,6 +5439,9 @@ export default function SessionPage() {
   }
 
   function forceIdlePendingTurnRecovery(pendingTurn: PendingUserTurn, reason: string): boolean {
+    if (!shouldAllowLocalIdleRecoveryForPendingTurn()) {
+      return false;
+    }
     const recovery = buildIdleRecoveryReply(pendingTurn);
     if (!recovery.text) {
       return false;
@@ -5557,6 +5745,18 @@ export default function SessionPage() {
 
     const stepIndex = turnGateRef.current.stepIndex;
     const prepared = await buildRespondNodeForPendingTurn(pendingTurn, stepIndex);
+    const ownershipDecision = shouldRenderPreparedAssistantTurn(pendingTurn);
+    if (!ownershipDecision.allow) {
+      pushTurnTrace("turn.render.blocked", {
+        request_id: pendingTurn.requestId,
+        session_id: turnGateRef.current.sessionId,
+        user_message_id: pendingTurn.messageId,
+        reason: ownershipDecision.reason,
+        at_ms: now(),
+      });
+      finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
+      return;
+    }
     if (!prepared) {
       lastHandledUserMessageIdRef.current = pendingTurn.messageId;
       pendingUserTurnRef.current = null;
@@ -6039,6 +6239,21 @@ export default function SessionPage() {
             clarifiedMessageIdRef.current = pendingTurn.messageId;
           }
           const prepared = await buildRespondNodeForPendingTurn(pendingTurn, stepIndex);
+          const ownershipDecision = shouldRenderPreparedAssistantTurn(pendingTurn);
+          if (!ownershipDecision.allow) {
+            finishManagedAssistantRequest("turn", pendingTurn.messageId, pendingTurn.requestId);
+            logPlannerDebug({
+              stepIndex,
+              stepId: `turn-${pendingTurn.messageId}`,
+              decision: "noop",
+              reason: ownershipDecision.reason,
+              dialogueAct: dialogueDecision.act,
+              userIntent: pendingTurn.intent,
+              turnId: turnGateRef.current.lastAssistantTurnId,
+            });
+            await sleepMs(250);
+            continue;
+          }
           selectedNode = prepared?.node ?? null;
           selectedTrace = prepared
             ? {

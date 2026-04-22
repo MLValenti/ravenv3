@@ -122,6 +122,40 @@ test("session state contract blocks duplicate visible assistant commits on the s
   assert.equal(second.decision.reason, "second_visible_reply_same_turn");
 });
 
+test("session state contract blocks an older visible reply after a newer turn already committed", () => {
+  let state = createSessionStateContract("contract-stale-visible-commit");
+  state = reduceUserTurn(state, {
+    text: "first question",
+    nowMs: 1_000,
+  }).next;
+  state = reduceUserTurn(state, {
+    text: "second question",
+    nowMs: 1_100,
+  }).next;
+
+  const newer = reduceVisibleAssistantCommit(state, {
+    anchorUserMessageId: 2,
+    requestId: "req-2",
+    renderedText: "Here is the newer answer.",
+    turnIdEstimate: 2,
+    committedAtMs: 1_101,
+    generationPath: "model",
+  });
+  assert.equal(newer.decision.allow, true);
+  state = newer.next;
+
+  const stale = reduceVisibleAssistantCommit(state, {
+    anchorUserMessageId: 1,
+    requestId: "req-1",
+    renderedText: "Here is the stale older answer.",
+    turnIdEstimate: 1,
+    committedAtMs: 1_102,
+    generationPath: "model",
+  });
+  assert.equal(stale.decision.allow, false);
+  assert.equal(stale.decision.reason, "older_than_last_committed_visible_turn");
+});
+
 test("session state contract finalize registration is idempotent per request", () => {
   let state = createSessionStateContract("contract-finalize");
 

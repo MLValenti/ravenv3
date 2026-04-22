@@ -118,7 +118,7 @@ async function main(): Promise<void> {
     const healthy = await waitForHealth(HEALTH_URL, MAX_HEALTH_WAIT_MS);
     if (!healthy) {
       log(`health check did not become ready: ${HEALTH_URL}`);
-      if (dev) {
+      if (dev?.pid !== undefined) {
         stopProcessTree(dev.pid);
       }
       process.exitCode = 2;
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
 
   const appChatUrl = `http://${DEV_HOST}:${DEV_PORT}/api/chat`;
   const exitCode = runEvalHarness(appChatUrl);
-  if (startedByScript && dev) {
+  if (startedByScript && dev?.pid !== undefined) {
     stopProcessTree(dev.pid);
   }
   process.exitCode = exitCode;

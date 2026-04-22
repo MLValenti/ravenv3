@@ -51,6 +51,36 @@ export function shouldPreserveQueuedUserTurnOnSessionStart(input: {
   return input.pendingTurnMessageId > input.lastHandledUserMessageId;
 }
 
+export function shouldAcceptAssistantTurnOwnership(input: {
+  sourceUserMessageId: number;
+  requestId: string;
+  latestUserMessageId: number;
+  activeTurnRequestId: string | null;
+  pendingTurnRequestId: string | null;
+}): { allow: boolean; reason: string } {
+  if (input.sourceUserMessageId <= 0) {
+    return { allow: false, reason: "missing_source_user_turn" };
+  }
+  if (input.latestUserMessageId > input.sourceUserMessageId) {
+    return { allow: false, reason: "superseded_by_newer_user_turn" };
+  }
+  if (
+    input.activeTurnRequestId &&
+    input.activeTurnRequestId.trim() &&
+    input.activeTurnRequestId !== input.requestId
+  ) {
+    return { allow: false, reason: "turn_request_replaced" };
+  }
+  if (
+    input.pendingTurnRequestId &&
+    input.pendingTurnRequestId.trim() &&
+    input.pendingTurnRequestId !== input.requestId
+  ) {
+    return { allow: false, reason: "pending_turn_replaced" };
+  }
+  return { allow: true, reason: "owned_by_latest_turn" };
+}
+
 export function sanitizeSessionVisibleAssistantText(text: string): {
   text: string;
   changed: boolean;
