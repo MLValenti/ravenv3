@@ -2081,6 +2081,68 @@ test("response gate replaces paper-thin conversation replies on valid chat turns
   assert.match(result.text, /bondage|dynamic|actually changes/i);
 });
 
+test("response gate does not let continuation filler replace a direct factual question", () => {
+  const result = applyResponseGate({
+    text: "Keep going.",
+    userText: "what is 2+2?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Enough hovering, pet. Tell me what you actually want.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "question_answering",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.match(result.text, /\b4\b/);
+  assert.doesNotMatch(result.text, /keep going|concrete part|what you actually want/i);
+});
+
+test("response gate rejects continuation filler on direct definition and factual questions", () => {
+  const cases = [
+    {
+      userText: "what is Spring Boot?",
+      expected: /spring boot|java|framework|spring|application/i,
+    },
+    {
+      userText: "who wrote Hamlet?",
+      expected: /hamlet|william shakespeare|shakespeare/i,
+    },
+    {
+      userText: "what color is the sky?",
+      expected: /sky|blue|weather|time of day/i,
+    },
+    {
+      userText: "define OAuth",
+      expected: /oauth|authorization|access|password/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const result = applyResponseGate({
+      text: "Keep going.",
+      userText: item.userText,
+      dialogueAct: "user_question",
+      lastAssistantText: "Enough hovering, pet. Tell me what you actually want.",
+      sceneState: {
+        ...createSceneState(),
+        interaction_mode: "question_answering",
+        topic_type: "general_request",
+      },
+      commitmentState: createCommitmentState(),
+    });
+
+    assert.equal(result.forced, true);
+    assert.match(result.text, item.expected);
+    assert.doesNotMatch(
+      result.text,
+      /keep going|go on|tell me more|concrete part|what you actually want|what has your attention|start talking/i,
+    );
+  }
+});
+
 test("response gate restores a playable first prompt when game start language has no question", () => {
   const result = applyResponseGate({
     text: "Here is the next game. Rules are simple. Answer this question for points.",

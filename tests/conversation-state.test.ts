@@ -453,6 +453,33 @@ test("fresh smalltalk question overrides stale better-sub thread residue", () =>
   assert.equal(state.important_entities.some((entity) => /better sub|better/.test(entity)), false);
 });
 
+test("fresh direct factual question breaks stale relational thread continuity", () => {
+  let state = createConversationStateSnapshot("conversation-state-fresh-direct-question");
+
+  state = noteConversationUserTurn(state, {
+    text: "what do you want to know about me?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+
+  assert.equal(state.current_mode, "relational_chat");
+  assert.equal(state.active_thread, "what I want to know about you");
+
+  state = noteConversationUserTurn(state, {
+    text: "who wrote Hamlet?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 2,
+  });
+
+  assert.equal(state.current_mode, "question_answering");
+  assert.equal(state.active_topic, "none");
+  assert.equal(state.active_thread, "open_chat");
+  assert.equal(state.pending_user_request, "who wrote Hamlet?");
+  assert.deepEqual(state.unanswered_questions, ["who wrote Hamlet?"]);
+});
+
 test("meta complaint repair keeps the original missed question live", () => {
   let state = createConversationStateSnapshot("conversation-state-meta-repair");
 

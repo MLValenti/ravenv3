@@ -125,6 +125,43 @@ test("prompt assembly preserves short relational continuity turns even without k
   );
 });
 
+test("prompt assembly drops stale assistant continuity for a fresh direct question", () => {
+  const state = {
+    ...createConversationStateSnapshot("prompt-assembly-fresh-direct-question"),
+    current_mode: "question_answering" as const,
+    active_thread: "open_chat",
+    pending_user_request: "who wrote Hamlet?",
+    relational_continuity: {
+      ...createConversationStateSnapshot("prompt-assembly-fresh-direct-question").relational_continuity,
+      current_emotional_beat: "charged_attention",
+      current_relational_direction: "mutual_tension",
+      what_raven_has_implicitly_established_about_herself: ["I notice what people skip over."],
+    },
+  };
+
+  const incomingMessages: HistoryMessage[] = [
+    { role: "assistant", content: "Purple is neat, but focus on the game, pet." },
+    { role: "user", content: "who wrote Hamlet?" },
+  ];
+
+  const assembled = assemblePrompt({
+    baseSystemMessages: [{ role: "system", content: "Base system." }],
+    auxiliarySystemMessages: [{ role: "system", content: "Aux context." }],
+    incomingMessages,
+    conversationState: state,
+  });
+
+  assert.equal(
+    assembled.messages.some((message) => /focus on the game/i.test(message.content)),
+    false,
+  );
+  assert.ok(
+    assembled.debug.excludedTurns.some((turn) =>
+      turn.reason === "fresh_direct_question_drops_stale_assistant_continuity",
+    ),
+  );
+});
+
 test("prompt assembly keeps prior turns that support the active thread and pending modification", () => {
   const state = {
     ...createConversationStateSnapshot("prompt-assembly-thread"),

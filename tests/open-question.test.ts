@@ -197,6 +197,29 @@ test("favorite-color assistant self question gets a concrete direct answer", () 
   assert.doesNotMatch(text, /care less about the label|shows up between people/i);
 });
 
+test("spring boot definition fallback stays substantive and on-subject", () => {
+  const text = buildHumanQuestionFallback("what is Spring Boot?", "dominant");
+
+  assert.match(text, /spring boot/i);
+  assert.match(text, /java|framework|spring|applications|servers/i);
+  assert.doesNotMatch(text, /subject you asked me to define directly/i);
+});
+
+test("oauth definition fallback stays substantive and on-subject", () => {
+  const text = buildHumanQuestionFallback("define OAuth", "dominant");
+
+  assert.match(text, /oauth/i);
+  assert.match(text, /authorization|access|service|password/i);
+  assert.doesNotMatch(text, /subject you asked me to define directly/i);
+});
+
+test("weather limitation fallback stays honest instead of redirecting the thread", () => {
+  const text = buildHumanQuestionFallback("im good, what's the weather like today by you?", "dominant");
+
+  assert.match(text, /weather|local|forecast|cannot|do not have/i);
+  assert.doesNotMatch(text, /focus on the game|stay focused|pet/i);
+});
+
 test("malformed kink self question still gets a direct preference answer", () => {
   const text = buildHumanQuestionFallback("what are you kinks?", "dominant");
 

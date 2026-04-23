@@ -1954,14 +1954,15 @@ export function noteSceneStateAssistantTurn(
     (
       state.topic_type === "game_setup" &&
       resolved &&
-      isDeterministicGameChoiceText(rawText)
+      (
+        isDeterministicGameChoiceText(rawText) ||
+        (gameStartInspection.detected && gameStartInspection.hasPlayablePrompt)
+      )
     ) ||
     (
+      state.interaction_mode === "relational_chat" &&
       gameStartInspection.detected &&
-      gameStartInspection.hasPlayablePrompt &&
-      state.topic_type !== "game_execution" &&
-      state.topic_type !== "task_execution" &&
-      state.topic_type !== "verification_in_progress"
+      gameStartInspection.hasPlayablePrompt
     );
   const shouldEnterRewardWindow =
     state.topic_type === "game_execution" &&

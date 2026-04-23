@@ -27,6 +27,25 @@ function normalize(text: string): string {
   return text.trim().replace(/\s+/g, " ");
 }
 
+function isQuestionLike(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.includes("?") ||
+    /^(what|why|how|when|where|who|which|can|could|would|will|do|does|did|is|are|define)\b/.test(
+      normalized,
+    )
+  );
+}
+
+function isClarificationFollowUp(text: string): boolean {
+  return /^(what|what do you mean|what\?|why|how|go on|keep going|tell me more|repeat that|say that again)\b/i.test(
+    normalize(text),
+  );
+}
+
 function tokenize(text: string): Set<string> {
   return new Set(
     normalize(text)
@@ -157,6 +176,11 @@ export function assemblePrompt(input: AssemblePromptInput): {
     ({ role: "user", content: "" } as HistoryMessage);
   const priorDialogue = latestUserIndex >= 0 ? nonSystem.slice(0, latestUserIndex) : nonSystem;
   const trailingDialogue = latestUserIndex >= 0 ? nonSystem.slice(latestUserIndex + 1) : [];
+  const freshDirectQuestionContext =
+    (input.conversationState.current_mode === "question_answering" ||
+      input.conversationState.current_mode === "normal_chat") &&
+    isQuestionLike(latestUser.content) &&
+    !isClarificationFollowUp(latestUser.content);
   const keywordSeed = new Set<string>([
     ...tokenize(latestUser.content),
     ...tokenize(input.conversationState.active_topic),
@@ -173,7 +197,7 @@ export function assemblePrompt(input: AssemblePromptInput): {
     ]),
     ...input.conversationState.important_entities.flatMap((entity) => [...tokenize(entity)]),
     ...input.conversationState.open_loops.flatMap((loop) => [...tokenize(loop)]),
-    ...buildRelationalSeed(input.conversationState),
+    ...(freshDirectQuestionContext ? [] : [...buildRelationalSeed(input.conversationState)]),
   ]);
 
   const selectedDialogue: HistoryMessage[] = [];
@@ -243,6 +267,26 @@ export function assemblePrompt(input: AssemblePromptInput): {
     }
     if (supportsRelationalContinuity) {
       reasons.push("relational_continuity");
+    }
+    const hasSemanticSupport =
+      isRelevant ||
+      supportsOpenLoop ||
+      supportsGoal ||
+      supportsActiveThread ||
+      supportsPendingRequest ||
+      supportsPendingModification;
+    if (
+      freshDirectQuestionContext &&
+      message.role === "assistant" &&
+      !hasSemanticSupport &&
+      (isRecent || supportsIdentity || supportsRelationalContinuity)
+    ) {
+      excludedTurns.push({
+        role: message.role,
+        content: message.content.slice(0, 220),
+        reason: "fresh_direct_question_drops_stale_assistant_continuity",
+      });
+      continue;
     }
     if (
       isLowSignalPriorDialogue(message.content) &&

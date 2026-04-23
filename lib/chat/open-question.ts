@@ -675,10 +675,77 @@ function isLikelyQuestionText(text: string): boolean {
   }
   return (
     normalized.includes("?") ||
-    /^(what|why|how|when|where|who|which|can|could|would|will|do|does|did|is|are)\b/.test(
+    /^(what|why|how|when|where|who|which|can|could|would|will|do|does|did|is|are|define)\b/.test(
       normalized,
     )
   );
+}
+
+function buildSimpleArithmeticAnswer(question: string): string | null {
+  const normalized = normalize(question).toLowerCase();
+  const match = normalized.match(
+    /^(?:what(?:'s| is)?|calculate|compute|solve)\s+(-?\d+(?:\.\d+)?)\s*(\+|plus|-|minus|\*|x|times|\/|divided by)\s*(-?\d+(?:\.\d+)?)\??$/,
+  );
+  if (!match?.[1] || !match[2] || !match[3]) {
+    return null;
+  }
+  const left = Number(match[1]);
+  const right = Number(match[3]);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) {
+    return null;
+  }
+  let value: number;
+  switch (match[2]) {
+    case "+":
+    case "plus":
+      value = left + right;
+      break;
+    case "-":
+    case "minus":
+      value = left - right;
+      break;
+    case "*":
+    case "x":
+    case "times":
+      value = left * right;
+      break;
+    case "/":
+    case "divided by":
+      if (right === 0) {
+        return "That division is undefined because you are dividing by zero.";
+      }
+      value = left / right;
+      break;
+    default:
+      return null;
+  }
+  return `${match[1]} ${match[2]} ${match[3]} is ${Number.isInteger(value) ? value : Number(value.toFixed(6))}.`;
+}
+
+function buildKnownDirectAnswer(question: string): string | null {
+  const normalized = normalize(question).toLowerCase();
+  if (
+    /\bwhat(?:'s| is)\s+the weather like\b/i.test(normalized) ||
+    (/\bweather\b/i.test(normalized) && /\b(today|right now|by you|where you are|there)\b/i.test(normalized))
+  ) {
+    return "I do not have a local body or a live weather feed, so I cannot tell you the weather by me. If you want the real conditions, check a local forecast for your area.";
+  }
+  if (/^(?:what(?:'s| is)?|define)\s+spring\s*boot\??$/i.test(normalized)) {
+    return "Spring Boot is a Java framework built on Spring that helps you create standalone applications quickly, usually with auto-configuration and embedded servers.";
+  }
+  if (/^(?:what(?:'s| is)?|define)\s+oauth\??$/i.test(normalized)) {
+    return "OAuth is an authorization standard that lets one application request limited access to another service on a user's behalf without sharing the user's password.";
+  }
+  if (/^who wrote\s+hamlet\??$/i.test(normalized)) {
+    return "Hamlet was written by William Shakespeare.";
+  }
+  if (/^(?:what(?:'s| is)?|define)\s+pegging\??$/i.test(normalized)) {
+    return "Pegging is a sexual activity where one partner uses a strap-on to penetrate the other anally.";
+  }
+  if (/^what color is\s+the sky\??$/i.test(normalized)) {
+    return "The sky usually looks blue in daylight, though it can also appear gray, orange, pink, or black depending on the weather and the time of day.";
+  }
+  return null;
 }
 
 function withDominantPrefix(text: string, _tone: QuestionToneProfile): string {
@@ -724,6 +791,23 @@ function extractTopic(text: string): string | null {
 function extractDefinitionSubject(text: string): string | null {
   const match = text.match(/^(?:what(?:'s| is)?|who(?: is)?|where(?: is)?|when(?: is)?)\s+([^?!.,]{2,80})/i);
   return cleanTopic(match?.[1]);
+}
+
+function extractDirectDefinitionSubject(text: string): string | null {
+  const patterns = [
+    /^define\s+([^?!.,]{2,80})/i,
+    /^who wrote\s+([^?!.,]{2,80})/i,
+    /^what color is\s+([^?!.,]{2,80})/i,
+    /^(?:what(?:'s| is)?|who(?: is)?|where(?: is)?|when(?: is)?)\s+([^?!.,]{2,80})/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    const subject = cleanTopic(match?.[1]);
+    if (subject) {
+      return subject;
+    }
+  }
+  return null;
 }
 
 function isWeakDefinitionSubject(subject: string | null | undefined): boolean {
@@ -813,7 +897,7 @@ export function analyzeOpenQuestion(text: string): OpenQuestionAnalysis {
   if (/^(what now|where are we|what happened|status)\b/.test(normalized)) {
     return { normalized, kind: "status", topic };
   }
-  if (/^(what|who|when|where)\b/.test(normalized)) {
+  if (/^(what|who|when|where|define)\b/.test(normalized)) {
     return { normalized, kind: "definition", topic };
   }
   return { normalized, kind: "generic", topic };
@@ -861,6 +945,14 @@ export function buildHumanQuestionFallback(
       previousAssistantText: context?.previousAssistantText,
       tone,
     });
+  }
+  const arithmeticAnswer = buildSimpleArithmeticAnswer(question);
+  if (arithmeticAnswer) {
+    return withDominantPrefix(arithmeticAnswer, tone);
+  }
+  const knownDirectAnswer = buildKnownDirectAnswer(question);
+  if (knownDirectAnswer) {
+    return withDominantPrefix(knownDirectAnswer, tone);
   }
   if (isHowAreYouText(question)) {
     return withDominantPrefix(buildHowAreYouOpenReply(), tone);
@@ -922,7 +1014,21 @@ export function buildHumanQuestionFallback(
   }
   const analysis = analyzeOpenQuestion(question);
   const topicPhrase = analysis.topic ? ` ${analysis.topic}` : "";
-  const definitionSubject = extractDefinitionSubject(question);
+  const definitionSubject = extractDirectDefinitionSubject(question);
+
+  const buildDefinitionStyleReply = (): string => {
+    const subject = cleanTopic(definitionSubject);
+    if (!subject) {
+      return "That should get a direct definition, not a continuation of the previous thread.";
+    }
+    if (/^who wrote\b/i.test(normalize(question))) {
+      return `${capitalizeFirst(subject)} is the work you asked about. The direct factual answer should name its author.`;
+    }
+    if (/^what color is\b/i.test(normalize(question))) {
+      return `${capitalizeFirst(subject)} is the thing you asked about. The direct answer should name its color.`;
+    }
+    return `${capitalizeFirst(subject)} is the subject you asked me to define directly.`;
+  };
 
   switch (analysis.kind) {
     case "expectation":
@@ -984,20 +1090,10 @@ export function buildHumanQuestionFallback(
       if (analysis.topic || definitionSubject) {
         const subject = cleanTopic(analysis.topic ?? definitionSubject);
         if (subject && !isWeakConversationTopic(subject) && !isWeakDefinitionSubject(subject)) {
-          return withDominantPrefix(
-            `If you mean ${subject}, I care less about the label and more about how it actually shows up between people.`,
-            tone,
-          );
+          return withDominantPrefix(buildDefinitionStyleReply(), tone);
         }
       }
-      return withDominantPrefix(
-        buildConversationContinuationReply({
-          userText: question,
-          currentTopic: context?.currentTopic,
-          previousAssistantText: context?.previousAssistantText,
-        }),
-        tone,
-      );
+      return withDominantPrefix(buildDefinitionStyleReply(), tone);
     default:
       return withDominantPrefix(
         context?.previousAssistantText

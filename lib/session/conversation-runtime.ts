@@ -69,7 +69,6 @@ function conversationLooksGameLike(state: ConversationStateSnapshot): boolean {
       state.active_thread,
       state.pending_user_request,
       state.pending_modification,
-      state.last_satisfied_request,
       state.active_topic,
       ...state.open_loops,
     ].join(" "),

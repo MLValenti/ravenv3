@@ -652,6 +652,139 @@ test("ui harness fresh how-are-you question overrides stale better-sub residue",
   assert.equal(state.conversation?.important_entities.includes("today"), false);
 });
 
+test("ui harness direct factual question after greeting gets a direct answer", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-direct-factual-question-after-greeting"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-direct-factual-question-after-greeting"),
+    memory: createSessionMemory(),
+  };
+
+  const first = applyUserTurn(state, "hi");
+  const second = applyUserTurn(state, "what is 2+2?");
+
+  assert.match(first, /what you actually want|what has your attention|start talking|talk to me/i);
+  assert.equal(state.scene.interaction_mode, "question_answering");
+  assert.match(second, /\b4\b/);
+  assert.doesNotMatch(second, /^(?:yes\.\s*)?keep going\.?$/i);
+  assert.doesNotMatch(second, /keep going|concrete part|tell me what you actually want/i);
+});
+
+test("ui harness direct factual and definition questions after greeting do not become continuation filler", () => {
+  const cases = [
+    {
+      userText: "what is Spring Boot?",
+      expected: /spring boot|java|framework|spring|application/i,
+    },
+    {
+      userText: "who wrote Hamlet?",
+      expected: /hamlet|william shakespeare|shakespeare/i,
+    },
+    {
+      userText: "what color is the sky?",
+      expected: /sky|blue|weather|time of day/i,
+    },
+    {
+      userText: "define OAuth",
+      expected: /oauth|authorization|access|password/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const state: HarnessState = {
+      scene: createSceneState(),
+      gate: createTurnGate(`ui-harness-direct-question-${item.userText}`),
+      outputs: [],
+      conversation: createConversationStateSnapshot(`ui-harness-direct-question-${item.userText}`),
+      memory: createSessionMemory(),
+    };
+
+    applyUserTurn(state, "hi");
+    const reply = applyUserTurn(state, item.userText);
+
+    assert.match(reply, item.expected);
+    assert.doesNotMatch(reply, /^(?:yes\.\s*)?(?:keep going|go on)\.?$/i);
+    assert.doesNotMatch(
+      reply,
+      /keep going|go on|tell me more|concrete part|tell me what you actually want|what has your attention|start talking/i,
+    );
+  }
+});
+
+test("ui harness capability question stays honest and does not redirect into stale relational pressure", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-weather-capability"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-weather-capability"),
+    memory: createSessionMemory(),
+  };
+
+  applyUserTurn(state, "hi");
+  applyUserTurn(state, "how are you?");
+  const reply = applyUserTurn(state, "im good, what's the weather like today by you?");
+
+  assert.match(reply, /weather|local|forecast|cannot|do not have/i);
+  assert.doesNotMatch(reply, /focus on the game|stay focused|pet\./i);
+  assert.equal(state.scene.interaction_mode, "question_answering");
+  assert.equal(state.conversation?.current_mode, "question_answering");
+  assert.equal(state.conversation?.active_thread, "open_chat");
+});
+
+test("ui harness direct definitions and factual answers do not append invented game continuity", () => {
+  const cases = [
+    {
+      userText: "what is Spring Boot?",
+      expected: /spring boot|java|framework|spring|application/i,
+    },
+    {
+      userText: "who wrote Hamlet?",
+      expected: /hamlet|william shakespeare|shakespeare/i,
+    },
+    {
+      userText: "what is pegging?",
+      expected: /pegging|strap-on|sexual activity|anally/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const state: HarnessState = {
+      scene: createSceneState(),
+      gate: createTurnGate(`ui-harness-no-game-append-${item.userText}`),
+      outputs: [],
+      conversation: createConversationStateSnapshot(`ui-harness-no-game-append-${item.userText}`),
+      memory: createSessionMemory(),
+    };
+
+    applyUserTurn(state, "hi");
+    const reply = applyUserTurn(state, item.userText);
+
+    assert.match(reply, item.expected);
+    assert.doesNotMatch(reply, /focus on the game|stay focused|precision matters|game, pet/i);
+  }
+});
+
+test("ui harness answer to a personal preference exchange does not invent a game thread", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-personal-preference-no-game"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-personal-preference-no-game"),
+    memory: createSessionMemory(),
+  };
+
+  const first = applyUserTurn(state, "what is your favorite color?");
+  const second = applyUserTurn(state, "purple");
+
+  assert.match(first, /\bblack\b|favorite color is/i);
+  assert.match(second, /purple|good|noted|suits|clean/i);
+  assert.doesNotMatch(second, /focus on the game|game, pet|stay focused/i);
+  assert.notEqual(state.scene.interaction_mode, "game");
+  assert.notEqual(state.scene.topic_type, "game_execution");
+  assert.notEqual(state.conversation?.pending_user_request, "what is your favorite color?");
+});
+
 test("ui harness meta complaint keeps the original missed smalltalk question live", () => {
   const state: HarnessState = {
     scene: createSceneState(),

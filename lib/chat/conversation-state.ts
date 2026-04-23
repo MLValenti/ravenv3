@@ -1,5 +1,7 @@
 import type { DialogueRouteAct } from "../dialogue/router.ts";
 import {
+  isAssistantGeneralPreferenceQuestion,
+  isAssistantPreferenceQuestion,
   isAssistantServiceQuestion,
   isAssistantSelfQuestion,
   isChatSwitchRequest,
@@ -258,6 +260,43 @@ function extractEntities(text: string): string[] {
 
 function isFreshOpenChatTurn(text: string): boolean {
   return !detectRepairTurnKind(text) && (isNormalChatRequest(text) || isChatLikeSmalltalk(text));
+}
+
+function isRelationalContinuationCue(text: string): boolean {
+  return /^(what about|do you like|what would|what should|what else|where should|how deep|do i need|what if|make it|tell me more|go on|keep going|that makes sense|that sounds more real|so keep)\b/i.test(
+    normalize(text),
+  );
+}
+
+function isBareClarificationQuestion(text: string): boolean {
+  return /^(?:why|what do you mean|explain|clarify|how so|what\?)\??$/i.test(normalize(text));
+}
+
+function isFreshDirectQuestionTurn(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  if (!isQuestion(normalized) || detectRepairTurnKind(normalized)) {
+    return false;
+  }
+  if (
+    isBareClarificationQuestion(normalized) ||
+    isAssistantSelfQuestion(normalized) ||
+    isAssistantServiceQuestion(normalized) ||
+    isAssistantPreferenceQuestion(normalized) ||
+    isAssistantGeneralPreferenceQuestion(normalized) ||
+    isMutualGettingToKnowRequest(normalized) ||
+    isRelationalContinuationCue(normalized) ||
+    isBareOpinionFollowUp(normalized) ||
+    hasContinuationCue(normalized) ||
+    hasModificationCue(normalized) ||
+    hasRevisionCue(normalized) ||
+    hasTopicShiftCue(normalized) ||
+    isProfileBuildingRequest(normalized) ||
+    isNormalChatRequest(normalized) ||
+    isChatLikeSmalltalk(normalized)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function inferTone(text: string): string {
@@ -788,6 +827,12 @@ function deriveActiveThread(input: {
   if (isMutualGettingToKnowRequest(input.text)) {
     return "what I want to know about you";
   }
+  if (
+    isAssistantPreferenceQuestion(input.text) ||
+    isAssistantGeneralPreferenceQuestion(input.text)
+  ) {
+    return "what you want to know about me";
+  }
   if (isAssistantServiceQuestion(input.text)) {
     return "what you can do for me";
   }
@@ -800,6 +845,9 @@ function deriveActiveThread(input: {
   }
   if (input.action === "shift_topic" && requestedTopic) {
     return requestedTopic;
+  }
+  if (input.action === "answer_direct_question" && isFreshDirectQuestionTurn(input.text)) {
+    return "open_chat";
   }
   const existingThread = resolveExistingThread(input.state);
   if (existingThread !== "none") {
@@ -1326,7 +1374,13 @@ function inferMode(input: {
     }
     return "normal_chat";
   }
-  if (isAssistantSelfQuestion(normalized) || isMutualGettingToKnowRequest(normalized)) {
+  if (
+    isAssistantSelfQuestion(normalized) ||
+    isAssistantServiceQuestion(normalized) ||
+    isAssistantPreferenceQuestion(normalized) ||
+    isAssistantGeneralPreferenceQuestion(normalized) ||
+    isMutualGettingToKnowRequest(normalized)
+  ) {
     return "relational_chat";
   }
   if (
@@ -1357,11 +1411,26 @@ function inferMode(input: {
   }
   if (
     input.previousMode === "relational_chat" &&
+    !isQuestion(normalized) &&
+    !isChatSwitchRequest(normalized) &&
+    !isNormalChatRequest(normalized) &&
+    !isChatLikeSmalltalk(normalized)
+  ) {
+    return "relational_chat";
+  }
+  if (
+    input.previousMode === "relational_chat" &&
     (
-      input.userIntent === "user_question" ||
-      input.userIntent === "user_short_follow_up" ||
-      input.userIntent === "user_answer" ||
-      input.userIntent === "user_ack"
+      detectRepairTurnKind(normalized) ||
+      isRelationalContinuationCue(normalized) ||
+      hasContinuationCue(normalized) ||
+      isBareOpinionFollowUp(normalized) ||
+      isRelationalOfferStatement(normalized) ||
+      isAssistantSelfQuestion(normalized) ||
+      isAssistantServiceQuestion(normalized) ||
+      isAssistantPreferenceQuestion(normalized) ||
+      isAssistantGeneralPreferenceQuestion(normalized) ||
+      isMutualGettingToKnowRequest(normalized)
     )
   ) {
     return "relational_chat";
@@ -1597,6 +1666,16 @@ export function noteConversationUserTurn(
   const text = normalize(input.text);
   const isRepairTurn = Boolean(detectRepairTurnKind(text));
   const freshOpenChatTurn = isFreshOpenChatTurn(text);
+  const freshDirectQuestionTurn = isFreshDirectQuestionTurn(text);
+  const resetStaleRelationalContext =
+    freshDirectQuestionTurn &&
+    (
+      state.current_mode === "relational_chat" ||
+      state.current_mode === "profile_building" ||
+      state.active_thread === "what I want to know about you" ||
+      state.active_thread === "what you want to know about me" ||
+      state.active_thread === "what you can do for me"
+    );
   const previousAssistantMessage =
     [...state.recent_window]
       .reverse()
@@ -1610,12 +1689,12 @@ export function noteConversationUserTurn(
     previousAssistantMessage,
   });
   const extractedTopic = extractTopic(text);
-  const activeTopic = freshOpenChatTurn
+  const activeTopic = freshOpenChatTurn || resetStaleRelationalContext
     ? "none"
     : extractedTopic ?? (currentMode === "profile_building" ? "profile" : state.active_topic);
   const userGoal = extractGoal(text) ?? state.user_goal;
   const facts = trimList([...state.recent_facts_from_user, ...extractFacts(text)]);
-  const entities = freshOpenChatTurn
+  const entities = freshOpenChatTurn || resetStaleRelationalContext
     ? trimList(extractEntities(text), 8)
     : trimList([...state.important_entities, ...extractEntities(text)], 8);
   const unanswered = isQuestion(text) && !isRepairTurn
@@ -1683,7 +1762,9 @@ export function noteConversationUserTurn(
     request_fulfilled: false,
     current_turn_action: requestState.action,
     last_conversation_topic: activeTopic || state.last_conversation_topic || "none",
-    last_user_stated_topic: extractedTopic ?? (freshOpenChatTurn ? "none" : state.last_user_stated_topic),
+    last_user_stated_topic:
+      extractedTopic ??
+      (freshOpenChatTurn || resetStaleRelationalContext ? "none" : state.last_user_stated_topic),
     repair_context: repairResolution?.repairContext ?? "none",
     relational_continuity: {
       ...previousRelational,

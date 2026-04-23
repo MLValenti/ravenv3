@@ -253,6 +253,17 @@ test("explicit bet request can interrupt a locked game execution rail", () => {
   assert.equal(state.topic_locked, true);
 });
 
+test("assistant-authored game framing does not become canonical game state without user grounding", () => {
+  const state = noteSceneStateAssistantTurn(createSceneState(), {
+    text: "Focus on the game, pet. First guess now. Pick one number from 1 to 10.",
+  });
+
+  assert.equal(state.topic_type, "none");
+  assert.equal(state.topic_locked, false);
+  assert.equal(state.interaction_mode, "normal_chat");
+  assert.equal(state.game_progress, "none");
+});
+
 test("reward negotiation can auto-fill wager terms when Raven is told to choose", () => {
   let state = noteSceneStateUserTurn(createSceneState(), {
     text: "lets bet on the game",
