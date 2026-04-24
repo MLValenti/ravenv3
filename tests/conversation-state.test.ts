@@ -145,6 +145,20 @@ test("conversation state keeps stable relational threads for get-to-know and ser
   assert.equal(state.active_thread, "what you can do for me");
 });
 
+test("conversation state treats reciprocal interest questions as assistant-facing relational turns", () => {
+  let state = createConversationStateSnapshot("conversation-state-reciprocal-interest");
+
+  state = noteConversationUserTurn(state, {
+    text: "do you want to know anything about me?",
+    userIntent: "user_question",
+    routeAct: "user_question",
+    nowMs: 1,
+  });
+
+  assert.equal(state.current_mode, "relational_chat");
+  assert.equal(state.active_thread, "what I want to know about you");
+});
+
 test("conversation state keeps a relational directive request on the service thread and does not fulfill it early", () => {
   let state = createConversationStateSnapshot("conversation-state-service-directive");
 

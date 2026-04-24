@@ -45,6 +45,12 @@ import {
   questionSatisfiedMeaningfully,
 } from "../chat/question-satisfaction.ts";
 import { isHardStructuredScene } from "./conversation-runtime.ts";
+import {
+  buildSemanticTurnTrace,
+  type SemanticTurnTrace,
+  updateCanonicalTurnState,
+  type PlannedMove,
+} from "./turn-meaning.ts";
 
 export type ResponseGateInput = {
   text: string;
@@ -61,12 +67,14 @@ export type ResponseGateInput = {
     canDescribeVisuals: boolean;
     reason: string;
   };
+  commitOwnerId?: string | null;
 };
 
 export type ResponseGateResult = {
   text: string;
   forced: boolean;
   reason: string;
+  semanticTrace: SemanticTurnTrace;
 };
 
 const INTERNAL_LINE_PATTERNS = [
@@ -648,6 +656,17 @@ function containsWeakGameContinuationShell(text: string): boolean {
   );
 }
 
+function containsConversationalControlScaffold(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /\bunderstand that we have rules here\b/.test(normalized) ||
+    /\bremember your place\b/.test(normalized) ||
+    /\byou follow my lead now\b/.test(normalized) ||
+    /\byou follow my instruction now\b/.test(normalized) ||
+    /\bi(?:'m| am)\s*,\s*pet\b/.test(normalized)
+  );
+}
+
 function containsGameOpenOrProceduralFallback(text: string): boolean {
   const normalized = normalize(text).toLowerCase();
   return (
@@ -767,6 +786,20 @@ function classifyWinningSourceFamily(text: string, reason: string, finalMatchesR
     return "buildFallback";
   }
   return "other";
+}
+
+function isSemanticPlannerOwnedMove(plannedMove: PlannedMove): boolean {
+  return (
+    plannedMove.content_key === "greeting_open" ||
+    plannedMove.content_key === "assistant_preference_answer" ||
+    plannedMove.content_key === "assistant_preference_elaboration" ||
+    plannedMove.content_key === "assistant_preference_revision" ||
+    plannedMove.content_key === "user_preference_application" ||
+    plannedMove.content_key === "raven_invitation_answer" ||
+    plannedMove.content_key === "reciprocal_user_probe" ||
+    plannedMove.content_key === "definition_answer" ||
+    plannedMove.content_key === "factual_answer"
+  );
 }
 
 function isKnownBadFamilyText(text: string): boolean {
@@ -1736,6 +1769,18 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     reason: string;
     sourcePath: string;
   }> = [];
+  const continuityTopic = resolveContinuityTopic(input);
+  const canonicalTurnState = updateCanonicalTurnState({
+    userText: input.userText,
+    previousAssistantText: input.lastAssistantText,
+    previousUserText:
+      input.sessionMemory?.last_user_answer?.value ??
+      input.sessionMemory?.last_user_question?.value ??
+      null,
+    currentTopic: continuityTopic,
+  });
+  const turnMeaning = canonicalTurnState.turn_meaning;
+  const plannedMove = canonicalTurnState.planned_move;
   const traceDecision = (
     oldText: string,
     newText: string,
@@ -1759,12 +1804,33 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   const finalizeCurrentResult = (): ResponseGateResult => {
     const finalOutput = normalize(text);
     const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
+    const classifiedWinningSourceFamily = classifyWinningSourceFamily(
+      finalOutput,
+      reason,
+      finalMatchesRaw,
+    );
+    const winningSourceFamily =
+      isSemanticPlannerOwnedMove(plannedMove) && !forced
+        ? "semantic_planner"
+        : classifiedWinningSourceFamily;
+    const semanticTrace = buildSemanticTurnTrace({
+      turnMeaning,
+      plannedMove,
+      winningSubsystem: winningSourceFamily,
+      contentSource: classifiedWinningSourceFamily,
+      styleWrapperApplied: false,
+      guardIntervention: forced,
+      commitOwnerId: input.commitOwnerId ?? null,
+      legacyOverrideAttempted:
+        replacementChain.length > 0 ||
+        (isSemanticPlannerOwnedMove(plannedMove) && classifiedWinningSourceFamily !== "raw_model"),
+    });
     if (forced && replacementChain.length === 0) {
       replacementChain.push({
         oldText: normalize(rawModelOutput),
         newText: finalOutput,
         reason,
-        sourcePath: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
+        sourcePath: winningSourceFamily,
       });
     }
     appendResponseGateTrace({
@@ -1779,7 +1845,10 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       finalMatchesRaw,
       replaced: !finalMatchesRaw,
       replacementReason: reason,
-      winningSourceFamily: classifyWinningSourceFamily(finalOutput, reason, finalMatchesRaw),
+      winningSourceFamily,
+      turnMeaning,
+      plannedMove,
+      semanticTrace,
       preservedCurrentAnswerAfterBlockedFallback,
       rawAlreadyBad: isKnownBadFamilyText(rawModelOutput),
       replacementIntroducedBadOutput:
@@ -1790,16 +1859,18 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       text: finalOutput,
       forced,
       reason,
+      semanticTrace,
     };
   };
-  const continuityTopic = resolveContinuityTopic(input);
   const conversationMove = classifyCoreConversationMove({
     userText: input.userText,
     previousAssistantText: input.lastAssistantText,
     currentTopic: continuityTopic,
   });
   const activeTaskThread = isActiveTaskThread(input);
-  const enforceTurnPlan = shouldEnforceTurnPlan(input);
+  const enforceTurnPlan = isSemanticPlannerOwnedMove(plannedMove)
+    ? false
+    : shouldEnforceTurnPlan(input);
   const explicitActivityDelegation = isExplicitActivityDelegation(input.userText);
   const assistantSelfDisclosureTurn =
     isAssistantSelfQuestion(input.userText) && !isAssistantServiceQuestion(input.userText);
@@ -2267,6 +2338,21 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     input.sceneState.topic_type !== "game_execution" &&
     input.sceneState.topic_type !== "reward_negotiation" &&
     input.sceneState.topic_type !== "reward_window" &&
+    containsConversationalControlScaffold(text)
+  ) {
+    text = candidates.buildOpenConversationFallback();
+    forced = true;
+    reason = "conversational_control_scaffold";
+  }
+
+  if (
+    !forced &&
+    !activeTaskThread &&
+    !isGameStartTurn &&
+    input.sceneState.topic_type !== "game_setup" &&
+    input.sceneState.topic_type !== "game_execution" &&
+    input.sceneState.topic_type !== "reward_negotiation" &&
+    input.sceneState.topic_type !== "reward_window" &&
     conversationMove !== "blocked_need_clarification" &&
     containsThinConversationReply(text)
   ) {
@@ -2486,11 +2572,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       forced = true;
       reason = "duplicate_output_replaced";
       traceDecision(oldText, text, reason, "buildFallback");
-      return {
-        text: normalize(text),
-        forced,
-        reason,
-      };
+      return finalizeCurrentResult();
     }
     const hasWagerCue = /\b(bet|wager|stakes|if i win|if you win)\b/i.test(
       normalize(input.userText),
@@ -2501,11 +2583,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       forced = true;
       reason = "duplicate_output_blocked";
       traceDecision(oldText, text, reason, "duplicate_output_path");
-      return {
-        text: normalize(text),
-        forced,
-        reason,
-      };
+      return finalizeCurrentResult();
     }
     const fallback = candidates.buildFallback();
     if (
@@ -2519,11 +2597,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         forced = true;
         reason = "duplicate_output_replaced";
         traceDecision(oldText, text, reason, "post_choice_game_question");
-        return {
-          text: normalize(text),
-          forced,
-          reason,
-        };
+        return finalizeCurrentResult();
       }
     }
     if (
@@ -2538,11 +2612,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         forced = true;
         reason = "duplicate_output_replaced";
         traceDecision(oldText, text, reason, "buildTaskFollowThroughRepair");
-        return {
-          text: normalize(text),
-          forced,
-          reason,
-        };
+        return finalizeCurrentResult();
       }
     }
     if (normalize(fallback).toLowerCase() !== normalized.toLowerCase()) {

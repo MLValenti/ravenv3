@@ -154,6 +154,9 @@ import {
   reduceAssistantEmission,
   reduceUserTurn,
 } from "@/lib/session/session-state-contract";
+import {
+  updateCanonicalTurnState,
+} from "@/lib/session/turn-meaning";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -1229,6 +1232,17 @@ export async function POST(request: Request) {
   const turnPlan = buildTurnPlan(messages, {
     conversationState: conversationStateSnapshot,
   });
+  const canonicalTurnState = updateCanonicalTurnState({
+    userText: lastUserMessage?.content ?? "",
+    previousAssistantText: conversationState.lastAssistantOutput ?? previousAssistantText(messages),
+    previousUserText: previousUserText(messages),
+    currentTopic:
+      conversationStateSnapshot.last_conversation_topic !== "none"
+        ? conversationStateSnapshot.last_conversation_topic
+        : null,
+  });
+  const turnMeaning = canonicalTurnState.turn_meaning;
+  const semanticMove = canonicalTurnState.planned_move;
   const responseStrategy = chooseResponseStrategy({
     turnPlan,
     conversationState: conversationStateSnapshot,
@@ -1774,6 +1788,8 @@ export async function POST(request: Request) {
     "x-raven-critic-reasons": encodeHeaderList(postShapeCritic.reasons),
     ...buildRepairDebugHeaders(modelRepairResolution),
     "x-raven-turn-plan": `${turnPlan.requiredMove}:${turnPlan.requestedAction}`,
+    "x-raven-turn-meaning": `${turnMeaning.speech_act}:${turnMeaning.subject_domain}:${turnMeaning.requested_operation}`,
+    "x-raven-semantic-move": `${semanticMove.move}:${semanticMove.content_key}`,
     "x-raven-shape-source": shaped.debug?.selectedSource ?? "model",
     "x-raven-prompt-profile": preparedPrompt.promptProfile,
     "x-raven-prompt-route": preparedPrompt.promptRouteMode,

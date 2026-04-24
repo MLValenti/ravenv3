@@ -5094,6 +5094,7 @@ export default function SessionPage() {
       sessionMemory: nextMemory,
       inventory: sessionInventory,
       observationTrust: evaluateObservationTrust(latestObservationRef.current, now()),
+      commitOwnerId: pendingTurn.requestId,
     });
     const rawGameStartInspection = inspectGameStartContract(
       replyText,

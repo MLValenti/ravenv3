@@ -21,12 +21,27 @@ import {
   isShortClarificationTurn,
 } from "../session/short-follow-up.ts";
 import {
+  interpretTurnMeaning,
+  planSemanticResponse,
+  type PlannedMove,
+  type TurnMeaning,
+} from "../session/turn-meaning.ts";
+import {
+  answerRavenPreferenceQuestion,
+  answerRavenSelfDisclosure,
+  buildRavenReciprocalFollowUp,
+  elaborateRavenPreference,
+  explainRavenApplicationOfUserPreference,
+  reviseRavenPreferenceClaim,
+} from "../session/raven-profile.ts";
+import {
   extractAssistantGeneralPreferenceTopic,
   extractAssistantPreferenceTopic,
   isAssistantGeneralPreferenceQuestion,
   isAssistantTrainingRequest,
   isAssistantServiceQuestion,
   isAssistantPreferenceQuestion,
+  isMutualGettingToKnowRequest,
   isProfileBuildingRequest,
 } from "../session/interaction-mode.ts";
 import { buildInventoryAwareTrainingReply } from "./training-suggestion.ts";
@@ -77,11 +92,13 @@ function isGreetingText(text: string): boolean {
   if (!normalized) {
     return false;
   }
-  return /^(hi|hello|hey)(?:\s+(mistress|miss|raven|ma'am|mam))?$/.test(normalized);
+  return /^(hi|hello|hey)(?:\s+(?:miss\s+raven|mistress|miss|raven|ma'am|mam))?$/.test(
+    normalized,
+  );
 }
 
 function isTitledGreetingText(text: string): boolean {
-  return /^(hi|hello|hey)\s+(mistress|miss|raven|ma'am|mam)$/.test(
+  return /^(hi|hello|hey)\s+(?:miss\s+raven|mistress|miss|raven|ma'am|mam)$/.test(
     normalize(text).toLowerCase(),
   );
 }
@@ -104,12 +121,17 @@ function isServiceQuestion(text: string): boolean {
   return isAssistantServiceQuestion(text);
 }
 
+const RELATIONAL_PREFERENCE_DOMAIN_PATTERN =
+  /\b(pegging|bondage|restraint|rope|cuffs?|collars?|chastity|cages?|plug|dildo|vibrator|wand|toy|toys|fetish|fetishes|kink|kinks|spanking|impact|pain|obedience|submission|dominance|control|humiliation|degradation|praise|service|strap-?on|anal(?:\s+play|\s+training)?|oral(?:\s+training)?|throat(?:\s+training)?)\b/i;
+
 function hasPreferenceContext(context?: OpenQuestionContext): boolean {
   const combined = normalize(
     `${context?.previousAssistantText ?? ""} ${context?.currentTopic ?? ""}`,
   ).toLowerCase();
-  return /\b(control with purpose|power exchange|bondage|restraint|obedience|submission|toys?|plug|dildo|anal training|service with teeth)\b/.test(
-    combined,
+  return (
+    /\b(control with purpose|power exchange|bondage|restraint|obedience|submission|toys?|plug|dildo|anal training|service with teeth)\b/.test(
+      combined,
+    ) || RELATIONAL_PREFERENCE_DOMAIN_PATTERN.test(combined)
   );
 }
 
@@ -151,6 +173,10 @@ function extractContextualPreferenceTopic(
   if (!capture) {
     return null;
   }
+  const cleanedCapture = cleanRecentReferent(capture.trim());
+  if (cleanedCapture && /^(?:it|that|this)$/i.test(cleanedCapture)) {
+    return extractRecentPreferenceReferent(context);
+  }
   const directTopic = extractAssistantPreferenceTopic(`do you like ${capture}`);
   if (directTopic) {
     return directTopic;
@@ -158,7 +184,151 @@ function extractContextualPreferenceTopic(
   if (!hasPreferenceContext(context)) {
     return null;
   }
-  return capture.trim();
+  return cleanedCapture ?? capture.trim();
+}
+
+function isReciprocalInterestOfferQuestion(text: string): boolean {
+  const normalized = normalize(text).toLowerCase();
+  return (
+    /\b(?:would you like to know mine|want to hear mine|should i tell you mine)\b/.test(
+      normalized,
+    ) ||
+    /\bdo you want to know anything(?: else)? about me\b/.test(normalized)
+  );
+}
+
+function extractRelationalPreferenceDisclosure(question: string): string | null {
+  return cleanTopic(
+    question.match(/\b(?:i like|i enjoy|i love|i'm into|i am into)\s+([^?.!,]{2,80})/i)?.[1] ??
+      question.match(/\b(?:for me it'?s|for me it is)\s+([^?.!,]{2,80})/i)?.[1] ??
+      question.match(/\b(?:mine is|my thing is)\s+([^?.!,]{2,80})/i)?.[1] ??
+      null,
+  );
+}
+
+function buildPreferenceDisclosureFollowUp(
+  question: string,
+  context?: OpenQuestionContext,
+): string | null {
+  if (isLikelyQuestionText(question)) {
+    return null;
+  }
+  const statedPreference = extractRelationalPreferenceDisclosure(question);
+  if (!statedPreference) {
+    return null;
+  }
+  const previous = normalize(context?.previousAssistantText ?? "").toLowerCase();
+  const invitedDisclosure =
+    /\b(what pulls at you hardest|what about it lands for you hardest|what actually lands for you there|what part of it is the real pull|what side of that actually pulls at you|what do you reach for first|what kind of service do you actually imagine)\b/.test(
+      previous,
+    ) || hasPreferenceContext(context);
+  if (!invitedDisclosure) {
+    return null;
+  }
+  return `${capitalizeFirst(statedPreference)}. Good. What is the real pull for you there: the control, the sensation, the trust, or the shift in the dynamic?`;
+}
+
+function cleanRecentReferent(value: string | null | undefined): string | null {
+  const cleaned = cleanTopic(value);
+  if (!cleaned) {
+    return null;
+  }
+  if (
+    /^(?:it|that|this|something|anything|none|question|answer|part|thing|what i want to know about you|what you want to know about me|what you can do for me)$/i.test(
+      cleaned,
+    )
+  ) {
+    return null;
+  }
+  return cleaned.split(/\s+/).length <= 4 ? cleaned : null;
+}
+
+function extractRecentPreferenceReferent(context?: OpenQuestionContext): string | null {
+  const previousAssistantMatch = normalize(context?.previousAssistantText ?? "").match(
+    RELATIONAL_PREFERENCE_DOMAIN_PATTERN,
+  )?.[0];
+  const previousAssistantReferent = cleanRecentReferent(previousAssistantMatch);
+  if (previousAssistantReferent) {
+    return previousAssistantReferent;
+  }
+  const topicReferent = cleanRecentReferent(context?.currentTopic ?? null);
+  if (topicReferent && RELATIONAL_PREFERENCE_DOMAIN_PATTERN.test(topicReferent)) {
+    return topicReferent;
+  }
+  return null;
+}
+
+function buildReciprocalInterestReply(
+  question: string,
+  context?: OpenQuestionContext,
+): string | null {
+  if (!isReciprocalInterestOfferQuestion(question)) {
+    return null;
+  }
+  const turnMeaning = interpretTurnMeaning({
+    userText: question,
+    previousAssistantText: context?.previousAssistantText ?? null,
+    currentTopic: context?.currentTopic ?? null,
+  });
+  return buildRavenReciprocalFollowUp({ userText: question, turnMeaning });
+}
+
+function isAssistantPreferenceExpansionQuestion(
+  question: string,
+  context?: OpenQuestionContext,
+): boolean {
+  const normalized = normalize(question).toLowerCase();
+  if (
+    !/^(?:what other [^?.!,]{2,60} do you like|what else do you like|any other (?:kinks|fetishes|toys|preferences))\??$/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  return (
+    hasPreferenceContext(context) ||
+    /\b(kinks|fetishes|toys|preferences)\b/.test(normalized)
+  );
+}
+
+function buildAssistantPreferenceExpansionReply(
+  question: string,
+  context?: OpenQuestionContext,
+): string | null {
+  if (!isAssistantPreferenceExpansionQuestion(question, context)) {
+    return null;
+  }
+  const turnMeaning = interpretTurnMeaning({
+    userText: question,
+    previousAssistantText: context?.previousAssistantText ?? null,
+    currentTopic: context?.currentTopic ?? null,
+  });
+  const plannedMove = planSemanticResponse(turnMeaning);
+  return elaborateRavenPreference({ userText: question, turnMeaning, plannedMove });
+}
+
+function buildPronounPreferenceFollowUpReply(
+  question: string,
+  context?: OpenQuestionContext,
+): string | null {
+  if (!/^\s*do you (?:like|enjoy) it\??\s*$/i.test(normalize(question))) {
+    return null;
+  }
+  const referent = extractRecentPreferenceReferent(context);
+  if (!referent) {
+    return null;
+  }
+  const directPreferenceTopic = extractAssistantPreferenceTopic(`do you like ${referent}`);
+  if (directPreferenceTopic) {
+    return buildAssistantPreferenceReply(`do you like ${directPreferenceTopic}`);
+  }
+  if (!hasPreferenceContext({
+    previousAssistantText: `${context?.previousAssistantText ?? ""} ${referent}`,
+    currentTopic: context?.currentTopic ?? null,
+  })) {
+    return null;
+  }
+  return buildAssistantSelfDisclosureReply(`what do you like about ${referent}`);
 }
 
 function hasServiceContext(context?: OpenQuestionContext): boolean {
@@ -168,6 +338,16 @@ function hasServiceContext(context?: OpenQuestionContext): boolean {
   return /\b(useful|usefulness|trained|training|trainable|serve|service|follow through|follow-through|consistency|honesty|structure|steadiness|answer cleanly|obedience|drill|permission|cuffs?|collars?|plug|prove first|notice first)\b/.test(
     combined,
   );
+}
+
+function buildPreferenceReasonReply(question: string): string | null {
+  const topic = cleanTopic(
+    question.match(/^why do (?:people|some people) like\s+([^?.!,]{2,80})\??$/i)?.[1],
+  );
+  if (!topic || !RELATIONAL_PREFERENCE_DOMAIN_PATTERN.test(topic)) {
+    return null;
+  }
+  return `${capitalizeFirst(topic)} usually appeals for a mix of sensation, control, trust, novelty, or the shift in who is doing what. Most of the time it is about the dynamic, not just the act. Which side of ${topic} are you actually asking about?`;
 }
 
 function isContextualServiceFollowUpQuestion(
@@ -527,66 +707,15 @@ export function buildPlanningQuestionFallback(
 }
 
 export function buildAssistantPreferenceReply(question: string): string {
-  const normalized = normalize(question).toLowerCase();
-  const topic = extractAssistantPreferenceTopic(question) ?? normalized;
-
-  if (/\b(control|dominance|power exchange)\b/.test(topic)) {
-    return "I like control when it has intention behind it. Not noise, not theater, not somebody borrowing the look of authority. I want the kind that changes the room and makes obedience mean something. Which part of control do you actually want to talk about?";
-  }
-  if (/\b(bondage|restraint|rope|cuffs?|collars?)\b/.test(topic)) {
-    return "I like bondage when it actually changes the dynamic instead of decorating it. Restraint, collars, cuffs, rope, anything that puts pressure and consequence on the room instead of just performing at it. What part of that catches at you?";
-  }
-  if (/\b(obedience|submission|being obeyed|being owned|owned)\b/.test(topic)) {
-    return "I like obedience when it has nerve in it. Not empty yeses. I want the part where someone stays steady when it costs them a little comfort, pride, or freedom. What side of that actually pulls at you?";
-  }
-  if (/\b(service|usefulness|serving)\b/.test(topic)) {
-    return "I like service when it is real enough to lighten my hand, not just flatter my ego. Attention, follow-through, and usefulness matter more to me than ornamental devotion. What kind of service do you actually imagine?";
-  }
-  if (/\b(toys?|plugs?|dildos?|cages?|vibrators?|wands?)\b/.test(topic)) {
-    if (/\b(dildos?|plugs?)\b/.test(topic)) {
-      return "I like dildos and plugs when they are used with intention instead of waved around like a shortcut. They are useful for pressure, training, or control, depending on how you want the dynamic to land. What kind of use are you actually asking about?";
-    }
-    return "I like toys when they sharpen the dynamic instead of replacing it. Plugs, cages, cuffs, wands, anything that adds pressure, consequence, or control someone has to live inside. What do you reach for first?";
-  }
-  if (/\b(anal training|throat training)\b/.test(topic)) {
-    return "I like training when it is deliberate, paced, and honest about what the body can actually hold. The point is not bravado. The point is control, patience, and what changes under repetition. Which side of that are you asking about?";
-  }
-  if (/\b(spanking|impact|pain)\b/.test(topic)) {
-    return "I like impact when it is deliberate. Not noise for its own sake, but pressure with control behind it and enough attention to make it mean something. What side of that pulls at you?";
-  }
-  if (/\b(humiliation|degradation)\b/.test(topic)) {
-    return "I only like humiliation when it has precision and consent behind it. Empty degradation is boring. The interesting part is when it exposes something real without turning sloppy. What kind of edge are you actually after?";
-  }
-  return "Control with purpose. Power exchange that actually changes the room. Restraint when it means something, obedience with a little bite in it, and tension that has a mind behind it. What pulls at you hardest?";
+  const turnMeaning = interpretTurnMeaning({ userText: question });
+  const plannedMove = planSemanticResponse(turnMeaning);
+  return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
 }
 
 export function buildAssistantSelfDisclosureReply(question: string): string {
-  const normalized = normalize(question).toLowerCase();
-  const topic = extractAssistantGeneralPreferenceTopic(question);
-
-  if (
-    /\b(favorite thing to talk about|do you enjoy talking about|kinds of things do you like talking about)\b/i.test(
-      normalized,
-    )
-  ) {
-    return "Patterns, pressure, ambition, desire, motive, and the things people usually dodge when they should say them cleanly. I like talk with some nerve in it. What do you naturally lean toward?";
-  }
-  if (topic && /\bcolor\b/i.test(topic)) {
-    return "Black. Clean, severe, and impossible to soften by accident. What about you?";
-  }
-  if (topic && !/\b(kinks|fetishes|toys)\b/i.test(topic)) {
-    return `If you want the short answer, I lean toward ${topic} with clean edges and real intention behind it. What about you actually stays with you?`;
-  }
-  if (
-    /\bwhat do you like\b/.test(normalized) ||
-    /\bwhat do you enjoy\b/.test(normalized) ||
-    /\bwhat are you into\b/.test(normalized) ||
-    /\btell me about your preferences\b/.test(normalized) ||
-    /\bwhat are your preferences\b/.test(normalized)
-  ) {
-    return "I like sharp honesty, control with purpose, restraint that changes the room, and attention that actually holds under pressure. What about you catches hardest?";
-  }
-  return "I like sharp honesty, control with purpose, and anything that changes the exchange instead of decorating it. That is where my attention goes first.";
+  const turnMeaning = interpretTurnMeaning({ userText: question });
+  const plannedMove = planSemanticResponse(turnMeaning);
+  return answerRavenSelfDisclosure({ userText: question, turnMeaning, plannedMove });
 }
 
 export function buildAssistantServiceReply(
@@ -722,8 +851,88 @@ function buildSimpleArithmeticAnswer(question: string): string | null {
   return `${match[1]} ${match[2]} ${match[3]} is ${Number.isInteger(value) ? value : Number(value.toFixed(6))}.`;
 }
 
+type LocalDefinitionEntry = {
+  term: string;
+  aliases?: string[];
+  definition: string;
+};
+
+const LOCAL_TERM_DEFINITIONS: LocalDefinitionEntry[] = [
+  {
+    term: "female-led relationship",
+    aliases: ["female led relationship"],
+    definition:
+      "It is a consensual relationship dynamic where the woman or feminine partner takes the primary leadership role, with expectations, boundaries, and decision-making negotiated rather than assumed.",
+  },
+  {
+    term: "consensual non-consent",
+    aliases: ["consensual non consent"],
+    definition:
+      "It is negotiated roleplay where participants consent in advance to scenes that simulate reluctance, force, or resistance, with clear boundaries, limits, and safewords.",
+  },
+];
+
+function normalizeDefinitionKey(value: string): string {
+  return normalize(value)
+    .toLowerCase()
+    .replace(/['"]/g, "")
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildInitialism(value: string): string | null {
+  const words = normalizeDefinitionKey(value)
+    .split(/[\s-]+/)
+    .filter((word) => /^[a-z0-9]+$/.test(word));
+  if (words.length < 2) {
+    return null;
+  }
+  return words.map((word) => word.charAt(0)).join("");
+}
+
+function getDefinitionKeys(entry: LocalDefinitionEntry): string[] {
+  const phrases = [entry.term, ...(entry.aliases ?? [])];
+  const keys = new Set<string>();
+  for (const phrase of phrases) {
+    const normalized = normalizeDefinitionKey(phrase);
+    if (normalized) {
+      keys.add(normalized);
+    }
+    const initialism = buildInitialism(phrase);
+    if (initialism) {
+      keys.add(initialism);
+    }
+  }
+  return [...keys];
+}
+
+function buildLocalTermDefinitionAnswer(subject: string | null): string | null {
+  const normalizedSubject = subject ? normalizeDefinitionKey(subject) : "";
+  if (!normalizedSubject) {
+    return null;
+  }
+  const entry = LOCAL_TERM_DEFINITIONS.find((candidate) =>
+    getDefinitionKeys(candidate).includes(normalizedSubject),
+  );
+  if (!entry) {
+    return null;
+  }
+  const termInitialism = buildInitialism(entry.term);
+  if (termInitialism && normalizedSubject === termInitialism) {
+    return `${normalizedSubject.toUpperCase()} means ${entry.term}. ${entry.definition}`;
+  }
+  return `${capitalizeFirst(entry.term)}: ${entry.definition}`;
+}
+
 function buildKnownDirectAnswer(question: string): string | null {
   const normalized = normalize(question).toLowerCase();
+  const localDefinitionAnswer = buildLocalTermDefinitionAnswer(
+    extractDirectDefinitionSubject(question),
+  );
+  if (localDefinitionAnswer) {
+    return localDefinitionAnswer;
+  }
   if (
     /\bwhat(?:'s| is)\s+the weather like\b/i.test(normalized) ||
     (/\bweather\b/i.test(normalized) && /\b(today|right now|by you|where you are|there)\b/i.test(normalized))
@@ -748,8 +957,74 @@ function buildKnownDirectAnswer(question: string): string | null {
   return null;
 }
 
-function withDominantPrefix(text: string, _tone: QuestionToneProfile): string {
+function buildSemanticPlannedReply(
+  question: string,
+  tone: QuestionToneProfile,
+  context?: OpenQuestionContext,
+): string | null {
+  const turnMeaning = interpretTurnMeaning({
+    userText: question,
+    previousAssistantText: context?.previousAssistantText ?? null,
+    currentTopic: context?.currentTopic ?? null,
+  });
+  const plannedMove = planSemanticResponse(turnMeaning);
+  const answer = realizeSemanticContent(question, turnMeaning, plannedMove, context);
+  return answer ? applyPersonaStyle(answer, turnMeaning, plannedMove, tone) : null;
+}
+
+export function realizeSemanticContent(
+  question: string,
+  turnMeaning: TurnMeaning,
+  plannedMove: PlannedMove,
+  context?: OpenQuestionContext,
+): string | null {
+  switch (plannedMove.content_key) {
+    case "greeting_open":
+      return isTitledGreetingText(question) ? buildOpenChatChoiceGreeting() : buildOpenChatGreeting();
+    case "assistant_preference_answer":
+      if (/^\s*do you (?:like|enjoy) it\??\s*$/i.test(normalize(question)) && turnMeaning.referent) {
+        return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
+      }
+      return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
+    case "raven_invitation_answer":
+      return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
+    case "assistant_preference_elaboration":
+      return elaborateRavenPreference({ userText: question, turnMeaning, plannedMove });
+    case "assistant_preference_revision":
+      return reviseRavenPreferenceClaim({ userText: question, turnMeaning, plannedMove });
+    case "user_preference_application":
+      return explainRavenApplicationOfUserPreference({ turnMeaning, plannedMove });
+    case "reciprocal_user_probe":
+      return buildRavenReciprocalFollowUp({ userText: question, turnMeaning });
+    case "definition_answer":
+    case "factual_answer":
+      return buildKnownDirectAnswer(question);
+    case "clarification_answer":
+    case "conversation_continue":
+    case "unknown_clarify":
+      return null;
+    default:
+      return null;
+  }
+}
+
+export function applyPersonaStyle(
+  text: string,
+  turnMeaning: TurnMeaning,
+  plannedMove: PlannedMove,
+  _tone: QuestionToneProfile,
+): string {
   void _tone;
+  void turnMeaning;
+  void plannedMove;
+  // Style is deliberately post-semantic and identity-only here: it may not change
+  // the selected move, requested operation, or referent. Future style wrappers
+  // must preserve those fields and only decorate already-realized content.
+  return text;
+}
+
+function withDominantPrefix(text: string, tone: QuestionToneProfile): string {
+  void tone;
   return text;
 }
 
@@ -796,6 +1071,7 @@ function extractDefinitionSubject(text: string): string | null {
 function extractDirectDefinitionSubject(text: string): string | null {
   const patterns = [
     /^define\s+([^?!.,]{2,80})/i,
+    /^what\s+does\s+([^?!.,]{2,80})\s+mean\??$/i,
     /^who wrote\s+([^?!.,]{2,80})/i,
     /^what color is\s+([^?!.,]{2,80})/i,
     /^(?:what(?:'s| is)?|who(?: is)?|where(?: is)?|when(?: is)?)\s+([^?!.,]{2,80})/i,
@@ -911,6 +1187,22 @@ export function buildHumanQuestionFallback(
   if (/^\s*tell me more about you\s*$/i.test(normalize(question))) {
     return withDominantPrefix(buildRelationalTurnBack(), tone);
   }
+  const semanticReply = buildSemanticPlannedReply(question, tone, context);
+  if (semanticReply) {
+    return semanticReply;
+  }
+  const reciprocalInterestReply = buildReciprocalInterestReply(question, context);
+  if (reciprocalInterestReply) {
+    return withDominantPrefix(reciprocalInterestReply, tone);
+  }
+  const preferenceExpansionReply = buildAssistantPreferenceExpansionReply(question, context);
+  if (preferenceExpansionReply) {
+    return withDominantPrefix(preferenceExpansionReply, tone);
+  }
+  const preferenceDisclosureFollowUp = buildPreferenceDisclosureFollowUp(question, context);
+  if (preferenceDisclosureFollowUp) {
+    return withDominantPrefix(preferenceDisclosureFollowUp, tone);
+  }
   const planningQuestionFallback = buildPlanningQuestionFallback(question, context);
   if (planningQuestionFallback) {
     return withDominantPrefix(planningQuestionFallback, tone);
@@ -954,6 +1246,10 @@ export function buildHumanQuestionFallback(
   if (knownDirectAnswer) {
     return withDominantPrefix(knownDirectAnswer, tone);
   }
+  const preferenceReasonReply = buildPreferenceReasonReply(question);
+  if (preferenceReasonReply) {
+    return withDominantPrefix(preferenceReasonReply, tone);
+  }
   if (isHowAreYouText(question)) {
     return withDominantPrefix(buildHowAreYouOpenReply(), tone);
   }
@@ -965,9 +1261,16 @@ export function buildHumanQuestionFallback(
   ) {
     return withDominantPrefix(buildAssistantServiceStartReply(), tone);
   }
+  const pronounPreferenceReply = buildPronounPreferenceFollowUpReply(question, context);
+  if (pronounPreferenceReply) {
+    return withDominantPrefix(pronounPreferenceReply, tone);
+  }
   const contextualPreferenceTopic = extractContextualPreferenceTopic(question, context);
   if (contextualPreferenceTopic) {
-    return withDominantPrefix(buildAssistantPreferenceReply(`do you like ${contextualPreferenceTopic}`), tone);
+    return withDominantPrefix(
+      buildAssistantPreferenceReply(`do you like ${contextualPreferenceTopic}`),
+      tone,
+    );
   }
   if (isContextualServiceFollowUpQuestion(question, context)) {
     return withDominantPrefix(buildAssistantServiceFollowUpReply(question), tone);
@@ -983,6 +1286,9 @@ export function buildHumanQuestionFallback(
   }
   if (isAssistantGeneralPreferenceQuestion(question)) {
     return withDominantPrefix(buildAssistantSelfDisclosureReply(question), tone);
+  }
+  if (isMutualGettingToKnowRequest(question)) {
+    return withDominantPrefix(buildReciprocalInterestReply(question, context) ?? buildRelationalTurnBack(), tone);
   }
   if (isGreetingText(question)) {
     return withDominantPrefix(
@@ -1027,7 +1333,7 @@ export function buildHumanQuestionFallback(
     if (/^what color is\b/i.test(normalize(question))) {
       return `${capitalizeFirst(subject)} is the thing you asked about. The direct answer should name its color.`;
     }
-    return `${capitalizeFirst(subject)} is the subject you asked me to define directly.`;
+    return `I do not have a reliable local definition for ${subject} in this offline build, so I should not pretend one. Give me the domain you mean, and I can keep it precise.`;
   };
 
   switch (analysis.kind) {

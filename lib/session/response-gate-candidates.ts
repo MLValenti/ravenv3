@@ -60,6 +60,12 @@ function normalize(text: string): string {
   return text.trim().replace(/\s+/g, " ");
 }
 
+function isReciprocalInterestTurn(text: string): boolean {
+  return /\b(would you like to know mine|want to hear mine|should i tell you mine|do you want to know anything(?: else)? about me)\b/i.test(
+    text,
+  );
+}
+
 function isBareOpinionFollowUp(text: string): boolean {
   return /^(?:what do you think|and what do you think|what about you|thoughts)\??$/i.test(
     normalize(text),
@@ -298,6 +304,14 @@ export function createResponseGateCandidateBuilder(
       return "Not much yet. Give me one thing about yourself that is actually worth keeping, and I will hold onto it.";
     }
     if (isMutualGettingToKnowRequest(gateInput.userText)) {
+      if (isReciprocalInterestTurn(gateInput.userText)) {
+        return buildHumanQuestionFallback(gateInput.userText, toneProfile, {
+          previousAssistantText: gateInput.lastAssistantText,
+          currentTopic: continuityTopic,
+          inventory: gateInput.inventory ?? null,
+          trainingThread: gateInput.sceneState.active_training_thread,
+        });
+      }
       return "Good. We can play it both ways. Put a real question on me first, then I may put one back on you.";
     }
     if (isAssistantSelfQuestion(gateInput.userText)) {
@@ -310,6 +324,7 @@ export function createResponseGateCandidateBuilder(
     }
     if (
       gateInput.sceneState.interaction_mode === "profile_building" ||
+      gateInput.sceneState.interaction_mode === "relational_chat" ||
       isProfileBuildingRequest(gateInput.userText) ||
       looksLikeProfileDisclosure(gateInput.userText) ||
       looksLikeChoiceOrThreadAnswer(gateInput.userText, gateInput.lastAssistantText)

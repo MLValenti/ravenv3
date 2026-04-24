@@ -442,14 +442,14 @@ test("conversation replay summary aggregates scenario counts and style metrics",
   assert.ok(summary.styles.directness >= 0);
 });
 
-test("conversation replay traces the known greeting fallback failure as blocked", async () => {
+test("conversation replay routes the known greeting fallback case through deterministic scene", async () => {
   const scenario = CONVERSATION_REPLAY_SCENARIOS.find(
     (entry) => entry.id === "greeting_open_chat_blocked_clarification",
   );
   assert.ok(scenario);
   const result = await replayConversationScenario(scenario!);
   assert.equal(result.violations.length, 0);
-  assert.equal(result.traces[0]?.finalOutputSource, "scene_fallback");
+  assert.equal(result.traces[0]?.finalOutputSource, "deterministic_scene");
   assert.match(result.traces[0]?.finalText ?? "", /enough hovering|what you actually want/i);
   assert.doesNotMatch(
     result.traces[0]?.finalText ?? "",

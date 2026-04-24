@@ -1791,7 +1791,12 @@ export const CONVERSATION_REPLAY_SCENARIOS: ReplayScenarioDefinition[] = [
             "tell me more about happens",
             "there you are. start talking",
           ],
-          requiredPhrasesAny: ["enough hovering", "what you actually want", "there you are"],
+          requiredPhrasesAny: [
+            "enough hovering",
+            "what you actually want",
+            "there you are",
+            "what has your attention tonight",
+          ],
           requireSingleWinner: true,
         },
       },

@@ -64,6 +64,14 @@ const WEAK_NONANSWER_PATTERNS = [
   /\bmore about how it actually shows up between people\b/i,
   /\bhow it actually shows up between people\b/i,
   /\bless about the label\b/i,
+  /\bis the subject you asked me to define directly\b/i,
+  /\bthe direct factual answer should\b/i,
+];
+
+const WRONG_SPEAKER_SELF_PROFILE_PATTERNS = [
+  /\bi enjoy being submissive\b/i,
+  /\bi(?:'m| am)\s+submissive\b/i,
+  /\bsubmissive in a controlled environment\b/i,
 ];
 
 const COLOR_WORDS = [
@@ -227,10 +235,27 @@ function matchesPreferenceTopicSemantically(preferenceTopic: string, answerText:
   return false;
 }
 
+function hasWrongSpeakerSelfProfile(questionText: string, answerText: string): boolean {
+  if (!isAssistantSelfQuestion(questionText)) {
+    return false;
+  }
+  const normalizedAnswer = normalize(answerText);
+  if (WRONG_SPEAKER_SELF_PROFILE_PATTERNS.some((pattern) => pattern.test(normalizedAnswer))) {
+    return true;
+  }
+  return (
+    /\bit calms me down\b/i.test(normalizedAnswer) &&
+    /\b(controlled environment|submissive)\b/i.test(normalizedAnswer)
+  );
+}
+
 function isDirectAssistantSelfAnswer(questionText: string, answerText: string): boolean {
   const normalizedQuestion = normalizeAssistantSelfQuestionText(questionText);
   const normalizedAnswer = normalize(answerText);
   if (!normalizedAnswer) {
+    return false;
+  }
+  if (hasWrongSpeakerSelfProfile(normalizedQuestion, normalizedAnswer)) {
     return false;
   }
   if (isExplicitBoundaryAnswer(normalizedAnswer)) {
@@ -281,6 +306,9 @@ export function questionSatisfiedMeaningfully(questionText: string, answerText: 
   }
   if (!normalizedQuestion) {
     return true;
+  }
+  if (WEAK_NONANSWER_PATTERNS.some((pattern) => pattern.test(normalizedAnswer))) {
+    return false;
   }
   if (detectRepairTurnKind(normalizedQuestion)) {
     return true;

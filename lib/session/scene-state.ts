@@ -300,6 +300,24 @@ function truncate(text: string, max = 180): string {
   return `${normalized.slice(0, max)}...`;
 }
 
+function isAssistantFacingRelationalDisclosure(
+  userText: string,
+  previousAssistantText: string | null,
+): boolean {
+  const normalized = normalize(userText).toLowerCase();
+  if (
+    !/^(?:i like|i enjoy|i love|i'm into|i am into|for me it(?:'s| is)|mine is|my thing is)\b/.test(
+      normalized,
+    )
+  ) {
+    return false;
+  }
+  const previous = normalize(previousAssistantText ?? "").toLowerCase();
+  return /\b(what pulls at you hardest|what about it lands for you hardest|what actually lands for you there|what part of it is the real pull|what side of that actually pulls at you|what do you reach for first|what kind of service do you actually imagine|control with purpose|power exchange|bondage|obedience|submission|service|pegging|kinks|fetishes)\b/.test(
+    previous,
+  );
+}
+
 function inferSceneTopicType(input: {
   act: DialogueRouteAct;
   sessionTopic: SessionTopic | null;
@@ -2539,11 +2557,23 @@ export function buildSceneFallback(
         trainingThread: state.active_training_thread,
       });
     }
-    if (conversationFallback) {
-      return conversationFallback;
+    if (
+      isAssistantFacingRelationalDisclosure(
+        userText,
+        state.last_assistant_text || state.last_profile_prompt || null,
+      )
+    ) {
+      return buildHumanQuestionFallback(userText, "neutral", {
+        currentTopic: state.agreed_goal || null,
+        previousAssistantText:
+          state.last_assistant_text || state.last_profile_prompt || null,
+        inventory,
+        trainingThread: state.active_training_thread,
+      });
     }
     if (
       isAssistantSelfQuestion(userText) ||
+      isMutualGettingToKnowRequest(userText) ||
       /^(what|how|why|when|where|who|which|can|could|would|will|do|does|did|is|are)\b/i.test(
         userText.trim(),
       )
@@ -2555,6 +2585,9 @@ export function buildSceneFallback(
         inventory,
         trainingThread: state.active_training_thread,
       });
+    }
+    if (conversationFallback) {
+      return conversationFallback;
     }
     return buildRelationalTurnBack();
   }

@@ -139,7 +139,7 @@ export function isClarificationExpansionRequest(text: string): boolean {
   if (detectRepairTurnKind(normalized)) {
     return true;
   }
-  return /^(?:tell me more|say more|more detail|more details|go on|keep going|how so|why|then what|elaborate|expand on that)$/i.test(
+  return /^(?:tell me more|say more|more detail|more details|in more detail|in more details|go on|keep going|how so|why|then what|elaborate|expand on that)$/i.test(
     normalized,
   );
 }

@@ -187,6 +187,27 @@ test("response gate preserves a coherent natural self-disclosure answer on an op
   assert.match(result.text, /\bblack\b/i);
 });
 
+test("response gate rejects wrong-speaker self-profile answers on Raven kink questions", () => {
+  const result = applyResponseGate({
+    text: "I prefer structure because it calms me down. I enjoy being submissive in a controlled environment. My style is strict and I have a penchant for pegging.",
+    userText: "what are you kinks?",
+    dialogueAct: "user_question",
+    lastAssistantText: "Enough hovering, pet. Tell me what you actually want.",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+      topic_locked: false,
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(result.text, /i enjoy being submissive|submissive in a controlled environment|calms me down/i);
+});
+
 test("response gate rewrites assistant-service turn-back fallback into a real training answer", () => {
   const result = applyResponseGate({
     text: "Ask me directly, and I will answer. Then I may turn one back on you.",
@@ -3115,6 +3136,44 @@ test("response gate rejects generic game consequence filler and keeps consequenc
   assert.equal(result.forced, true);
   assert.match(result.text, /consequence|wear your cage overnight|say ready|enforce/i);
   assert.doesNotMatch(result.text, /fine\. say what you want/i);
+});
+
+test("response gate rejects conversational control scaffold on direct self-disclosure questions", () => {
+  const result = applyResponseGate({
+    text: "Understand that we have rules here. Your desire for control is all you need to know.",
+    userText: "i want to know your kinks",
+    dialogueAct: "user_question",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(result.text, /rules here|all you need to know/i);
+});
+
+test("response gate rejects malformed conversational template residue", () => {
+  const result = applyResponseGate({
+    text: "I'm , pet. Remember your place.",
+    userText: "in detail what are your favorite kinks and fetishes?",
+    dialogueAct: "user_question",
+    sceneState: {
+      ...createSceneState(),
+      interaction_mode: "relational_chat",
+      topic_type: "general_request",
+    },
+    commitmentState: createCommitmentState(),
+  });
+
+  assert.equal(result.forced, true);
+  assert.notEqual(result.reason, "accepted");
+  assert.match(result.text, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(result.text, /i(?:'m| am)\s*,\s*pet|remember your place/i);
 });
 
 test("response gate rejects game setup reopening on active game move follow-through", () => {

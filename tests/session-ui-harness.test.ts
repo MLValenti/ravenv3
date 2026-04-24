@@ -49,6 +49,10 @@ import {
   type TurnGateState,
 } from "../lib/session/turn-gate.ts";
 import { buildChatSwitchReply } from "../lib/session/mode-style.ts";
+import {
+  planDomainAnswer,
+  validateAnswerContract,
+} from "../lib/session/raven-preferences.ts";
 import { buildDeterministicDominantWeakInputReply } from "../lib/session/weak-input-replies.ts";
 import type { SessionInventoryItem } from "../lib/session/session-inventory.ts";
 
@@ -181,6 +185,7 @@ function applyUserTurn(state: HarnessState, userText: string): string {
     sceneState: state.scene,
     dialogueAct: route.act,
     hasDeterministicCandidate: Boolean(deterministicCandidate),
+    latestUserText: userText,
   });
   const candidate = bypassModel
     ? deterministicCandidate ?? sceneFallback
@@ -206,6 +211,7 @@ function applyUserTurn(state: HarnessState, userText: string): string {
     sceneState: state.scene,
     commitmentState: createCommitmentState(),
     inventory: state.inventory ?? [],
+    commitOwnerId: `ui-harness-${state.gate.stepIndex}`,
   });
 
   const emit = canEmitAssistant(state.gate, `ui-harness-${state.gate.stepIndex}`, gated.text);
@@ -236,6 +242,36 @@ function applySessionPathDebugTurn(
   text: string;
   debug: {
     rawUserText: string;
+    selectedSemanticMove: string;
+    styleWrapperApplied: boolean;
+    scaffoldId: string | null;
+    refusalReason: string | null;
+    finalWinnerSource: string;
+    turnMeaning: {
+      speech_act: string;
+      target: string;
+      subject_domain: string;
+      requested_operation: string;
+      referent: string | null;
+      continuity_attachment: string;
+      question_shape: string;
+      entity_set: string[];
+      answer_contract: string;
+      required_referent: string | null;
+      required_scope: string;
+      current_domain_handler: string;
+      confidence: number;
+    };
+    plannedMove: {
+      move: string;
+      content_key: string;
+      reason: string;
+    };
+    winningSubsystem: string;
+    guardIntervention: boolean;
+    contentSource: string;
+    commitOwnerId: string | null;
+    legacyOverrideAttempted: boolean;
     assistantCandidatesProduced: string[];
     finalCommittedAssistantOutputCount: number;
     finalCommittedAssistantText: string;
@@ -334,6 +370,7 @@ function applySessionPathDebugTurn(
     sceneState: state.scene,
     dialogueAct: reducedUserTurn.route.act,
     hasDeterministicCandidate: Boolean(deterministicCandidate),
+    latestUserText: userText,
   });
   const candidate = bypassModel
     ? deterministicCandidate ?? sceneFallback
@@ -359,6 +396,7 @@ function applySessionPathDebugTurn(
     sceneState: state.scene,
     commitmentState: createCommitmentState(),
     inventory: state.inventory ?? [],
+    commitOwnerId: `ui-debug-${state.gate.stepIndex}`,
   });
   const emit = canEmitAssistant(state.gate, `ui-debug-${state.gate.stepIndex}`, gated.text);
   assert.equal(emit.allow, true);
@@ -379,6 +417,22 @@ function applySessionPathDebugTurn(
   state.outputs.push(gated.text);
 
   const finalCommittedAssistantText = gated.text;
+  const finalWinnerSource =
+    conversationArrivalReply && candidate === conversationArrivalReply
+      ? "conversation_arrival"
+      : scaffolded && candidate === scaffolded
+        ? "scene_scaffold"
+        : deterministicWeakInputReply && candidate === deterministicWeakInputReply
+          ? "weak_input"
+          : sceneFallback && candidate === sceneFallback
+            ? "scene_fallback"
+            : "unknown";
+  const refusalReason =
+    /all you need to know|understand that we have rules here|remember your place|i(?:'m| am)\s*,\s*pet/i.test(
+      finalCommittedAssistantText,
+    )
+      ? "control_scaffold_or_malformed_template"
+      : null;
   const personaMarkers = ["sharp", "sharp enough", "pet", "enough hovering"].filter((marker) =>
     new RegExp(marker.replace(/\s+/g, "\\s+"), "i").test(finalCommittedAssistantText),
   );
@@ -386,6 +440,36 @@ function applySessionPathDebugTurn(
     text: gated.text,
     debug: {
       rawUserText: userText,
+      selectedSemanticMove: gated.semanticTrace.planned_move.move,
+      styleWrapperApplied: false,
+      scaffoldId: scaffolded ? state.scene.topic_type : null,
+      refusalReason,
+      finalWinnerSource,
+      turnMeaning: {
+        speech_act: gated.semanticTrace.turn_meaning.speech_act,
+        target: gated.semanticTrace.turn_meaning.target,
+        subject_domain: gated.semanticTrace.turn_meaning.subject_domain,
+        requested_operation: gated.semanticTrace.turn_meaning.requested_operation,
+        referent: gated.semanticTrace.turn_meaning.referent,
+        continuity_attachment: gated.semanticTrace.turn_meaning.continuity_attachment,
+        question_shape: gated.semanticTrace.turn_meaning.question_shape,
+        entity_set: gated.semanticTrace.turn_meaning.entity_set,
+        answer_contract: gated.semanticTrace.turn_meaning.answer_contract,
+        required_referent: gated.semanticTrace.turn_meaning.required_referent,
+        required_scope: gated.semanticTrace.turn_meaning.required_scope,
+        current_domain_handler: gated.semanticTrace.turn_meaning.current_domain_handler,
+        confidence: gated.semanticTrace.turn_meaning.confidence,
+      },
+      plannedMove: {
+        move: gated.semanticTrace.planned_move.move,
+        content_key: gated.semanticTrace.planned_move.content_key,
+        reason: gated.semanticTrace.planned_move.reason,
+      },
+      winningSubsystem: gated.semanticTrace.winning_subsystem,
+      guardIntervention: gated.semanticTrace.guard_intervention,
+      contentSource: gated.semanticTrace.content_source,
+      commitOwnerId: gated.semanticTrace.commit_owner_id,
+      legacyOverrideAttempted: gated.semanticTrace.legacy_override_attempted,
       assistantCandidatesProduced: [
         scaffolded,
         deterministicWeakInputReply,
@@ -483,6 +567,26 @@ test("ui harness greeting stays in open chat without session-control language", 
   assert.doesNotMatch(reply, /listen carefully|keep it specific|next instruction/i);
   assert.doesNotMatch(reply, /ask the exact question you want answered, and i will answer it plainly/i);
   assert.equal(state.scene.interaction_mode, "normal_chat");
+});
+
+test("ui harness titled greeting hi miss raven behaves like a normal opener", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-titled-greeting"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-titled-greeting"),
+    memory: createSessionMemory(),
+  };
+
+  const reply = applyUserTurn(state, "hi miss raven");
+
+  assert.match(
+    reply,
+    /enough hovering|what you actually want|what has your attention tonight|chat, a plan, or a game/i,
+  );
+  assert.doesNotMatch(reply, /keep going|concrete part of open|wording around it/i);
+  assert.equal(state.scene.interaction_mode, "normal_chat");
+  assert.equal(state.conversation?.current_mode, "normal_chat");
 });
 
 test("ui harness casual short-answer thread stays coherent through clarification and go-on", () => {
@@ -599,6 +703,7 @@ test("ui harness game start writes game mode and keeps the first playable prompt
     sceneState: state.scene,
     commitmentState: createCommitmentState(),
     sessionMemory: state.memory,
+    commitOwnerId: "ui-game-contract",
   });
 
   state.scene = noteSceneStateAssistantTurn(state.scene, { text: gated.text });
@@ -783,6 +888,39 @@ test("ui harness answer to a personal preference exchange does not invent a game
   assert.notEqual(state.scene.interaction_mode, "game");
   assert.notEqual(state.scene.topic_type, "game_execution");
   assert.notEqual(state.conversation?.pending_user_request, "what is your favorite color?");
+});
+
+test("ui harness full relational transcript stays grounded and assistant-facing", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-full-relational-transcript"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-full-relational-transcript"),
+    memory: createSessionMemory(),
+    contract: createSessionStateContract("ui-harness-full-relational-transcript"),
+  };
+
+  const opener = applySessionPathDebugTurn(state, "hi");
+  const kinks = applySessionPathDebugTurn(state, "i want to know your kinks");
+  const detail = applySessionPathDebugTurn(state, "in detail what are you favorite kinks and fetishes?");
+  const reciprocal = applySessionPathDebugTurn(state, "yes mistress, would you like to know mine?");
+  const disclosure = applySessionPathDebugTurn(state, "i like pegging");
+  const followUp = applySessionPathDebugTurn(state, "do you want to know anything else about me?");
+
+  assert.match(opener.text, /enough hovering|what you actually want|what has your attention tonight/i);
+  assert.match(kinks.text, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.match(detail.text, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(detail.text, /all you need to know|understand that we have rules here|remember your place|i(?:'m| am)\s*,\s*pet/i);
+  assert.equal(detail.debug.refusalReason, null);
+  assert.match(reciprocal.text, /yes\. start with|what about it lands|what pulls at you hardest/i);
+  assert.match(disclosure.text, /pegging|control|sensation|trust|dynamic/i);
+  assert.doesNotMatch(disclosure.text, /keep going|understand that we have rules here|remember your place|i(?:'m| am)\s*,\s*pet/i);
+  assert.equal(disclosure.debug.turnMeaning.speech_act, "preference_statement");
+  assert.equal(disclosure.debug.turnMeaning.subject_domain, "user_preferences");
+  assert.notEqual(disclosure.debug.finalWinnerSource, "weak_input");
+  assert.match(followUp.text, /start with one thing people usually miss about you|what should i know about you|what do you want me to know first/i);
+  assert.doesNotMatch(followUp.text, /keep going|tell me more about profile|understand that we have rules here|remember your place/i);
+  assert.notEqual(followUp.debug.finalWinnerSource, "weak_input");
 });
 
 test("ui harness meta complaint keeps the original missed smalltalk question live", () => {
@@ -2431,6 +2569,23 @@ test("ui harness answers kink preference question directly without disclaimer dr
   assert.equal(state.scene.interaction_mode, "relational_chat");
 });
 
+test("ui harness direct self-disclosure request gets a substantive kink answer", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-know-your-kinks"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-know-your-kinks"),
+    memory: createSessionMemory(),
+  };
+
+  const reply = applyUserTurn(state, "i want to know your kinks");
+
+  assert.match(reply, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(reply, /all you need to know|your desire for control|power exchange.*all you need to know/i);
+  assert.equal(state.scene.interaction_mode, "relational_chat");
+  assert.equal(state.conversation?.current_mode, "relational_chat");
+});
+
 test("ui harness routes malformed self questions into the same relational lane", () => {
   const state: HarnessState = {
     scene: createSceneState(),
@@ -2444,6 +2599,536 @@ test("ui harness routes malformed self questions into the same relational lane",
   assert.match(reply, /control with purpose|restraint|obedience|tension/i);
   assert.equal(state.scene.interaction_mode, "relational_chat");
   assert.equal(state.conversation?.current_mode, "relational_chat");
+});
+
+test("ui harness assistant self-disclosure transcript keeps Raven persona and expansion ownership", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-raven-self-disclosure-follow-up"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-raven-self-disclosure-follow-up"),
+    memory: createSessionMemory(),
+  };
+
+  const opener = applyUserTurn(state, "hi");
+  assert.match(opener, /what you actually want|what has your attention tonight|chat, a plan, or a game/i);
+
+  const firstReply = applyUserTurn(state, "what are you kinks?");
+  assert.match(firstReply, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(firstReply, /i enjoy being submissive|submissive in a controlled environment|calms me down/i);
+
+  const secondReply = applyUserTurn(state, "what other kinks do you like?");
+  assert.match(secondReply, /control|restraint|service|toys|dynamic|exchange|tension|obedience/i);
+  assert.doesNotMatch(secondReply, /subject you asked me to define directly/i);
+  assert.doesNotMatch(secondReply, /keep going|tell me the concrete part/i);
+});
+
+test("ui harness observed direct-question transcript keeps self-disclosure and definitions routed correctly", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-observed-direct-question-regression"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-observed-direct-question-regression"),
+    memory: createSessionMemory(),
+  };
+
+  const malformedKinks = applyUserTurn(state, "what are you kinks?");
+  assert.match(malformedKinks, /control with purpose|power exchange|restraint|obedience|tension/i);
+
+  const favoriteKinks = applyUserTurn(state, "which are your favorite kinks?");
+  assert.match(favoriteKinks, /control|power exchange|restraint|obedience|service|toys|dynamic|exchange|tension/i);
+  assert.doesNotMatch(favoriteKinks, /give me the two real options|put the two real options/i);
+
+  const userDisclosure = applyUserTurn(state, "pegging and bondage");
+  assert.match(userDisclosure, /pegging|bondage|control|sensation|trust|dynamic|restraint/i);
+  assert.doesNotMatch(userDisclosure, /subject you asked me to define directly/i);
+
+  const sky = applyUserTurn(state, "what color is the sky?");
+  assert.match(sky, /sky|blue|weather|time of day/i);
+
+  const definition = applyUserTurn(state, "what is FLR");
+  assert.match(definition, /flr|female-led|relationship|dynamic/i);
+  assert.doesNotMatch(definition, /subject you asked me to define directly/i);
+});
+
+test("ui harness semantic turn pipeline handles disclosure application and preference challenge", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-semantic-turn-pipeline"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-semantic-turn-pipeline"),
+    memory: createSessionMemory(),
+  };
+
+  const greeting = applySessionPathDebugTurn(state, "hi");
+  assert.equal(greeting.debug.turnMeaning.speech_act, "greeting");
+  assert.equal(greeting.debug.plannedMove.move, "acknowledge_and_probe");
+  assert.doesNotMatch(greeting.text, /keep going/i);
+
+  const kinks = applySessionPathDebugTurn(state, "what are your kinks?");
+  assert.equal(kinks.debug.turnMeaning.speech_act, "direct_question");
+  assert.equal(kinks.debug.turnMeaning.target, "assistant");
+  assert.equal(kinks.debug.turnMeaning.subject_domain, "assistant_preferences");
+  assert.equal(kinks.debug.plannedMove.move, "answer");
+  assert.match(kinks.text, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(kinks.text, /keep going|give me the two real options/i);
+
+  const application = applySessionPathDebugTurn(state, "i like pegging so how could you use that?");
+  assert.equal(application.debug.turnMeaning.speech_act, "self_disclosure");
+  assert.equal(application.debug.turnMeaning.subject_domain, "user_preferences");
+  assert.equal(application.debug.turnMeaning.requested_operation, "explain_application");
+  assert.equal(application.debug.turnMeaning.referent, "pegging");
+  assert.equal(application.debug.plannedMove.move, "explain_application");
+  assert.match(application.text, /pegging|control|trust|sensation|pressure|label/i);
+  assert.doesNotMatch(application.text, /keep going|concrete part|unrelated/i);
+
+  const challenge = applySessionPathDebugTurn(state, "you have to have favorite kinks");
+  assert.equal(challenge.debug.turnMeaning.speech_act, "challenge");
+  assert.equal(challenge.debug.turnMeaning.target, "prior_assistant_answer");
+  assert.equal(challenge.debug.turnMeaning.subject_domain, "assistant_preferences");
+  assert.equal(challenge.debug.turnMeaning.requested_operation, "revise");
+  assert.equal(challenge.debug.plannedMove.move, "revise");
+  assert.match(challenge.text, /favorite|control|restraint|obedience|tension/i);
+  assert.doesNotMatch(challenge.text, /keep going|obedience lecture|two real options/i);
+});
+
+function createSemanticGoldenState(label: string): HarnessState {
+  return {
+    scene: createSceneState(),
+    gate: createTurnGate(label),
+    outputs: [],
+    conversation: createConversationStateSnapshot(label),
+    memory: createSessionMemory(),
+    contract: createSessionStateContract(label),
+  };
+}
+
+function assertSemanticGoldenTurn(
+  turn: ReturnType<typeof applySessionPathDebugTurn>,
+  expected: {
+    speechAct: string;
+    move: string;
+    attachment?: string;
+    domain?: string;
+    operation?: string;
+    questionShape?: string;
+    answerContract?: string;
+    requiredReferent?: string | RegExp;
+    domainHandler?: string;
+  },
+): void {
+  assert.equal(turn.debug.turnMeaning.speech_act, expected.speechAct);
+  assert.equal(turn.debug.plannedMove.move, expected.move, turn.debug.rawUserText);
+  if (expected.attachment) {
+    assert.equal(turn.debug.turnMeaning.continuity_attachment, expected.attachment);
+  }
+  if (expected.domain) {
+    assert.equal(turn.debug.turnMeaning.subject_domain, expected.domain);
+  }
+  if (expected.operation) {
+    assert.equal(turn.debug.turnMeaning.requested_operation, expected.operation);
+  }
+  if (expected.questionShape) {
+    assert.equal(turn.debug.turnMeaning.question_shape, expected.questionShape);
+  }
+  if (expected.answerContract) {
+    assert.equal(turn.debug.turnMeaning.answer_contract, expected.answerContract);
+  }
+  if (expected.requiredReferent instanceof RegExp) {
+    assert.match(turn.debug.turnMeaning.required_referent ?? "", expected.requiredReferent);
+  } else if (expected.requiredReferent) {
+    assert.equal(turn.debug.turnMeaning.required_referent, expected.requiredReferent);
+  }
+  if (expected.domainHandler) {
+    assert.equal(turn.debug.turnMeaning.current_domain_handler, expected.domainHandler);
+  }
+  assert.equal(turn.debug.winningSubsystem, "semantic_planner", turn.debug.rawUserText);
+  assert.match(turn.debug.commitOwnerId ?? "", /^ui-debug-/);
+  assert.equal(turn.debug.finalCommittedAssistantOutputCount, 1);
+  assert.equal(turn.debug.assistantRenderAppendEvents, 1);
+  assert.equal(turn.debug.appendRavenOutputRunsForTurn, 1);
+  assert.equal(turn.debug.visibleAssistantStringsShownForTurn, 1);
+  assert.doesNotMatch(
+    turn.text,
+    /Keep going|Stay with the concrete part|understand that we have rules here|remember your place|Answer this question for points|template/i,
+  );
+  const answerPlan = planDomainAnswer({
+    turnMeaning: {
+      raw_text: turn.debug.rawUserText,
+      normalized_text: normalize(turn.debug.rawUserText),
+      speech_act: turn.debug.turnMeaning.speech_act as never,
+      target: turn.debug.turnMeaning.target as never,
+      subject_domain: turn.debug.turnMeaning.subject_domain as never,
+      requested_operation: turn.debug.turnMeaning.requested_operation as never,
+      referent: turn.debug.turnMeaning.referent,
+      stance: "neutral",
+      continuity_attachment: turn.debug.turnMeaning.continuity_attachment as never,
+      question_shape: turn.debug.turnMeaning.question_shape as never,
+      entity_set: turn.debug.turnMeaning.entity_set,
+      answer_contract: turn.debug.turnMeaning.answer_contract as never,
+      required_referent: turn.debug.turnMeaning.required_referent,
+      required_scope: turn.debug.turnMeaning.required_scope as never,
+      current_domain_handler: turn.debug.turnMeaning.current_domain_handler as never,
+      confidence: turn.debug.turnMeaning.confidence,
+      components: [],
+      alternative_interpretations: [],
+    },
+    plannedMove: {
+      move: turn.debug.plannedMove.move as never,
+      target: turn.debug.turnMeaning.target as never,
+      subject_domain: turn.debug.turnMeaning.subject_domain as never,
+      requested_operation: turn.debug.turnMeaning.requested_operation as never,
+      referent: turn.debug.turnMeaning.referent,
+      content_key: turn.debug.plannedMove.content_key as never,
+      confidence: turn.debug.turnMeaning.confidence,
+      reason: turn.debug.plannedMove.reason,
+    },
+  });
+  if (answerPlan.content_source === "raven_preference_model") {
+    const validation = validateAnswerContract(answerPlan, turn.text);
+    assert.equal(validation.ok, true, validation.reason);
+  }
+}
+
+test("ui harness meaning golden assistant self disclosure stays semantic-owned", () => {
+  const state = createSemanticGoldenState("semantic-golden-self-disclosure");
+
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(state, "hi"), {
+    speechAct: "greeting",
+    move: "acknowledge_and_probe",
+    attachment: "fresh_topic",
+    domain: "relational_exchange",
+  });
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(state, "what are your kinks?"), {
+    speechAct: "direct_question",
+    move: "answer",
+    attachment: "fresh_topic",
+    domain: "assistant_preferences",
+    operation: "answer",
+    questionShape: "favorites_request",
+    answerContract: "provide_favorites",
+    domainHandler: "raven_preferences",
+  });
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(state, "what other kinks do you like?"), {
+    speechAct: "request_for_elaboration",
+    move: "elaborate",
+    attachment: "active_thread",
+    domain: "assistant_preferences",
+    operation: "elaborate",
+    questionShape: "list_expansion",
+    answerContract: "expand_list",
+    domainHandler: "raven_preferences",
+  });
+  assertSemanticGoldenTurn(
+    applySessionPathDebugTurn(state, "do you have a favorite particular kink or fetish?"),
+    {
+      speechAct: "direct_question",
+      move: "answer",
+      attachment: "fresh_topic",
+      domain: "assistant_preferences",
+      operation: "answer",
+      questionShape: "favorites_request",
+      answerContract: "provide_favorites",
+      domainHandler: "raven_preferences",
+    },
+  );
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(state, "you have to have favorite kinks"), {
+    speechAct: "challenge",
+    move: "revise",
+    attachment: "immediate_prior_answer",
+    domain: "assistant_preferences",
+    operation: "revise",
+    questionShape: "challenge_or_correction",
+    answerContract: "revise_or_clarify_prior_claim",
+    domainHandler: "raven_preferences",
+  });
+});
+
+test("ui harness meaning golden preference application and reciprocal exchange", () => {
+  const applicationState = createSemanticGoldenState("semantic-golden-preference-application");
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(applicationState, "hi"), {
+    speechAct: "greeting",
+    move: "acknowledge_and_probe",
+  });
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(applicationState, "what are your kinks?"), {
+    speechAct: "direct_question",
+    move: "answer",
+    domain: "assistant_preferences",
+  });
+  const application = applySessionPathDebugTurn(
+    applicationState,
+    "i love pegging, how can we use that in our dynamic?",
+  );
+  assertSemanticGoldenTurn(application, {
+    speechAct: "self_disclosure",
+    move: "explain_application",
+    attachment: "immediate_prior_answer",
+    domain: "user_preferences",
+    operation: "explain_application",
+    questionShape: "application_request",
+    answerContract: "explain_application",
+    requiredReferent: /pegging/i,
+    domainHandler: "raven_preferences",
+  });
+  assert.match(application.text, /pegging|control|trust|sensation|pressure/i);
+
+  const reciprocalState = createSemanticGoldenState("semantic-golden-reciprocal");
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(reciprocalState, "what are your kinks?"), {
+    speechAct: "direct_question",
+    move: "answer",
+    domain: "assistant_preferences",
+  });
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(reciprocalState, "would you like to know mine?"), {
+    speechAct: "reciprocal_offer",
+    move: "ask_focused_follow_up",
+    attachment: "active_thread",
+    domain: "user_preferences",
+    operation: "ask_follow_up",
+    domainHandler: "raven_preferences",
+  });
+  const disclosure = applySessionPathDebugTurn(reciprocalState, "i like pegging");
+  assert.equal(disclosure.debug.turnMeaning.speech_act, "preference_statement");
+  assert.equal(disclosure.debug.finalCommittedAssistantOutputCount, 1);
+  assert.doesNotMatch(disclosure.text, /Keep going|rules here|remember your place/i);
+  assertSemanticGoldenTurn(
+    applySessionPathDebugTurn(reciprocalState, "do you want to know anything else about me?"),
+    {
+      speechAct: "reciprocal_offer",
+      move: "ask_focused_follow_up",
+      attachment: "active_thread",
+      domain: "user_preferences",
+      operation: "ask_follow_up",
+    },
+  );
+});
+
+test("ui harness meaning golden definitions pronouns and openers", () => {
+  for (const text of ["what is FLR", "define FLR", "what is CNC"]) {
+    const state = createSemanticGoldenState(`semantic-golden-definition-${text}`);
+    const turn = applySessionPathDebugTurn(state, text);
+    assertSemanticGoldenTurn(turn, {
+      speechAct: "direct_question",
+      move: "answer",
+      attachment: "fresh_topic",
+      domain: "definition",
+      operation: "answer",
+      questionShape: "definition_request",
+      answerContract: "define_term",
+      domainHandler: "definitions",
+    });
+    assert.match(turn.text, /means|relationship|consensual|non-consent|dynamic/i);
+  }
+
+  const pronounState = createSemanticGoldenState("semantic-golden-pronoun-grounding");
+  const why = applySessionPathDebugTurn(pronounState, "why do people like pegging?");
+  assert.equal(why.debug.finalCommittedAssistantOutputCount, 1);
+  const pronoun = applySessionPathDebugTurn(pronounState, "do you like it?");
+  assertSemanticGoldenTurn(pronoun, {
+    speechAct: "direct_question",
+    move: "answer",
+    attachment: "immediate_prior_answer",
+    domain: "assistant_preferences",
+    operation: "answer",
+    questionShape: "yes_no_about_item",
+    answerContract: "answer_yes_no_with_item",
+    requiredReferent: "pegging",
+    domainHandler: "raven_preferences",
+  });
+  assert.equal(pronoun.debug.turnMeaning.referent, "pegging");
+
+  for (const text of ["hi", "hi miss raven", "let's chat"]) {
+    const state = createSemanticGoldenState(`semantic-golden-opener-${text}`);
+    assertSemanticGoldenTurn(applySessionPathDebugTurn(state, text), {
+      speechAct: "greeting",
+      move: "acknowledge_and_probe",
+      attachment: "fresh_topic",
+      domain: "relational_exchange",
+    });
+  }
+});
+
+test("ui harness race safety keeps one visible commit per quick user turn", () => {
+  const state = createSemanticGoldenState("semantic-golden-race-safety");
+  const first = applySessionPathDebugTurn(state, "what are your kinks?");
+  const second = applySessionPathDebugTurn(state, "what other kinks do you like?");
+
+  assert.equal(first.debug.finalCommittedAssistantOutputCount, 1);
+  assert.equal(second.debug.finalCommittedAssistantOutputCount, 1);
+  assert.equal(first.debug.appendRavenOutputRunsForTurn, 1);
+  assert.equal(second.debug.appendRavenOutputRunsForTurn, 1);
+  assert.notEqual(first.debug.commitOwnerId, second.debug.commitOwnerId);
+  assert.equal(state.outputs.length, 2);
+});
+
+test("ui harness domain golden Raven preference question shapes satisfy answer contracts", () => {
+  const cases: Array<{
+    text: string;
+    questionShape: string;
+    answerContract: string;
+    referent?: string | RegExp;
+    output: RegExp;
+    previous?: string;
+  }> = [
+    {
+      text: "what are your kinks?",
+      questionShape: "favorites_request",
+      answerContract: "provide_favorites",
+      output: /favorites|control|restraint|obedience|service|tension/i,
+    },
+    {
+      text: "what are you kinks?",
+      questionShape: "favorites_request",
+      answerContract: "provide_favorites",
+      output: /favorites|control|restraint|obedience|service|tension/i,
+    },
+    {
+      text: "what are your kinks mistress?",
+      questionShape: "favorites_request",
+      answerContract: "provide_favorites",
+      output: /favorites|control|restraint|obedience|service|tension/i,
+    },
+    {
+      text: "do you have a favorite kink or fetish?",
+      questionShape: "favorites_request",
+      answerContract: "provide_favorites",
+      output: /favorites|control|restraint|obedience|service|tension/i,
+    },
+    {
+      text: "which are your favorite?",
+      questionShape: "favorites_request",
+      answerContract: "provide_favorites",
+      output: /favorites|control|restraint|obedience|service|tension/i,
+    },
+    {
+      text: "what other kinks do you like?",
+      questionShape: "list_expansion",
+      answerContract: "expand_list",
+      output: /beyond|also|toys|training|impact|edges/i,
+    },
+    {
+      text: "what about pegging?",
+      questionShape: "topic_drilldown",
+      answerContract: "address_topic_directly",
+      referent: "pegging",
+      output: /pegging|trust|control|role/i,
+      previous: "My favorites are control, restraint, and obedience.",
+    },
+    {
+      text: "do you like pegging?",
+      questionShape: "yes_no_about_item",
+      answerContract: "answer_yes_no_with_item",
+      referent: "pegging",
+      output: /yes|conditionally|pegging/i,
+    },
+    {
+      text: "do you like pegging or bondage?",
+      questionShape: "binary_compare_or_choice",
+      answerContract: "compare_or_choose_between_entities",
+      output: /pegging|bondage|both|prefer/i,
+    },
+    {
+      text: "do you like bondage or pegging?",
+      questionShape: "binary_compare_or_choice",
+      answerContract: "compare_or_choose_between_entities",
+      output: /pegging|bondage|both|prefer/i,
+    },
+    {
+      text: "i like pegging so how could you use that?",
+      questionShape: "application_request",
+      answerContract: "explain_application",
+      referent: "pegging",
+      output: /pegging|use|control|trust|role|pressure/i,
+    },
+    {
+      text: "i love pegging, how can we use that in our dynamic?",
+      questionShape: "application_request",
+      answerContract: "explain_application",
+      referent: "pegging",
+      output: /pegging|use|control|trust|role|pressure/i,
+    },
+    {
+      text: "how can we use pegging in our dynamic?",
+      questionShape: "application_request",
+      answerContract: "explain_application",
+      referent: "pegging",
+      output: /pegging|use|control|trust|role|pressure/i,
+    },
+    {
+      text: "would you like to explore it with me?",
+      questionShape: "invitation_or_proposal",
+      answerContract: "answer_invitation_or_boundary",
+      output: /yes|explore|negotiated|specific/i,
+      previous: "Pegging matters because of trust and control.",
+    },
+    {
+      text: "would you like to peg me?",
+      questionShape: "invitation_or_proposal",
+      answerContract: "answer_invitation_or_boundary",
+      output: /yes|explore|negotiated|specific/i,
+    },
+    {
+      text: "would you peg me with a strapon?",
+      questionShape: "invitation_or_proposal",
+      answerContract: "answer_invitation_or_boundary",
+      referent: /strap-on|strapon/i,
+      output: /yes|explore|negotiated|specific|pegging/i,
+    },
+    {
+      text: "you have to have favorite kinks",
+      questionShape: "challenge_or_correction",
+      answerContract: "revise_or_clarify_prior_claim",
+      output: /fair|yes|favorites|control|restraint/i,
+      previous: "I like control and restraint.",
+    },
+    {
+      text: "come on, you must have favorites",
+      questionShape: "challenge_or_correction",
+      answerContract: "revise_or_clarify_prior_claim",
+      output: /fair|yes|favorites|control|restraint/i,
+      previous: "I like control and restraint.",
+    },
+    {
+      text: "that cannot be all",
+      questionShape: "challenge_or_correction",
+      answerContract: "revise_or_clarify_prior_claim",
+      output: /fair|yes|favorites|control|restraint/i,
+      previous: "I like control and restraint.",
+    },
+  ];
+
+  for (const item of cases) {
+    const state = createSemanticGoldenState(`domain-golden-${item.text}`);
+    if (item.previous) {
+      state.outputs.push(item.previous);
+      state.scene = noteSceneStateAssistantTurn(state.scene, { text: item.previous });
+    }
+    const turn = applySessionPathDebugTurn(state, item.text);
+    assertSemanticGoldenTurn(turn, {
+      speechAct:
+        item.questionShape === "application_request"
+          ? "self_disclosure"
+          : item.questionShape === "challenge_or_correction"
+            ? "challenge"
+            : item.questionShape === "list_expansion" || item.questionShape === "topic_drilldown"
+              ? "request_for_elaboration"
+              : "direct_question",
+      move:
+        item.questionShape === "application_request"
+          ? "explain_application"
+          : item.questionShape === "challenge_or_correction"
+            ? "revise"
+            : item.questionShape === "list_expansion" || item.questionShape === "topic_drilldown"
+              ? "elaborate"
+              : "answer",
+      domain:
+        item.questionShape === "application_request" ? "user_preferences" : "assistant_preferences",
+      questionShape: item.questionShape,
+      answerContract: item.answerContract,
+      requiredReferent: item.referent,
+      domainHandler: "raven_preferences",
+    });
+    assert.match(turn.text, item.output);
+  }
 });
 
 test("ui harness closes an answered kink question before switching to favorite color", () => {
@@ -2468,6 +3153,67 @@ test("ui harness closes an answered kink question before switching to favorite c
     false,
   );
   assert.equal(state.conversation?.open_loops.some((loop) => /kinks/i.test(loop)), false);
+});
+
+test("ui harness elaboration follow-up on an assistant kink answer stays owned by the assistant answer", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-kink-answer-elaboration"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-kink-answer-elaboration"),
+    memory: createSessionMemory(),
+  };
+
+  const firstReply = applyUserTurn(state, "what are your kinks?");
+  assert.match(firstReply, /control with purpose|power exchange|restraint|obedience|tension/i);
+
+  const secondReply = applyUserTurn(state, "in more details");
+
+  assert.match(secondReply, /control with purpose|power exchange|restraint|obedience|tension/i);
+  assert.doesNotMatch(secondReply, /keep going|tell me the concrete part|what pulls at you hardest/i);
+  assert.equal(state.scene.interaction_mode, "relational_chat");
+  assert.equal(state.conversation?.current_mode, "relational_chat");
+});
+
+test("ui harness reciprocal offer and reciprocal interest questions stay assistant-facing instead of collapsing into keep going", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-reciprocal-interest"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-reciprocal-interest"),
+    memory: createSessionMemory(),
+  };
+
+  const firstReply = applyUserTurn(state, "i want to know your kinks");
+  assert.match(firstReply, /control with purpose|power exchange|restraint|obedience|tension/i);
+
+  const secondReply = applyUserTurn(state, "in detail what kinks or fetishes are your favorite?");
+  assert.match(secondReply, /control with purpose|power exchange|restraint|obedience|tension/i);
+
+  const thirdReply = applyUserTurn(state, "yes mistress, would you like to know mine?");
+  assert.match(thirdReply, /yes|start with|lands for you hardest|people usually miss about you/i);
+  assert.doesNotMatch(thirdReply, /keep going/i);
+
+  const fourthReply = applyUserTurn(state, "do you want to know anything about me?");
+  assert.match(fourthReply, /yes|one thing people usually miss about you|make it specific/i);
+  assert.doesNotMatch(fourthReply, /keep going/i);
+});
+
+test("ui harness short pronoun follow-up stays on the immediate referent instead of reviving stale kink preference state", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-pronoun-referent"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-pronoun-referent"),
+    memory: createSessionMemory(),
+  };
+
+  const firstReply = applyUserTurn(state, "why do people like pegging?");
+  assert.match(firstReply, /pegging|dynamic|sensation|control|trust|novelty/i);
+
+  const secondReply = applyUserTurn(state, "do you like it?");
+  assert.match(secondReply, /pegging/i);
+  assert.doesNotMatch(secondReply, /control with purpose|power exchange|what pulls at you hardest/i);
 });
 
 test("ui harness does not create sticky commitments from vague assistant task wording", () => {

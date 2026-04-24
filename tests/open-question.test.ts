@@ -81,6 +81,12 @@ test("greeting cannot fall through to the exact-question clarification fallback"
   assert.doesNotMatch(text, /answer it plainly/i);
 });
 
+test("titled greeting hi miss raven stays on the greeting rail instead of continuation filler", () => {
+  const text = buildHumanQuestionFallback("hi miss raven", "dominant");
+  assert.match(text, /enough hovering|what you actually want|what has your attention tonight|chat, a plan, or a game/i);
+  assert.doesNotMatch(text, /keep going|concrete part of raven|wording around it/i);
+});
+
 test("simple intent statement cannot fall into exact-question clarification fallback", () => {
   const text = buildHumanQuestionFallback("I want to be trained", "dominant");
   assert.match(text, /want training|want it to change|trained/i);
@@ -213,6 +219,31 @@ test("oauth definition fallback stays substantive and on-subject", () => {
   assert.doesNotMatch(text, /subject you asked me to define directly/i);
 });
 
+test("short acronym and term definitions stay substantive instead of meta-defining the request", () => {
+  const cases = [
+    {
+      userText: "what is FLR",
+      expected: /flr|female-led|relationship|dynamic/i,
+    },
+    {
+      userText: "define FLR",
+      expected: /flr|female-led|relationship|dynamic/i,
+    },
+    {
+      userText: "what is CNC",
+      expected: /cnc|consensual|consent|role.?play|boundary|negotiat/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const text = buildHumanQuestionFallback(item.userText, "dominant");
+
+    assert.match(text, item.expected, item.userText);
+    assert.doesNotMatch(text, /subject you asked me to define directly/i, item.userText);
+    assert.doesNotMatch(text, /direct definition, not a continuation/i, item.userText);
+  }
+});
+
 test("weather limitation fallback stays honest instead of redirecting the thread", () => {
   const text = buildHumanQuestionFallback("im good, what's the weather like today by you?", "dominant");
 
@@ -224,6 +255,47 @@ test("malformed kink self question still gets a direct preference answer", () =>
   const text = buildHumanQuestionFallback("what are you kinks?", "dominant");
 
   assert.match(text, /control with purpose|power exchange|restraint|obedience|tension/i);
+});
+
+test("favorite kink self-disclosure variants route to Raven preferences instead of comparison choice", () => {
+  const cases = [
+    "which are your favorite kinks?",
+    "what are your favorite kinks?",
+    "what other kinks do you like?",
+    "what else do you like?",
+  ];
+
+  for (const userText of cases) {
+    const text = buildHumanQuestionFallback(userText, "dominant", {
+      previousAssistantText:
+        "Control with purpose. Power exchange that actually changes the room. Restraint when it means something, obedience with a little bite in it, and tension that has a mind behind it.",
+    });
+
+    assert.match(text, /control|power exchange|restraint|obedience|service|toys|dynamic|exchange|tension/i, userText);
+    assert.doesNotMatch(text, /give me the two real options|put the two real options/i, userText);
+    assert.doesNotMatch(text, /subject you asked me to define directly/i, userText);
+  }
+});
+
+test("assistant kink follow-up expansion stays on Raven self-disclosure instead of definition scaffolding", () => {
+  const previousAssistantText =
+    "Control with purpose. Power exchange that actually changes the room. Restraint when it means something, obedience with a little bite in it, and tension that has a mind behind it. What pulls at you hardest?";
+
+  const directExpansion = buildHumanQuestionFallback("what other kinks do you like?", "dominant", {
+    previousAssistantText,
+  });
+  const broadExpansion = buildHumanQuestionFallback("what else do you like?", "dominant", {
+    previousAssistantText,
+  });
+  const shortExpansion = buildHumanQuestionFallback("any other kinks?", "dominant", {
+    previousAssistantText,
+  });
+
+  for (const text of [directExpansion, broadExpansion, shortExpansion]) {
+    assert.match(text, /control|restraint|service|toys|dynamic|exchange|tension|obedience/i);
+    assert.doesNotMatch(text, /subject you asked me to define directly/i);
+    assert.doesNotMatch(text, /ask me directly, and i will answer you directly/i);
+  }
 });
 
 test("broad assistant preference question answers directly without generic q and a fallback", () => {
@@ -252,6 +324,77 @@ test("contextual kink follow-up stays on Raven preference rail instead of generi
 
   assert.match(text, /obedience|empty yeses|steady|comfort|freedom/i);
   assert.doesNotMatch(text, /ask what you actually want to know|exact live point|matters once it is lived/i);
+});
+
+test("reciprocal interest variant with anything else about me stays assistant-facing", () => {
+  const text = buildHumanQuestionFallback("do you want to know anything else about me?", "dominant", {
+    previousAssistantText:
+      "Yes. Start with the part of pegging that actually pulls you in. What about it lands for you hardest?",
+  });
+
+  assert.match(text, /start with one thing people usually miss about you|what should i know about you|what do you want me to know first/i);
+  assert.doesNotMatch(text, /keep going|tell me more about profile|concrete part/i);
+});
+
+test("relational preference disclosure after a reciprocal interest question stays grounded", () => {
+  const text = buildHumanQuestionFallback("i like pegging", "dominant", {
+    previousAssistantText:
+      "Yes. Start with the part of pegging that actually pulls you in. What about it lands for you hardest?",
+    currentTopic: "profile",
+  });
+
+  assert.match(text, /pegging|control|sensation|trust|dynamic/i);
+  assert.doesNotMatch(text, /keep going|control with purpose\. power exchange that actually changes the room\./i);
+  assert.doesNotMatch(text, /understand that we have rules here|remember your place|i(?:'m| am)\s*,\s*pet/i);
+});
+
+test("reciprocal offer questions attach to assistant interest instead of generic continuation", () => {
+  for (const userText of [
+    "would you like to know mine?",
+    "want to hear mine?",
+    "should I tell you mine?",
+  ]) {
+    const text = buildHumanQuestionFallback(userText, "dominant", {
+      previousAssistantText:
+        "Control with purpose. Power exchange that actually changes the room. Restraint when it means something, obedience with a little bite in it, and tension that has a mind behind it.",
+      currentTopic: "what you want to know about me",
+    });
+
+    assert.match(text, /yes|start with|what about it lands for you hardest|part of control/i, userText);
+    assert.doesNotMatch(text, /keep going/i, userText);
+  }
+});
+
+test("reciprocal interest question about the user asks something concrete instead of continuing generically", () => {
+  const text = buildHumanQuestionFallback("do you want to know anything about me?", "dominant", {
+    previousAssistantText:
+      "Control with purpose. Power exchange that actually changes the room. Restraint when it means something, obedience with a little bite in it, and tension that has a mind behind it.",
+  });
+
+  assert.match(text, /yes|one thing people usually miss about you|make it specific/i);
+  assert.doesNotMatch(text, /keep going/i);
+});
+
+test("short pronoun follow-up prefers the immediate explicit referent over stale older thread state", () => {
+  const text = buildHumanQuestionFallback("do you like it?", "dominant", {
+    previousAssistantText:
+      "Pegging usually appeals for a mix of sensation, control, trust, novelty, or the shift in who is doing what. Most of the time it is about the dynamic, not just the act.",
+    currentTopic: "what you want to know about me",
+  });
+
+  assert.match(text, /pegging/i);
+  assert.doesNotMatch(text, /control with purpose|power exchange|what pulls at you hardest/i);
+});
+
+test("short pronoun enjoy follow-up also stays on the immediate explicit referent", () => {
+  const text = buildHumanQuestionFallback("do you enjoy it?", "dominant", {
+    previousAssistantText:
+      "Pegging usually appeals for a mix of sensation, control, trust, novelty, or the shift in who is doing what. Most of the time it is about the dynamic, not just the act.",
+    currentTopic: "what you want to know about me",
+  });
+
+  assert.match(text, /pegging/i);
+  assert.doesNotMatch(text, /control with purpose|power exchange|what pulls at you hardest/i);
 });
 
 test("contextual toy follow-up stays on preference context instead of resetting", () => {

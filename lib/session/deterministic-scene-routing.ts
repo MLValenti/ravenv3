@@ -43,6 +43,12 @@ function isFreshDirectConversationTurn(text: string, dialogueAct: DialogueRouteA
   return dialogueAct === "user_question" && !isGenuineTaskContinuationTurn(text, dialogueAct);
 }
 
+function isSemanticPreferenceDomainTurn(text: string): boolean {
+  return /\b(kinks?|fetishes?|pegging|bondage|restraint|rope|cuffs?|collars?|chastity|cages?|plugs?|dildos?|vibrators?|wands?|toys?|spanking|impact|obedience|submission|dominance|control|humiliation|degradation|praise|service|strap-?on|anal training|oral training|throat training)\b/i.test(
+    text,
+  );
+}
+
 function isGenuineGameContinuationTurn(text: string, dialogueAct: DialogueRouteAct): boolean {
   if (dialogueAct === "propose_activity" || dialogueAct === "answer_activity_choice") {
     return true;
@@ -148,13 +154,26 @@ export function explainBypassModelForSceneTurn(input: {
   const isHighConfidenceOpenConversationTurn =
     latestUserText.length > 0 &&
     (
-      isChatSwitchRequest(latestUserText) ||
-      isAssistantSelfQuestion(latestUserText) ||
-      isMutualGettingToKnowRequest(latestUserText)
+      (isAssistantSelfQuestion(latestUserText) && isSemanticPreferenceDomainTurn(latestUserText)) ||
+      (isMutualGettingToKnowRequest(latestUserText) && isSemanticPreferenceDomainTurn(latestUserText)) ||
+      (input.dialogueAct === "user_question" && isSemanticPreferenceDomainTurn(latestUserText))
     );
 
   if (input.hasDeterministicCandidate) {
     if (isHighConfidenceOpenConversationTurn) {
+      return {
+        bypass: true,
+        reason: "semantic_open_conversation_planner",
+      };
+    }
+    if (
+      latestUserText.length > 0 &&
+      (
+        isChatSwitchRequest(latestUserText) ||
+        isAssistantSelfQuestion(latestUserText) ||
+        isMutualGettingToKnowRequest(latestUserText)
+      )
+    ) {
       return {
         bypass: false,
         reason: "open_conversation_prefers_model",

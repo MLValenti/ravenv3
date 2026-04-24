@@ -46,6 +46,17 @@ test("tell me more routes as a short follow-up instead of generic question answe
   assert.equal(routed.act, "short_follow_up");
 });
 
+test("elaboration detail variants route as short follow-ups instead of answer continuations", () => {
+  for (const text of ["in more detail", "in more details", "more detail", "more details", "explain more"]) {
+    assert.equal(isShortClarificationTurn(text), true, text);
+  }
+  assert.equal(detectShortFollowUpKind("in more detail"), "go_on");
+  assert.equal(detectShortFollowUpKind("in more details"), "go_on");
+  assert.equal(detectShortFollowUpKind("more detail"), "go_on");
+  assert.equal(detectShortFollowUpKind("more details"), "go_on");
+  assert.equal(detectShortFollowUpKind("explain more"), "clarify");
+});
+
 test("short clarification reply stays single-family in open chat", () => {
   const reply = buildShortClarificationReply({
     userText: "what do you mean?",
@@ -359,4 +370,21 @@ test("repair clarification prefers grounded restatement over a shallow extracted
 
   assert.match(reply, /what is actually holding your attention|start with what is actually holding your attention/i);
   assert.doesNotMatch(reply, /^i mean holds your attention\.?$/i);
+});
+
+test("elaboration-style follow-ups attach to the assistant answer instead of the assistant trailing question", () => {
+  const lastAssistantText =
+    "Control with purpose. Power exchange that actually changes the room. Restraint when it means something, obedience with a little bite in it, and tension that has a mind behind it. What pulls at you hardest?";
+
+  for (const userText of ["in more detail", "in more details", "more details", "tell me more", "explain more"]) {
+    const reply = buildShortClarificationReply({
+      userText,
+      interactionMode: "relational_chat",
+      topicType: "general_request",
+      lastAssistantText,
+    });
+
+    assert.match(reply, /control with purpose|power exchange|restraint|obedience|tension/i, userText);
+    assert.doesNotMatch(reply, /keep going|tell me the concrete part|what pulls at you hardest/i, userText);
+  }
 });

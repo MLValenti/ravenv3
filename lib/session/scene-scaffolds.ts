@@ -79,6 +79,7 @@ import {
   buildAssistantSelfDisclosureReply,
   buildAssistantPreferenceReply,
   buildAssistantServiceReply,
+  buildHumanQuestionFallback,
   buildPlanningQuestionFallback,
   buildTopicInitiationReply,
   isTopicInitiationRequest,
@@ -86,6 +87,11 @@ import {
 import { buildCoreConversationReply } from "../chat/core-turn-move.ts";
 import { resolveInventoryGrounding } from "./session-inventory.ts";
 import { buildTrainingFollowUpReply } from "./training-thread.ts";
+import {
+  interpretTurnMeaning,
+  planSemanticResponse,
+  type PlannedMove,
+} from "./turn-meaning.ts";
 
 export type SceneScaffoldInput = {
   act: DialogueRouteAct;
@@ -105,6 +111,12 @@ export type SceneScaffoldInput = {
 
 function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function isReciprocalInterestTurn(text: string): boolean {
+  return /\b(would you like to know mine|want to hear mine|should i tell you mine|do you want to know anything(?: else)? about me)\b/i.test(
+    text,
+  );
 }
 
 function isTaskRevisionCue(text: string): boolean {
@@ -934,6 +946,13 @@ export function buildRelationalChatReply(
       trainingThread,
     });
   }
+  if (isReciprocalInterestTurn(normalized)) {
+    return buildHumanQuestionFallback(userText, "neutral", {
+      previousAssistantText,
+      inventory,
+      trainingThread,
+    });
+  }
   if (isAssistantPreferenceQuestion(normalized)) {
     return buildAssistantPreferenceReply(userText);
   }
@@ -1495,6 +1514,64 @@ function buildRewardWindowReply(
     : "Good. The free pass is banked, pet. Keep it in reserve or call for another round. Do not squander it.";
 }
 
+function isOpenSemanticScene(input: SceneScaffoldInput): boolean {
+  if (input.sceneState.task_hard_lock_active) {
+    return false;
+  }
+  if (
+    input.sceneState.topic_type === "task_execution" ||
+    input.sceneState.topic_type === "task_negotiation" ||
+    input.sceneState.topic_type === "game_execution" ||
+    input.sceneState.topic_type === "game_setup" ||
+    input.sceneState.topic_type === "reward_negotiation"
+  ) {
+    return false;
+  }
+  return (
+    input.sceneState.interaction_mode === "normal_chat" ||
+    input.sceneState.interaction_mode === "relational_chat" ||
+    input.sceneState.interaction_mode === "question_answering"
+  );
+}
+
+function semanticPlanShouldBypassGenericScaffolds(plan: PlannedMove): boolean {
+  return (
+    plan.content_key === "assistant_preference_answer" ||
+    plan.content_key === "greeting_open" ||
+    plan.content_key === "assistant_preference_elaboration" ||
+    plan.content_key === "assistant_preference_revision" ||
+    plan.content_key === "user_preference_application" ||
+    plan.content_key === "raven_invitation_answer" ||
+    plan.content_key === "reciprocal_user_probe"
+  );
+}
+
+function buildSemanticOpenReply(input: SceneScaffoldInput): string | null {
+  if (!isOpenSemanticScene(input)) {
+    return null;
+  }
+  const meaning = interpretTurnMeaning({
+    userText: input.userText,
+    previousAssistantText:
+      input.sceneState.last_assistant_text || input.sceneState.last_profile_prompt || null,
+    previousUserText:
+      input.sessionMemory?.last_user_answer?.value ??
+      input.sessionMemory?.last_user_question?.value ??
+      null,
+    currentTopic: input.sceneState.agreed_goal || null,
+  });
+  const plan = planSemanticResponse(meaning);
+  if (!semanticPlanShouldBypassGenericScaffolds(plan)) {
+    return null;
+  }
+  return buildHumanQuestionFallback(input.userText, "neutral", {
+    previousAssistantText:
+      input.sceneState.last_assistant_text || input.sceneState.last_profile_prompt || null,
+    currentTopic: input.sceneState.agreed_goal || null,
+    inventory: input.inventory,
+  });
+}
+
 export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | null {
   const userText = normalize(input.userText);
   const planningReturnFallback = buildPlanningQuestionFallback(input.userText, {
@@ -1519,6 +1596,11 @@ export function buildSceneScaffoldReply(input: SceneScaffoldInput): string | nul
       currentTopic: input.sceneState.agreed_goal || null,
       tone: "neutral",
     });
+  }
+
+  const semanticOpenReply = buildSemanticOpenReply(input);
+  if (semanticOpenReply) {
+    return semanticOpenReply;
   }
 
   if (

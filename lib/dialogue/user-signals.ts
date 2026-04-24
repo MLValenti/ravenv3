@@ -113,5 +113,5 @@ export function isSimpleGreeting(text: string): boolean {
   ) {
     return true;
   }
-  return /^(hi|hello|hey)\s+(miss|mistress|raven|ma'am|mam)$/.test(normalized);
+  return /^(hi|hello|hey)\s+(?:miss raven|miss|mistress|raven|ma'am|mam)$/.test(normalized);
 }

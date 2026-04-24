@@ -14,6 +14,7 @@ function normalize(text: string): string {
 
 export function normalizeAssistantSelfQuestionText(text: string): string {
   return normalize(text)
+    .replace(/^\s*in detail\s+/g, "")
     .replace(/\bwhat are you kinks\b/g, "what are your kinks")
     .replace(/\bwhat are you fetishes\b/g, "what are your fetishes")
     .replace(/\bwhat are you toys\b/g, "what are your toys")
@@ -87,11 +88,15 @@ export function extractAssistantPreferenceTopic(text: string): string | null {
   }
 
   const captures = [
+    normalized.match(/\bi want to know your\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bdo you like\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bare you into\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bdo you enjoy\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bwhat(?:'s| is) your favorite\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bwhat are your favorite\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhat\s+([^?.!,]{2,80})\s+are your favorite\b/i)?.[1],
+    normalized.match(/\bwhich are your favorite\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhich\s+([^?.!,]{2,80})\s+are your favorites?\b/i)?.[1],
     normalized.match(/\bwhat are (?:your|you)\s+(kinks|fetishes|toys)\b/i)?.[1],
     normalized.match(/\bwhich\s+([^?.!,]{2,80})\s+do you like\b/i)?.[1],
     normalized.match(/\bwhat kind of\s+([^?.!,]{2,80})\s+are you into\b/i)?.[1],
@@ -130,6 +135,8 @@ export function extractAssistantGeneralPreferenceTopic(text: string): string | n
   const captures = [
     normalized.match(/\bwhat(?:'s| is) your favorite\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bwhat are your favorite\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhich are your favorite\s+([^?.!,]{2,80})/i)?.[1],
+    normalized.match(/\bwhich\s+([^?.!,]{2,80})\s+are your favorites?\b/i)?.[1],
     normalized.match(/\bwhat do you like(?:\s+about)?\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bwhat do you enjoy\s+([^?.!,]{2,80})/i)?.[1],
     normalized.match(/\bwhat are you into(?:\s+about)?\s+([^?.!,]{2,80})/i)?.[1],
@@ -234,7 +241,7 @@ export function isMutualGettingToKnowRequest(text: string): boolean {
   if (!normalized) {
     return false;
   }
-  return /\b(learn more about you|learn about you|tell me about yourself|let me get to know you|get to know you|get to know each other|learn about each other|ask me questions and i(?:'ll| will) ask you some too|i(?:'d| would) like to know more about you|what do you want to know about me|what would you want to know about me|what do you want to ask me|what should i tell you about me)\b/i.test(
+  return /\b(learn more about you|learn about you|tell me about yourself|let me get to know you|get to know you|get to know each other|learn about each other|ask me questions and i(?:'ll| will) ask you some too|i(?:'d| would) like to know more about you|what do you want to know about me|what would you want to know about me|what do you want to ask me|what should i tell you about me|do you want to know anything(?: else)? about me|would you like to know mine|want to hear mine|should i tell you mine)\b/i.test(
     normalized,
   );
 }

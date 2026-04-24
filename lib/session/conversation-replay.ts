@@ -1346,6 +1346,7 @@ async function replayConversationScenarioSynthetic(
         sceneState: state.sceneState,
         dialogueAct: reduced.route.act,
         hasDeterministicCandidate: Boolean(deterministicCandidate),
+        latestUserText: turn.user,
       });
 
     const selectedCandidate =
@@ -1416,7 +1417,7 @@ async function replayConversationScenarioSynthetic(
       memory: state.sessionMemory,
       interactionMode: state.sceneState.interaction_mode,
       selectedFamily: selectedFamily === "scene_fallback" ? "scene_fallback" : selectedFamily,
-      availableFamilies,
+      availableFamilies: [...new Set(availableFamilies)],
       responseGateForced: responseGate.forced,
       responseMode: shortFollowUpRouteSelected ? "short_follow_up" : "default",
     });

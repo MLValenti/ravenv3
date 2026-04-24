@@ -39,6 +39,18 @@ function normalize(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, " ").replace(/[!?.,]+$/g, "");
 }
 
+function splitSentences(text: string | null | undefined): string[] {
+  return (text ?? "")
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function stripLeadFillers(text: string): string {
+  return text.replace(/^(?:yes|good|alright|all right|okay|ok|right|listen)\.?\s+/i, "").trim();
+}
+
 const WEAK_CONTEXT_TOKENS = new Set([
   "actual",
   "actually",
@@ -267,6 +279,69 @@ function extractContextToken(text: string | null | undefined): string | null {
     .map((token) => token.trim())
     .filter((token) => token.length >= 4 && !stop.has(token));
   return tokens[0] ?? null;
+}
+
+function isElaborationStyleFollowUp(text: string): boolean {
+  const normalized = normalize(text);
+  return (
+    normalized === "tell me more" ||
+    normalized === "say more" ||
+    normalized === "more detail" ||
+    normalized === "more details" ||
+    normalized === "in more detail" ||
+    normalized === "in more details" ||
+    normalized === "explain more"
+  );
+}
+
+function looksImperativePrompt(sentence: string): boolean {
+  return /^(?:tell|say|start|pick|choose|give|ask|put|take|go|keep|look|focus|show|do|let|stay|come|answer|hold|stop|be)\b/i.test(
+    sentence,
+  );
+}
+
+function ensureSentence(text: string): string {
+  return /[.!?]$/.test(text) ? text : `${text}.`;
+}
+
+function extractAssistantAnswerBody(text: string | null | undefined): string | null {
+  const sentences = splitSentences(text);
+  if (sentences.length < 2) {
+    return null;
+  }
+  const lastSentence = sentences[sentences.length - 1] ?? "";
+  if (!/\?$/.test(lastSentence)) {
+    return null;
+  }
+  const bodySentences = sentences
+    .slice(0, -1)
+    .map((sentence) => stripLeadFillers(sentence))
+    .filter((sentence) => sentence.length > 0)
+    .filter((sentence) => !/^(?:yes|good|alright|all right|okay|ok|right)\.?$/i.test(sentence));
+  if (bodySentences.length === 0) {
+    return null;
+  }
+  const substantiveSentences = bodySentences.filter(
+    (sentence) => sentence.length > 12 && !looksImperativePrompt(sentence),
+  );
+  if (substantiveSentences.length === 0) {
+    return null;
+  }
+  return substantiveSentences.join(" ").trim();
+}
+
+function buildAssistantAnswerElaborationReply(
+  userText: string,
+  lastAssistantText: string | null | undefined,
+): string | null {
+  if (!isElaborationStyleFollowUp(userText)) {
+    return null;
+  }
+  const answerBody = extractAssistantAnswerBody(lastAssistantText);
+  if (!answerBody) {
+    return null;
+  }
+  return `More plainly: ${ensureSentence(answerBody)}`;
 }
 
 function buildQuestionClarificationLead(text: string | null | undefined): string | null {
@@ -552,7 +627,15 @@ export function detectShortFollowUpKind(text: string): ShortFollowUpKind | null 
   if (normalized === "how") {
     return "how";
   }
-  if (normalized === "go on" || normalized === "more" || normalized === "then what") {
+  if (
+    normalized === "go on" ||
+    normalized === "more" ||
+    normalized === "then what" ||
+    normalized === "more detail" ||
+    normalized === "more details" ||
+    normalized === "in more detail" ||
+    normalized === "in more details"
+  ) {
     return "go_on";
   }
   if (
@@ -612,6 +695,13 @@ export function buildShortClarificationReply(input: {
   currentTopic?: string | null;
 }): string {
   const kind = detectShortFollowUpKind(input.userText);
+  const elaborationReply = buildAssistantAnswerElaborationReply(
+    input.userText,
+    input.lastAssistantText,
+  );
+  if (elaborationReply) {
+    return elaborationReply;
+  }
   const lead = buildContextLead(input.interactionMode, input.topicType);
   const previousUserText = input.lastUserText ?? input.lastUserAnswer ?? input.lastQuestion ?? null;
   const repairResolution = resolveRepairTurn({
