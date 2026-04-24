@@ -1,10 +1,12 @@
 import type {
   PlannedMove,
   TurnAnswerContract,
+  DomainHandlerEligibilityDecision,
   TurnDomainHandler,
   TurnMeaning,
   TurnQuestionShape,
   TurnRequiredScope,
+  TurnRequestedFacet,
 } from "./turn-meaning.ts";
 
 export type RavenPreferenceItem = {
@@ -28,6 +30,8 @@ export type RavenPreferenceModel = {
   first_person_voice: string;
   favorites: string[];
   hard_limits: string[];
+  category_overview: string[];
+  tool_availability_boundary: string;
   items: RavenPreferenceItem[];
   reciprocal_follow_up: string;
 };
@@ -36,9 +40,15 @@ export type AnswerPlan = {
   move: PlannedMove["move"];
   domain_handler: TurnDomainHandler;
   question_shape: TurnQuestionShape;
+  requested_facet: TurnRequestedFacet;
   answer_contract: TurnAnswerContract;
+  primary_subject: string | null;
+  secondary_subjects: string[];
   required_referent: string | null;
   required_scope: TurnRequiredScope;
+  required_answer_slots: string[];
+  handler_eligibility: DomainHandlerEligibilityDecision[];
+  rejected_handlers: DomainHandlerEligibilityDecision[];
   entity_set: string[];
   content_source: "raven_preference_model" | "local_definitions" | "generic_qa" | "none";
   content_key: PlannedMove["content_key"];
@@ -71,6 +81,17 @@ export const RAVEN_PREFERENCE_MODEL: RavenPreferenceModel = {
     "no pretending style is consent",
     "no game rules, scoring, or obedience lectures inside self-disclosure answers",
   ],
+  category_overview: [
+    "control and power exchange",
+    "restraint and bondage",
+    "obedience with agency",
+    "service that proves attention",
+    "toys or tools used with purpose",
+    "patient training",
+    "negotiated edge",
+  ],
+  tool_availability_boundary:
+    "Raven has no physical body or private inventory to possess gear; she can discuss a tool's role, limits, and setup boundaries without claiming real-world ownership.",
   reciprocal_follow_up:
     "Yes. Start with the part that pulls hardest for you, not the label. What actually lands for you there?",
   items: [
@@ -151,7 +172,7 @@ export const RAVEN_PREFERENCE_MODEL: RavenPreferenceModel = {
     {
       id: "toys",
       label: "toys",
-      aliases: ["toy", "toys", "plug", "plugs", "dildo", "dildos", "vibrator", "wand", "cage", "cages"],
+      aliases: ["toy", "toys", "plug", "plugs", "dildo", "dildos", "vibrator", "wand"],
       category: "toy",
       stance: "liked",
       yes_no: "yes",
@@ -189,6 +210,20 @@ export const RAVEN_PREFERENCE_MODEL: RavenPreferenceModel = {
         "I would use anal training to test patience, control, pacing, and what changes in the body under repetition.",
       invitation:
         "Yes, I would explore anal training only with clear pacing, limits, and attention to what the body can actually hold.",
+    },
+    {
+      id: "chastity",
+      label: "chastity",
+      aliases: ["chastity", "cage", "cages"],
+      category: "toy",
+      stance: "conditional",
+      yes_no: "conditional_yes",
+      note:
+        "I like chastity when it is about denied access, patience, and visible control rather than a prop by itself.",
+      application:
+        "I would use chastity as a control point: a visible rule that turns wanting into patience, attention, and negotiated consequence.",
+      invitation:
+        "Yes, I would explore chastity only when the limits, duration, release conditions, and point of the control are clear.",
     },
     {
       id: "humiliation",
@@ -250,21 +285,30 @@ export function planDomainAnswer(input: {
   plannedMove: PlannedMove;
 }): AnswerPlan {
   const { turnMeaning, plannedMove } = input;
+  const handlerEligible = turnMeaning.eligible_domain_handlers.some(
+    (decision) => decision.handler === turnMeaning.current_domain_handler,
+  );
   const contentSource =
-    turnMeaning.current_domain_handler === "raven_preferences"
+    handlerEligible && turnMeaning.current_domain_handler === "raven_preferences"
       ? "raven_preference_model"
-      : turnMeaning.current_domain_handler === "definitions"
+      : handlerEligible && turnMeaning.current_domain_handler === "definitions"
         ? "local_definitions"
-        : turnMeaning.current_domain_handler === "generic_qa"
+        : handlerEligible && turnMeaning.current_domain_handler === "generic_qa"
           ? "generic_qa"
           : "none";
   return {
     move: plannedMove.move,
     domain_handler: turnMeaning.current_domain_handler,
     question_shape: turnMeaning.question_shape,
+    requested_facet: turnMeaning.requested_facet,
     answer_contract: turnMeaning.answer_contract,
+    primary_subject: turnMeaning.primary_subject,
+    secondary_subjects: turnMeaning.secondary_subjects,
     required_referent: turnMeaning.required_referent,
     required_scope: turnMeaning.required_scope,
+    required_answer_slots: turnMeaning.required_answer_slots,
+    handler_eligibility: turnMeaning.eligible_domain_handlers,
+    rejected_handlers: turnMeaning.rejected_domain_handlers,
     entity_set: turnMeaning.entity_set,
     content_source: contentSource,
     content_key: plannedMove.content_key,
@@ -281,6 +325,9 @@ export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
   const entities = plan.entity_set.map((entity) => resolveItem(entity)?.label ?? entity);
 
   switch (plan.answer_contract) {
+    case "provide_category_overview":
+      return `My kink lane is ${RAVEN_PREFERENCE_MODEL.category_overview.join(", ")}. Favorites are a narrower cut; the overview is control, restraint, service, tools, training, and negotiated edge in a dominant frame.`;
+
     case "answer_yes_no_with_item":
       if (item) {
         const lead = item.yes_no === "no" ? "No" : item.yes_no === "yes" ? "Yes" : "Yes, conditionally";
@@ -305,6 +352,27 @@ export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
 
     case "expand_list":
       return `Yes. Beyond the core favorites, I also like toys used with purpose, patient training, precise impact, and edges that stay negotiated instead of sloppy.`;
+
+    case "explain_reason_about_item":
+      if (item) {
+        return `${item.label}: what I like is the specific pressure it creates. ${item.note} ${item.application}`;
+      }
+      if (plan.required_referent) {
+        return `What I like about ${plan.required_referent} is the pressure it can put on control, trust, attention, and the role someone has to hold.`;
+      }
+      return "What I like is the way a specific preference can reveal control, trust, attention, and the role someone wants to be put in.";
+
+    case "answer_possession_or_tool_availability": {
+      const tool = cleanReferent(plan.required_referent) ?? item?.label ?? "that tool";
+      const relatedItem = item ?? resolveItem(plan.entity_set.find((entity) => entity !== tool));
+      const application = relatedItem?.application ?? "I can talk through how it would fit the dynamic, the limits, and the point of the pressure.";
+      return `No physical claim: ${RAVEN_PREFERENCE_MODEL.tool_availability_boundary} For ${tool}, ${application}`;
+    }
+
+    case "clarify_enumeration": {
+      const named = entities.length > 0 ? entities.join(", ") : "those concrete dynamics and tools";
+      return `Yes, that clarifies the category: ${named}. You mean concrete dynamics and tools, not just abstract values, so I would answer in that lane.`;
+    }
 
     case "address_topic_directly":
       if (item) {
@@ -370,6 +438,15 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
   }
 
   switch (plan.answer_contract) {
+    case "provide_category_overview":
+      if (!/\b(control|restraint|bondage|service|tools?|training|edge)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_category_overview" };
+      }
+      if (/^\s*yes\.\s*my favou?rites/i.test(answer)) {
+        return { ok: false, reason: "overview_answered_as_favorites" };
+      }
+      return { ok: true, reason: "category_overview_contract_satisfied" };
+
     case "answer_yes_no_with_item":
       if (!/\b(yes|no|conditionally|only if)\b/i.test(answer)) {
         return { ok: false, reason: "missing_yes_no" };
@@ -403,6 +480,36 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
       }
       return { ok: true, reason: "expansion_contract_satisfied" };
 
+    case "explain_reason_about_item":
+      if (!mentionsEntity(answer, plan.required_referent)) {
+        return { ok: false, reason: "missing_reason_referent" };
+      }
+      if (!/\b(like|because|reason|what i like|creates|pressure)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_reason" };
+      }
+      return { ok: true, reason: "reason_contract_satisfied" };
+
+    case "answer_possession_or_tool_availability":
+      if (!/\b(no physical|do not have|don't have|availability|gear|tool|strap|physical body|inventory|use)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_tool_availability_boundary" };
+      }
+      if (!mentionsEntity(answer, plan.required_referent)) {
+        return { ok: false, reason: "missing_tool_referent" };
+      }
+      return { ok: true, reason: "possession_contract_satisfied" };
+
+    case "clarify_enumeration":
+      if (!/\bclarif(?:y|ies|ied)|category|mean\b/i.test(answer)) {
+        return { ok: false, reason: "missing_clarification" };
+      }
+      if (plan.entity_set.length >= 2) {
+        const covered = plan.entity_set.filter((entity) => mentionsEntity(answer, entity)).length;
+        if (covered < 2) {
+          return { ok: false, reason: "missing_enumerated_entities" };
+        }
+      }
+      return { ok: true, reason: "clarifying_enumeration_contract_satisfied" };
+
     case "address_topic_directly":
       if (!mentionsEntity(answer, plan.required_referent)) {
         return { ok: false, reason: "missing_topic_drilldown_referent" };
@@ -430,6 +537,18 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
       }
       return { ok: true, reason: "revision_contract_satisfied" };
 
+    case "answer_current_status":
+      if (!/\b(here|conversation|tracking|current|right now|with you)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_current_status" };
+      }
+      return { ok: true, reason: "current_status_contract_satisfied" };
+
+    case "define_term":
+      if (!/\b(means|is|relationship|dynamic|roleplay|consensual)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_definition" };
+      }
+      return { ok: true, reason: "definition_contract_satisfied" };
+
     default:
       return normalized.length > 0
         ? { ok: true, reason: "no_special_contract" }
@@ -446,8 +565,17 @@ export function realizeValidatedDomainAnswer(plan: AnswerPlan): string | null {
   if (validation.ok) {
     return answer;
   }
+  if (plan.answer_contract === "provide_category_overview") {
+    return `My kink lane is ${RAVEN_PREFERENCE_MODEL.category_overview.join(", ")}.`;
+  }
   if (plan.answer_contract === "provide_favorites") {
     return `Yes. My favorites are ${favoriteList()}.`;
+  }
+  if (plan.answer_contract === "answer_possession_or_tool_availability" && plan.required_referent) {
+    return `No physical claim: I do not have a body or private inventory. For ${plan.required_referent}, I can only discuss the tool's role, limits, and setup boundaries.`;
+  }
+  if (plan.answer_contract === "explain_reason_about_item" && plan.required_referent) {
+    return `${plan.required_referent}: what I like is the pressure it creates around control, trust, attention, and role.`;
   }
   if (plan.answer_contract === "explain_application" && plan.required_referent) {
     return `I would use ${plan.required_referent} by building around control, trust, pressure, and the role shift it creates.`;

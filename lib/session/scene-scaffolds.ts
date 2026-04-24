@@ -1539,10 +1539,12 @@ function semanticPlanShouldBypassGenericScaffolds(plan: PlannedMove): boolean {
     plan.content_key === "assistant_preference_answer" ||
     plan.content_key === "greeting_open" ||
     plan.content_key === "assistant_preference_elaboration" ||
+    plan.content_key === "assistant_preference_clarification" ||
     plan.content_key === "assistant_preference_revision" ||
     plan.content_key === "user_preference_application" ||
     plan.content_key === "raven_invitation_answer" ||
-    plan.content_key === "reciprocal_user_probe"
+    plan.content_key === "reciprocal_user_probe" ||
+    plan.content_key === "current_status_answer"
   );
 }
 

@@ -51,6 +51,10 @@ import {
   updateCanonicalTurnState,
   type PlannedMove,
 } from "./turn-meaning.ts";
+import {
+  planDomainAnswer,
+  validateAnswerContract,
+} from "./raven-preferences.ts";
 
 export type ResponseGateInput = {
   text: string;
@@ -793,12 +797,14 @@ function isSemanticPlannerOwnedMove(plannedMove: PlannedMove): boolean {
     plannedMove.content_key === "greeting_open" ||
     plannedMove.content_key === "assistant_preference_answer" ||
     plannedMove.content_key === "assistant_preference_elaboration" ||
+    plannedMove.content_key === "assistant_preference_clarification" ||
     plannedMove.content_key === "assistant_preference_revision" ||
     plannedMove.content_key === "user_preference_application" ||
     plannedMove.content_key === "raven_invitation_answer" ||
     plannedMove.content_key === "reciprocal_user_probe" ||
     plannedMove.content_key === "definition_answer" ||
-    plannedMove.content_key === "factual_answer"
+    plannedMove.content_key === "factual_answer" ||
+    plannedMove.content_key === "current_status_answer"
   );
 }
 
@@ -1813,6 +1819,8 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       isSemanticPlannerOwnedMove(plannedMove) && !forced
         ? "semantic_planner"
         : classifiedWinningSourceFamily;
+    const answerPlan = planDomainAnswer({ turnMeaning, plannedMove });
+    const answerContractValidation = validateAnswerContract(answerPlan, finalOutput);
     const semanticTrace = buildSemanticTurnTrace({
       turnMeaning,
       plannedMove,
@@ -1824,6 +1832,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       legacyOverrideAttempted:
         replacementChain.length > 0 ||
         (isSemanticPlannerOwnedMove(plannedMove) && classifiedWinningSourceFamily !== "raw_model"),
+      answerContractValidation,
     });
     if (forced && replacementChain.length === 0) {
       replacementChain.push({

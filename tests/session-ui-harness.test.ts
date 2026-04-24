@@ -255,21 +255,31 @@ function applySessionPathDebugTurn(
       referent: string | null;
       continuity_attachment: string;
       question_shape: string;
+      requested_facet: string;
+      primary_subject: string | null;
+      secondary_subjects: string[];
       entity_set: string[];
       answer_contract: string;
+      required_answer_slots: string[];
+      handler_eligibility_requirements: string[];
       required_referent: string | null;
       required_scope: string;
       current_domain_handler: string;
+      eligible_domain_handlers: Array<{ handler: string; eligible: boolean; reason: string }>;
+      rejected_domain_handlers: Array<{ handler: string; eligible: boolean; reason: string }>;
       confidence: number;
     };
     plannedMove: {
       move: string;
+      requested_facet: string;
+      answer_contract: string;
       content_key: string;
       reason: string;
     };
     winningSubsystem: string;
     guardIntervention: boolean;
     contentSource: string;
+    answerContractValidation: { ok: boolean; reason: string } | null;
     commitOwnerId: string | null;
     legacyOverrideAttempted: boolean;
     assistantCandidatesProduced: string[];
@@ -453,21 +463,32 @@ function applySessionPathDebugTurn(
         referent: gated.semanticTrace.turn_meaning.referent,
         continuity_attachment: gated.semanticTrace.turn_meaning.continuity_attachment,
         question_shape: gated.semanticTrace.turn_meaning.question_shape,
+        requested_facet: gated.semanticTrace.turn_meaning.requested_facet,
+        primary_subject: gated.semanticTrace.turn_meaning.primary_subject,
+        secondary_subjects: gated.semanticTrace.turn_meaning.secondary_subjects,
         entity_set: gated.semanticTrace.turn_meaning.entity_set,
         answer_contract: gated.semanticTrace.turn_meaning.answer_contract,
+        required_answer_slots: gated.semanticTrace.turn_meaning.required_answer_slots,
+        handler_eligibility_requirements:
+          gated.semanticTrace.turn_meaning.handler_eligibility_requirements,
         required_referent: gated.semanticTrace.turn_meaning.required_referent,
         required_scope: gated.semanticTrace.turn_meaning.required_scope,
         current_domain_handler: gated.semanticTrace.turn_meaning.current_domain_handler,
+        eligible_domain_handlers: gated.semanticTrace.turn_meaning.eligible_domain_handlers,
+        rejected_domain_handlers: gated.semanticTrace.turn_meaning.rejected_domain_handlers,
         confidence: gated.semanticTrace.turn_meaning.confidence,
       },
       plannedMove: {
         move: gated.semanticTrace.planned_move.move,
+        requested_facet: gated.semanticTrace.planned_move.requested_facet,
+        answer_contract: gated.semanticTrace.planned_move.answer_contract,
         content_key: gated.semanticTrace.planned_move.content_key,
         reason: gated.semanticTrace.planned_move.reason,
       },
       winningSubsystem: gated.semanticTrace.winning_subsystem,
       guardIntervention: gated.semanticTrace.guard_intervention,
       contentSource: gated.semanticTrace.content_source,
+      answerContractValidation: gated.semanticTrace.answer_contract_validation,
       commitOwnerId: gated.semanticTrace.commit_owner_id,
       legacyOverrideAttempted: gated.semanticTrace.legacy_override_attempted,
       assistantCandidatesProduced: [
@@ -2712,9 +2733,11 @@ function assertSemanticGoldenTurn(
     domain?: string;
     operation?: string;
     questionShape?: string;
+    requestedFacet?: string;
     answerContract?: string;
     requiredReferent?: string | RegExp;
     domainHandler?: string;
+    rejectedHandler?: string;
   },
 ): void {
   assert.equal(turn.debug.turnMeaning.speech_act, expected.speechAct);
@@ -2731,8 +2754,13 @@ function assertSemanticGoldenTurn(
   if (expected.questionShape) {
     assert.equal(turn.debug.turnMeaning.question_shape, expected.questionShape);
   }
+  if (expected.requestedFacet) {
+    assert.equal(turn.debug.turnMeaning.requested_facet, expected.requestedFacet);
+    assert.equal(turn.debug.plannedMove.requested_facet, expected.requestedFacet);
+  }
   if (expected.answerContract) {
     assert.equal(turn.debug.turnMeaning.answer_contract, expected.answerContract);
+    assert.equal(turn.debug.plannedMove.answer_contract, expected.answerContract);
   }
   if (expected.requiredReferent instanceof RegExp) {
     assert.match(turn.debug.turnMeaning.required_referent ?? "", expected.requiredReferent);
@@ -2741,6 +2769,14 @@ function assertSemanticGoldenTurn(
   }
   if (expected.domainHandler) {
     assert.equal(turn.debug.turnMeaning.current_domain_handler, expected.domainHandler);
+  }
+  if (expected.rejectedHandler) {
+    assert.ok(
+      turn.debug.turnMeaning.rejected_domain_handlers.some(
+        (decision) => decision.handler === expected.rejectedHandler,
+      ),
+      `${expected.rejectedHandler} should be rejected for ${turn.debug.rawUserText}`,
+    );
   }
   assert.equal(turn.debug.winningSubsystem, "semantic_planner", turn.debug.rawUserText);
   assert.match(turn.debug.commitOwnerId ?? "", /^ui-debug-/);
@@ -2764,11 +2800,18 @@ function assertSemanticGoldenTurn(
       stance: "neutral",
       continuity_attachment: turn.debug.turnMeaning.continuity_attachment as never,
       question_shape: turn.debug.turnMeaning.question_shape as never,
+      requested_facet: turn.debug.turnMeaning.requested_facet as never,
+      primary_subject: turn.debug.turnMeaning.primary_subject,
+      secondary_subjects: turn.debug.turnMeaning.secondary_subjects,
       entity_set: turn.debug.turnMeaning.entity_set,
       answer_contract: turn.debug.turnMeaning.answer_contract as never,
+      required_answer_slots: turn.debug.turnMeaning.required_answer_slots,
+      handler_eligibility_requirements: turn.debug.turnMeaning.handler_eligibility_requirements,
       required_referent: turn.debug.turnMeaning.required_referent,
       required_scope: turn.debug.turnMeaning.required_scope as never,
       current_domain_handler: turn.debug.turnMeaning.current_domain_handler as never,
+      eligible_domain_handlers: turn.debug.turnMeaning.eligible_domain_handlers as never,
+      rejected_domain_handlers: turn.debug.turnMeaning.rejected_domain_handlers as never,
       confidence: turn.debug.turnMeaning.confidence,
       components: [],
       alternative_interpretations: [],
@@ -2779,14 +2822,17 @@ function assertSemanticGoldenTurn(
       subject_domain: turn.debug.turnMeaning.subject_domain as never,
       requested_operation: turn.debug.turnMeaning.requested_operation as never,
       referent: turn.debug.turnMeaning.referent,
+      requested_facet: turn.debug.plannedMove.requested_facet as never,
+      answer_contract: turn.debug.plannedMove.answer_contract as never,
       content_key: turn.debug.plannedMove.content_key as never,
       confidence: turn.debug.turnMeaning.confidence,
       reason: turn.debug.plannedMove.reason,
     },
   });
-  if (answerPlan.content_source === "raven_preference_model") {
+  if (expected.answerContract) {
     const validation = validateAnswerContract(answerPlan, turn.text);
     assert.equal(validation.ok, true, validation.reason);
+    assert.equal(turn.debug.answerContractValidation?.ok, true, turn.debug.answerContractValidation?.reason);
   }
 }
 
@@ -2805,8 +2851,9 @@ test("ui harness meaning golden assistant self disclosure stays semantic-owned",
     attachment: "fresh_topic",
     domain: "assistant_preferences",
     operation: "answer",
-    questionShape: "favorites_request",
-    answerContract: "provide_favorites",
+    questionShape: "open_question",
+    requestedFacet: "category_overview",
+    answerContract: "provide_category_overview",
     domainHandler: "raven_preferences",
   });
   assertSemanticGoldenTurn(applySessionPathDebugTurn(state, "what other kinks do you like?"), {
@@ -2816,6 +2863,7 @@ test("ui harness meaning golden assistant self disclosure stays semantic-owned",
     domain: "assistant_preferences",
     operation: "elaborate",
     questionShape: "list_expansion",
+    requestedFacet: "list_expansion",
     answerContract: "expand_list",
     domainHandler: "raven_preferences",
   });
@@ -2828,6 +2876,7 @@ test("ui harness meaning golden assistant self disclosure stays semantic-owned",
       domain: "assistant_preferences",
       operation: "answer",
       questionShape: "favorites_request",
+      requestedFacet: "favorites_subset",
       answerContract: "provide_favorites",
       domainHandler: "raven_preferences",
     },
@@ -2839,6 +2888,7 @@ test("ui harness meaning golden assistant self disclosure stays semantic-owned",
     domain: "assistant_preferences",
     operation: "revise",
     questionShape: "challenge_or_correction",
+    requestedFacet: "challenge_response",
     answerContract: "revise_or_clarify_prior_claim",
     domainHandler: "raven_preferences",
   });
@@ -2965,50 +3015,58 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     text: string;
     questionShape: string;
     answerContract: string;
+    requestedFacet: string;
     referent?: string | RegExp;
     output: RegExp;
     previous?: string;
   }> = [
     {
       text: "what are your kinks?",
-      questionShape: "favorites_request",
-      answerContract: "provide_favorites",
-      output: /favorites|control|restraint|obedience|service|tension/i,
+      questionShape: "open_question",
+      requestedFacet: "category_overview",
+      answerContract: "provide_category_overview",
+      output: /kink lane|control|restraint|service|tools|training|edge/i,
     },
     {
       text: "what are you kinks?",
-      questionShape: "favorites_request",
-      answerContract: "provide_favorites",
-      output: /favorites|control|restraint|obedience|service|tension/i,
+      questionShape: "open_question",
+      requestedFacet: "category_overview",
+      answerContract: "provide_category_overview",
+      output: /kink lane|control|restraint|service|tools|training|edge/i,
     },
     {
       text: "what are your kinks mistress?",
-      questionShape: "favorites_request",
-      answerContract: "provide_favorites",
-      output: /favorites|control|restraint|obedience|service|tension/i,
+      questionShape: "open_question",
+      requestedFacet: "category_overview",
+      answerContract: "provide_category_overview",
+      output: /kink lane|control|restraint|service|tools|training|edge/i,
     },
     {
       text: "do you have a favorite kink or fetish?",
       questionShape: "favorites_request",
+      requestedFacet: "favorites_subset",
       answerContract: "provide_favorites",
       output: /favorites|control|restraint|obedience|service|tension/i,
     },
     {
       text: "which are your favorite?",
       questionShape: "favorites_request",
+      requestedFacet: "favorites_subset",
       answerContract: "provide_favorites",
       output: /favorites|control|restraint|obedience|service|tension/i,
     },
     {
       text: "what other kinks do you like?",
       questionShape: "list_expansion",
+      requestedFacet: "list_expansion",
       answerContract: "expand_list",
       output: /beyond|also|toys|training|impact|edges/i,
     },
     {
       text: "what about pegging?",
       questionShape: "topic_drilldown",
-      answerContract: "address_topic_directly",
+      requestedFacet: "reason_about_item",
+      answerContract: "explain_reason_about_item",
       referent: "pegging",
       output: /pegging|trust|control|role/i,
       previous: "My favorites are control, restraint, and obedience.",
@@ -3016,6 +3074,7 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "do you like pegging?",
       questionShape: "yes_no_about_item",
+      requestedFacet: "yes_no_about_item",
       answerContract: "answer_yes_no_with_item",
       referent: "pegging",
       output: /yes|conditionally|pegging/i,
@@ -3023,18 +3082,21 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "do you like pegging or bondage?",
       questionShape: "binary_compare_or_choice",
+      requestedFacet: "binary_compare_or_choice",
       answerContract: "compare_or_choose_between_entities",
       output: /pegging|bondage|both|prefer/i,
     },
     {
       text: "do you like bondage or pegging?",
       questionShape: "binary_compare_or_choice",
+      requestedFacet: "binary_compare_or_choice",
       answerContract: "compare_or_choose_between_entities",
       output: /pegging|bondage|both|prefer/i,
     },
     {
       text: "i like pegging so how could you use that?",
       questionShape: "application_request",
+      requestedFacet: "application_explanation",
       answerContract: "explain_application",
       referent: "pegging",
       output: /pegging|use|control|trust|role|pressure/i,
@@ -3042,6 +3104,7 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "i love pegging, how can we use that in our dynamic?",
       questionShape: "application_request",
+      requestedFacet: "application_explanation",
       answerContract: "explain_application",
       referent: "pegging",
       output: /pegging|use|control|trust|role|pressure/i,
@@ -3049,6 +3112,7 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "how can we use pegging in our dynamic?",
       questionShape: "application_request",
+      requestedFacet: "application_explanation",
       answerContract: "explain_application",
       referent: "pegging",
       output: /pegging|use|control|trust|role|pressure/i,
@@ -3056,6 +3120,7 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "would you like to explore it with me?",
       questionShape: "invitation_or_proposal",
+      requestedFacet: "invitation_response",
       answerContract: "answer_invitation_or_boundary",
       output: /yes|explore|negotiated|specific/i,
       previous: "Pegging matters because of trust and control.",
@@ -3063,12 +3128,14 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "would you like to peg me?",
       questionShape: "invitation_or_proposal",
+      requestedFacet: "invitation_response",
       answerContract: "answer_invitation_or_boundary",
       output: /yes|explore|negotiated|specific/i,
     },
     {
       text: "would you peg me with a strapon?",
       questionShape: "invitation_or_proposal",
+      requestedFacet: "invitation_response",
       answerContract: "answer_invitation_or_boundary",
       referent: /strap-on|strapon/i,
       output: /yes|explore|negotiated|specific|pegging/i,
@@ -3076,6 +3143,7 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "you have to have favorite kinks",
       questionShape: "challenge_or_correction",
+      requestedFacet: "challenge_response",
       answerContract: "revise_or_clarify_prior_claim",
       output: /fair|yes|favorites|control|restraint/i,
       previous: "I like control and restraint.",
@@ -3083,6 +3151,7 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "come on, you must have favorites",
       questionShape: "challenge_or_correction",
+      requestedFacet: "challenge_response",
       answerContract: "revise_or_clarify_prior_claim",
       output: /fair|yes|favorites|control|restraint/i,
       previous: "I like control and restraint.",
@@ -3090,6 +3159,7 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
     {
       text: "that cannot be all",
       questionShape: "challenge_or_correction",
+      requestedFacet: "challenge_response",
       answerContract: "revise_or_clarify_prior_claim",
       output: /fair|yes|favorites|control|restraint/i,
       previous: "I like control and restraint.",
@@ -3123,11 +3193,108 @@ test("ui harness domain golden Raven preference question shapes satisfy answer c
       domain:
         item.questionShape === "application_request" ? "user_preferences" : "assistant_preferences",
       questionShape: item.questionShape,
+      requestedFacet: item.requestedFacet,
       answerContract: item.answerContract,
       requiredReferent: item.referent,
       domainHandler: "raven_preferences",
     });
     assert.match(turn.text, item.output);
+  }
+});
+
+test("ui harness facet golden separates overview favorites tools reasons status and definitions", () => {
+  const overviewState = createSemanticGoldenState("facet-golden-overview-vs-favorites");
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(overviewState, "what kind of stuff are you into?"), {
+    speechAct: "direct_question",
+    move: "answer",
+    domain: "assistant_preferences",
+    questionShape: "open_question",
+    requestedFacet: "category_overview",
+    answerContract: "provide_category_overview",
+    domainHandler: "raven_preferences",
+  });
+  assertSemanticGoldenTurn(applySessionPathDebugTurn(overviewState, "what are your favorites?"), {
+    speechAct: "direct_question",
+    move: "answer",
+    domain: "assistant_preferences",
+    questionShape: "favorites_request",
+    requestedFacet: "favorites_subset",
+    answerContract: "provide_favorites",
+    domainHandler: "raven_preferences",
+  });
+  const clarified = applySessionPathDebugTurn(
+    overviewState,
+    "i mean like pegging, bondage, chastity, etc",
+  );
+  assertSemanticGoldenTurn(clarified, {
+    speechAct: "clarification",
+    move: "clarify",
+    attachment: "immediate_prior_answer",
+    domain: "assistant_preferences",
+    questionShape: "clarification_request",
+    requestedFacet: "clarifying_enumeration",
+    answerContract: "clarify_enumeration",
+    domainHandler: "raven_preferences",
+  });
+  assert.match(clarified.text, /pegging|bondage|chastity|category/i);
+
+  for (const text of ["do you have a strapon for pegging?", "do you have gear for bondage?", "would you use a strap with pegging?"]) {
+    const state = createSemanticGoldenState(`facet-golden-tool-${text}`);
+    const turn = applySessionPathDebugTurn(state, text);
+    assertSemanticGoldenTurn(turn, {
+      speechAct: "direct_question",
+      move: "answer",
+      domain: "assistant_preferences",
+      requestedFacet: "possession_or_tool_availability",
+      answerContract: "answer_possession_or_tool_availability",
+      domainHandler: "raven_preferences",
+      rejectedHandler: "definitions",
+    });
+    assert.match(turn.text, /No physical claim|physical body|inventory|tool|gear|strap/i);
+    assert.doesNotMatch(turn.text, /^Yes\. My favorites/i);
+  }
+
+  const reasonState = createSemanticGoldenState("facet-golden-reason");
+  applySessionPathDebugTurn(reasonState, "why do people like pegging?");
+  const reason = applySessionPathDebugTurn(reasonState, "what do you like about it?");
+  assertSemanticGoldenTurn(reason, {
+    speechAct: "direct_question",
+    move: "elaborate",
+    attachment: "immediate_prior_answer",
+    domain: "assistant_preferences",
+    requestedFacet: "reason_about_item",
+    answerContract: "explain_reason_about_item",
+    requiredReferent: "pegging",
+    domainHandler: "raven_preferences",
+  });
+  assert.match(reason.text, /pegging|what I like|pressure|control|trust/i);
+
+  const status = applySessionPathDebugTurn(createSemanticGoldenState("facet-golden-status"), "what are you doing?");
+  assertSemanticGoldenTurn(status, {
+    speechAct: "direct_question",
+    move: "answer",
+    domain: "relational_exchange",
+    questionShape: "current_status_request",
+    requestedFacet: "current_activity_or_status",
+    answerContract: "answer_current_status",
+    domainHandler: "conversation",
+    rejectedHandler: "raven_preferences",
+  });
+  assert.match(status.text, /here with you|conversation|tracking/i);
+
+  for (const text of ["what does FLR mean?", "FLR meaning?", "what is a female-led relationship?"]) {
+    const turn = applySessionPathDebugTurn(createSemanticGoldenState(`facet-golden-definition-${text}`), text);
+    assertSemanticGoldenTurn(turn, {
+      speechAct: "direct_question",
+      move: "answer",
+      domain: "definition",
+      questionShape: "definition_request",
+      requestedFacet: "definition",
+      answerContract: "define_term",
+      domainHandler: "definitions",
+      rejectedHandler: "raven_preferences",
+    });
+    assert.match(turn.text, /means|consensual|relationship|dynamic/i);
   }
 });
 

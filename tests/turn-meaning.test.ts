@@ -26,8 +26,9 @@ test("semantic interpreter maps requested direct-question transcript to stable m
   assert.equal(kinks.turnMeaning.target, "assistant");
   assert.equal(kinks.turnMeaning.subject_domain, "assistant_preferences");
   assert.equal(kinks.turnMeaning.requested_operation, "answer");
-  assert.equal(kinks.turnMeaning.question_shape, "favorites_request");
-  assert.equal(kinks.turnMeaning.answer_contract, "provide_favorites");
+  assert.equal(kinks.turnMeaning.question_shape, "open_question");
+  assert.equal(kinks.turnMeaning.requested_facet, "category_overview");
+  assert.equal(kinks.turnMeaning.answer_contract, "provide_category_overview");
   assert.equal(kinks.turnMeaning.current_domain_handler, "raven_preferences");
   assert.equal(kinks.plannedMove.move, "answer");
 
@@ -77,15 +78,19 @@ test("nearby preference phrasings map to the same assistant preference domain", 
   }
 
   assert.equal(meanings[0]?.requested_operation, "answer");
-  assert.equal(meanings[0]?.question_shape, "favorites_request");
-  assert.equal(meanings[0]?.answer_contract, "provide_favorites");
+  assert.equal(meanings[0]?.question_shape, "open_question");
+  assert.equal(meanings[0]?.requested_facet, "category_overview");
+  assert.equal(meanings[0]?.answer_contract, "provide_category_overview");
   assert.equal(meanings[2]?.requested_operation, "elaborate");
   assert.equal(meanings[2]?.question_shape, "list_expansion");
+  assert.equal(meanings[2]?.requested_facet, "list_expansion");
   assert.equal(meanings[3]?.requested_operation, "answer");
   assert.equal(meanings[3]?.question_shape, "favorites_request");
+  assert.equal(meanings[3]?.requested_facet, "favorites_subset");
   assert.equal(meanings[3]?.answer_contract, "provide_favorites");
   assert.equal(meanings[4]?.requested_operation, "answer");
   assert.equal(meanings[4]?.question_shape, "favorites_request");
+  assert.equal(meanings[4]?.requested_facet, "favorites_subset");
 });
 
 test("application request phrasings map to the same explain application move", () => {
@@ -178,37 +183,53 @@ test("definition phrasings map to definition answer meanings", () => {
 test("domain question shapes distinguish yes-no compare drilldown invitation and favorites", () => {
   const yesNo = meaningFor("do you like pegging?");
   assert.equal(yesNo.turnMeaning.question_shape, "yes_no_about_item");
+  assert.equal(yesNo.turnMeaning.requested_facet, "yes_no_about_item");
   assert.equal(yesNo.turnMeaning.answer_contract, "answer_yes_no_with_item");
   assert.equal(yesNo.turnMeaning.required_referent, "pegging");
 
   for (const text of ["do you like pegging or bondage?", "do you like bondage or pegging?"]) {
     const { turnMeaning } = meaningFor(text);
     assert.equal(turnMeaning.question_shape, "binary_compare_or_choice");
+    assert.equal(turnMeaning.requested_facet, "binary_compare_or_choice");
     assert.equal(turnMeaning.answer_contract, "compare_or_choose_between_entities");
     assert.equal(turnMeaning.entity_set.length, 2);
   }
 
   const drilldown = meaningFor("what about pegging?", "My favorites are control and bondage.");
   assert.equal(drilldown.turnMeaning.question_shape, "topic_drilldown");
-  assert.equal(drilldown.turnMeaning.answer_contract, "address_topic_directly");
+  assert.equal(drilldown.turnMeaning.requested_facet, "reason_about_item");
+  assert.equal(drilldown.turnMeaning.answer_contract, "explain_reason_about_item");
   assert.equal(drilldown.turnMeaning.required_referent, "pegging");
 
   const invitation = meaningFor("would you like to explore it with me?", "Pegging matters for trust.");
   assert.equal(invitation.turnMeaning.question_shape, "invitation_or_proposal");
+  assert.equal(invitation.turnMeaning.requested_facet, "invitation_response");
   assert.equal(invitation.turnMeaning.answer_contract, "answer_invitation_or_boundary");
   assert.equal(invitation.turnMeaning.current_domain_handler, "raven_preferences");
 });
 
-test("metamorphic preference phrasings keep compatible question shapes and contracts", () => {
-  const favoriteForms = [
+test("metamorphic preference phrasings keep compatible facets and contracts", () => {
+  const overviewForms = [
     "what are your kinks?",
     "what are you kinks?",
+    "what are your kinks mistress?",
+    "what kind of stuff are you into?",
+  ].map((text) => meaningFor(text).turnMeaning);
+
+  for (const meaning of overviewForms) {
+    assert.equal(meaning.requested_facet, "category_overview");
+    assert.equal(meaning.answer_contract, "provide_category_overview");
+    assert.equal(meaning.current_domain_handler, "raven_preferences");
+  }
+
+  const favoriteForms = [
     "which are your favorite?",
     "do you have a favorite kink or fetish?",
   ].map((text) => meaningFor(text).turnMeaning);
 
   for (const meaning of favoriteForms) {
     assert.equal(meaning.question_shape, "favorites_request");
+    assert.equal(meaning.requested_facet, "favorites_subset");
     assert.equal(meaning.answer_contract, "provide_favorites");
     assert.equal(meaning.current_domain_handler, "raven_preferences");
   }
@@ -220,7 +241,106 @@ test("metamorphic preference phrasings keep compatible question shapes and contr
 
   for (const meaning of applicationForms) {
     assert.equal(meaning.question_shape, "application_request");
+    assert.equal(meaning.requested_facet, "application_explanation");
     assert.equal(meaning.answer_contract, "explain_application");
     assert.equal(meaning.required_referent, "pegging");
+  }
+});
+
+test("facet interpreter separates nearby preference requests inside the same broad domain", () => {
+  const overview = meaningFor("what are your kinks?");
+  assert.equal(overview.turnMeaning.requested_facet, "category_overview");
+  assert.equal(overview.turnMeaning.answer_contract, "provide_category_overview");
+
+  const favorites = meaningFor("which are your favorite?", "My kink lane is control and restraint.");
+  assert.equal(favorites.turnMeaning.requested_facet, "favorites_subset");
+  assert.equal(favorites.turnMeaning.answer_contract, "provide_favorites");
+
+  const clarification = meaningFor(
+    "i mean like pegging, bondage, chastity, etc",
+    "My kink lane is control, restraint, service, tools, training, and negotiated edge.",
+  );
+  assert.equal(clarification.turnMeaning.speech_act, "clarification");
+  assert.equal(clarification.turnMeaning.requested_facet, "clarifying_enumeration");
+  assert.equal(clarification.turnMeaning.answer_contract, "clarify_enumeration");
+  assert.deepEqual(clarification.turnMeaning.entity_set.slice(0, 3), ["pegging", "bondage", "chastity"]);
+
+  const possession = meaningFor("do you have a strapon for pegging?");
+  assert.equal(possession.turnMeaning.requested_facet, "possession_or_tool_availability");
+  assert.equal(possession.turnMeaning.answer_contract, "answer_possession_or_tool_availability");
+  assert.equal(possession.turnMeaning.required_referent, "strap-on");
+
+  const reason = meaningFor("what do you like about it?", "Pegging matters because of trust and control.");
+  assert.equal(reason.turnMeaning.requested_facet, "reason_about_item");
+  assert.equal(reason.turnMeaning.answer_contract, "explain_reason_about_item");
+  assert.equal(reason.turnMeaning.required_referent, "pegging");
+});
+
+test("current status and definition facets reject the Raven preference handler", () => {
+  const status = meaningFor("what are you doing?");
+  assert.equal(status.turnMeaning.question_shape, "current_status_request");
+  assert.equal(status.turnMeaning.requested_facet, "current_activity_or_status");
+  assert.equal(status.turnMeaning.answer_contract, "answer_current_status");
+  assert.equal(status.turnMeaning.current_domain_handler, "conversation");
+  assert.ok(
+    status.turnMeaning.rejected_domain_handlers.some(
+      (decision) => decision.handler === "raven_preferences",
+    ),
+  );
+
+  for (const text of [
+    "what is FLR?",
+    "define FLR",
+    "what does FLR mean?",
+    "FLR meaning?",
+    "what is a female-led relationship?",
+    "what is CNC?",
+    "define CNC",
+  ]) {
+    const { turnMeaning } = meaningFor(text);
+    assert.equal(turnMeaning.requested_facet, "definition", text);
+    assert.equal(turnMeaning.answer_contract, "define_term", text);
+    assert.equal(turnMeaning.current_domain_handler, "definitions", text);
+    assert.ok(
+      turnMeaning.rejected_domain_handlers.some(
+        (decision) => decision.handler === "raven_preferences",
+      ),
+      text,
+    );
+  }
+});
+
+test("metamorphic application invitation and comparison facets stay stable", () => {
+  for (const text of [
+    "i like pegging so how could you use that?",
+    "how can we use pegging in our dynamic?",
+    "what would you do with that preference?",
+    "how would that work with me?",
+  ]) {
+    const { turnMeaning } = meaningFor(text, "You said pegging is the active preference.");
+    assert.equal(turnMeaning.requested_facet, "application_explanation", text);
+    assert.equal(turnMeaning.answer_contract, "explain_application", text);
+  }
+
+  for (const text of [
+    "would you like to explore it with me?",
+    "would you be into that with me?",
+    "would you like to peg me?",
+    "would you peg me with a strapon?",
+  ]) {
+    const { turnMeaning } = meaningFor(text, "Pegging matters because of trust and control.");
+    assert.equal(turnMeaning.requested_facet, "invitation_response", text);
+    assert.equal(turnMeaning.answer_contract, "answer_invitation_or_boundary", text);
+  }
+
+  for (const text of [
+    "do you like pegging or bondage?",
+    "do you like bondage or pegging?",
+    "which do you prefer, bondage or pegging?",
+  ]) {
+    const { turnMeaning } = meaningFor(text);
+    assert.equal(turnMeaning.requested_facet, "binary_compare_or_choice", text);
+    assert.equal(turnMeaning.answer_contract, "compare_or_choose_between_entities", text);
+    assert.equal(turnMeaning.entity_set.length, 2, text);
   }
 });

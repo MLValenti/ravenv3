@@ -990,6 +990,8 @@ export function realizeSemanticContent(
       return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
     case "assistant_preference_elaboration":
       return elaborateRavenPreference({ userText: question, turnMeaning, plannedMove });
+    case "assistant_preference_clarification":
+      return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
     case "assistant_preference_revision":
       return reviseRavenPreferenceClaim({ userText: question, turnMeaning, plannedMove });
     case "user_preference_application":
@@ -999,6 +1001,8 @@ export function realizeSemanticContent(
     case "definition_answer":
     case "factual_answer":
       return buildKnownDirectAnswer(question);
+    case "current_status_answer":
+      return "I am here with you in this conversation, tracking what you ask and keeping the next answer grounded in the current thread.";
     case "clarification_answer":
     case "conversation_continue":
     case "unknown_clarify":
@@ -1034,7 +1038,7 @@ function cleanTopic(value: string | null | undefined): string | null {
   }
   const cleaned = value
     .trim()
-    .replace(/^the\s+/i, "")
+    .replace(/^(?:the|a|an)\s+/i, "")
     .replace(/[.?!]+$/g, "")
     .trim();
   return cleaned || null;
@@ -1072,6 +1076,7 @@ function extractDirectDefinitionSubject(text: string): string | null {
   const patterns = [
     /^define\s+([^?!.,]{2,80})/i,
     /^what\s+does\s+([^?!.,]{2,80})\s+mean\??$/i,
+    /^([^?!.,]{2,40})\s+meaning\??$/i,
     /^who wrote\s+([^?!.,]{2,80})/i,
     /^what color is\s+([^?!.,]{2,80})/i,
     /^(?:what(?:'s| is)?|who(?: is)?|where(?: is)?|when(?: is)?)\s+([^?!.,]{2,80})/i,
