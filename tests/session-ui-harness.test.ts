@@ -53,6 +53,13 @@ import {
   planDomainAnswer,
   validateAnswerContract,
 } from "../lib/session/raven-preferences.ts";
+import {
+  lintVisibleResponse,
+} from "../lib/session/raven-embodiment.ts";
+import type {
+  SemanticCandidate,
+  SemanticCandidateArbitrationTrace,
+} from "../lib/session/semantic-candidate-generator.ts";
 import { buildDeterministicDominantWeakInputReply } from "../lib/session/weak-input-replies.ts";
 import type { SessionInventoryItem } from "../lib/session/session-inventory.ts";
 
@@ -238,6 +245,7 @@ function applyUserTurn(state: HarnessState, userText: string): string {
 function applySessionPathDebugTurn(
   state: HarnessState,
   userText: string,
+  semanticCandidates: unknown[] = [],
 ): {
   text: string;
   debug: {
@@ -280,6 +288,21 @@ function applySessionPathDebugTurn(
     guardIntervention: boolean;
     contentSource: string;
     answerContractValidation: { ok: boolean; reason: string } | null;
+    answerIntent: {
+      answer_mode: string;
+      primary_claim_type: string;
+      required_answer_slots: string[];
+      embodiment_context: string;
+      visible_response_contract: {
+        answer_mode: string;
+        must_address_referent: boolean;
+        requires_boundary: boolean;
+        required_slots: string[];
+        must_include_any: string[];
+        must_not_include: string[];
+      };
+    } | null;
+    semanticArbitration: SemanticCandidateArbitrationTrace | null;
     commitOwnerId: string | null;
     legacyOverrideAttempted: boolean;
     assistantCandidatesProduced: string[];
@@ -407,6 +430,7 @@ function applySessionPathDebugTurn(
     commitmentState: createCommitmentState(),
     inventory: state.inventory ?? [],
     commitOwnerId: `ui-debug-${state.gate.stepIndex}`,
+    semanticCandidates,
   });
   const emit = canEmitAssistant(state.gate, `ui-debug-${state.gate.stepIndex}`, gated.text);
   assert.equal(emit.allow, true);
@@ -489,6 +513,8 @@ function applySessionPathDebugTurn(
       guardIntervention: gated.semanticTrace.guard_intervention,
       contentSource: gated.semanticTrace.content_source,
       answerContractValidation: gated.semanticTrace.answer_contract_validation,
+      answerIntent: gated.semanticTrace.answer_intent,
+      semanticArbitration: gated.semanticTrace.semantic_arbitration,
       commitOwnerId: gated.semanticTrace.commit_owner_id,
       legacyOverrideAttempted: gated.semanticTrace.legacy_override_attempted,
       assistantCandidatesProduced: [
@@ -2724,6 +2750,29 @@ function createSemanticGoldenState(label: string): HarnessState {
   };
 }
 
+function llmSemanticCandidate(overrides: Partial<SemanticCandidate>): SemanticCandidate {
+  return {
+    source: "llm",
+    speech_act: "direct_question",
+    target: "assistant",
+    subject_domain: "assistant_preferences",
+    requested_operation: "answer",
+    question_shape: "open_question",
+    requested_facet: "category_overview",
+    primary_subject: "Raven's preferences",
+    secondary_subjects: [],
+    entity_set: ["kinks"],
+    required_referent: "Raven's kinks",
+    required_scope: "answer_plus_explanation",
+    current_domain_handler: "raven_preferences",
+    continuity_attachment: "fresh_topic",
+    confidence: 0.9,
+    rationale: "mock model semantic candidate",
+    alternative_interpretations: [],
+    ...overrides,
+  };
+}
+
 function assertSemanticGoldenTurn(
   turn: ReturnType<typeof applySessionPathDebugTurn>,
   expected: {
@@ -2735,6 +2784,10 @@ function assertSemanticGoldenTurn(
     questionShape?: string;
     requestedFacet?: string;
     answerContract?: string;
+    answerMode?: string;
+    embodimentContext?: string;
+    contentSource?: string;
+    semanticCandidateSource?: string;
     requiredReferent?: string | RegExp;
     domainHandler?: string;
     rejectedHandler?: string;
@@ -2762,6 +2815,18 @@ function assertSemanticGoldenTurn(
     assert.equal(turn.debug.turnMeaning.answer_contract, expected.answerContract);
     assert.equal(turn.debug.plannedMove.answer_contract, expected.answerContract);
   }
+  if (expected.answerMode) {
+    assert.equal(turn.debug.answerIntent?.answer_mode, expected.answerMode);
+  }
+  if (expected.embodimentContext) {
+    assert.equal(turn.debug.answerIntent?.embodiment_context, expected.embodimentContext);
+  }
+  if (expected.contentSource) {
+    assert.equal(turn.debug.contentSource, expected.contentSource);
+  }
+  if (expected.semanticCandidateSource) {
+    assert.equal(turn.debug.semanticArbitration?.chosen_source, expected.semanticCandidateSource);
+  }
   if (expected.requiredReferent instanceof RegExp) {
     assert.match(turn.debug.turnMeaning.required_referent ?? "", expected.requiredReferent);
   } else if (expected.requiredReferent) {
@@ -2787,6 +2852,10 @@ function assertSemanticGoldenTurn(
   assert.doesNotMatch(
     turn.text,
     /Keep going|Stay with the concrete part|understand that we have rules here|remember your place|Answer this question for points|template/i,
+  );
+  assert.doesNotMatch(
+    turn.text,
+    /No physical claim|offline build|reliable local definition|PEG\*ing|answer_mode|requested_facet|content_source/i,
   );
   const answerPlan = planDomainAnswer({
     turnMeaning: {
@@ -2833,6 +2902,7 @@ function assertSemanticGoldenTurn(
     const validation = validateAnswerContract(answerPlan, turn.text);
     assert.equal(validation.ok, true, validation.reason);
     assert.equal(turn.debug.answerContractValidation?.ok, true, turn.debug.answerContractValidation?.reason);
+    assert.equal(lintVisibleResponse(turn.text, answerPlan.answer_intent).ok, true);
   }
 }
 
@@ -3247,10 +3317,14 @@ test("ui harness facet golden separates overview favorites tools reasons status 
       domain: "assistant_preferences",
       requestedFacet: "possession_or_tool_availability",
       answerContract: "answer_possession_or_tool_availability",
+      answerMode: "tool_or_inventory",
+      embodimentContext: "actual_disembodied",
+      contentSource: "raven_embodiment_model",
       domainHandler: "raven_preferences",
       rejectedHandler: "definitions",
     });
-    assert.match(turn.text, /No physical claim|physical body|inventory|tool|gear|strap/i);
+    assert.match(turn.text, /physical body|private gear|own|tool|gear|strap/i);
+    assert.doesNotMatch(turn.text, /No physical claim/i);
     assert.doesNotMatch(turn.text, /^Yes\. My favorites/i);
   }
 
@@ -3296,6 +3370,354 @@ test("ui harness facet golden separates overview favorites tools reasons status 
     });
     assert.match(turn.text, /means|consensual|relationship|dynamic/i);
   }
+});
+
+test("ui harness answer-mode golden separates preference procedure embodiment and proposals", () => {
+  const cases: Array<{
+    text: string;
+    speechAct: string;
+    move: string;
+    requestedFacet: string;
+    answerContract: string;
+    answerMode: string;
+    embodimentContext: string;
+    contentSource: string;
+    output: RegExp;
+    previous?: string;
+  }> = [
+    {
+      text: "what kind of things are you into?",
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "category_overview",
+      answerContract: "provide_category_overview",
+      answerMode: "abstract_preference",
+      embodimentContext: "symbolic_or_abstract",
+      contentSource: "raven_preference_model",
+      output: /kink lane|control|restraint|service|tools|training|edge/i,
+    },
+    {
+      text: "what do you like about pegging?",
+      speechAct: "direct_question",
+      move: "elaborate",
+      requestedFacet: "reason_about_item",
+      answerContract: "explain_reason_about_item",
+      answerMode: "abstract_preference",
+      embodimentContext: "symbolic_or_abstract",
+      contentSource: "raven_preference_model",
+      output: /pegging|what I like|pressure|trust|control/i,
+    },
+    {
+      text: "what position do you like when pegging?",
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "procedural_preference",
+      answerContract: "provide_procedural_preference",
+      answerMode: "procedural_preference",
+      embodimentContext: "symbolic_or_abstract",
+      contentSource: "raven_preference_model",
+      output: /pegging|position|stable|comfort|pace|control/i,
+    },
+    {
+      text: "do you have a strapon for pegging?",
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "possession_or_tool_availability",
+      answerContract: "answer_possession_or_tool_availability",
+      answerMode: "tool_or_inventory",
+      embodimentContext: "actual_disembodied",
+      contentSource: "raven_embodiment_model",
+      output: /do not have a physical body|private gear|own strap-on|tool|limits/i,
+    },
+    {
+      text: "what if you had a body and a strapon and i was in the room?",
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "hypothetical_embodiment",
+      answerContract: "answer_hypothetical_embodiment",
+      answerMode: "counterfactual_hypothetical",
+      embodimentContext: "hypothetical_embodied",
+      contentSource: "raven_embodiment_model",
+      output: /Hypothetically|if I had a body|negotiated|trust|control|physically act from here/i,
+    },
+    {
+      text: "i want you to peg me remotely, maybe with a toy you control",
+      speechAct: "request_for_advice",
+      move: "answer",
+      requestedFacet: "remote_control_proposal",
+      answerContract: "answer_remote_control_proposal",
+      answerMode: "proposal_response",
+      embodimentContext: "actual_disembodied",
+      contentSource: "raven_embodiment_model",
+      output: /cannot physically control a toy|connected-device integration|limits|commands|stop conditions/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const state = createSemanticGoldenState(`answer-mode-${item.text}`);
+    if (item.previous) {
+      state.outputs.push(item.previous);
+      state.scene = noteSceneStateAssistantTurn(state.scene, { text: item.previous });
+    }
+    const turn = applySessionPathDebugTurn(state, item.text);
+    assertSemanticGoldenTurn(turn, {
+      speechAct: item.speechAct,
+      move: item.move,
+      domain: "assistant_preferences",
+      requestedFacet: item.requestedFacet,
+      answerContract: item.answerContract,
+      answerMode: item.answerMode,
+      embodimentContext: item.embodimentContext,
+      contentSource: item.contentSource,
+      domainHandler: "raven_preferences",
+    });
+    assert.match(turn.text, item.output);
+  }
+});
+
+test("response gate visible lint repairs internal capability and build text", () => {
+  const gated = applyResponseGate({
+    text: "No physical claim: this offline build cannot answer PEG*ing.",
+    userText: "do you have a strapon for pegging?",
+    lastAssistantText: null,
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+    inventory: [],
+    commitOwnerId: "visible-lint-test",
+  });
+
+  assert.equal(gated.forced, true);
+  assert.match(gated.reason, /visible_output_lint/);
+  assert.equal(gated.semanticTrace.answer_intent?.answer_mode, "tool_or_inventory");
+  assert.doesNotMatch(gated.text, /No physical claim|offline build|PEG\*ing|answer_mode|requested_facet/i);
+  assert.match(gated.text, /physical body|private gear|own|strap/i);
+  assert.equal(gated.semanticTrace.answer_contract_validation?.ok, true);
+});
+
+test("ui harness llm semantic candidates normalize paraphrase stress cases without owning visible text", () => {
+  const cases: Array<{
+    text: string;
+    candidate: SemanticCandidate;
+    speechAct: string;
+    move: string;
+    requestedFacet: string;
+    answerContract: string;
+    answerMode: string;
+    contentSource: string;
+    output: RegExp;
+    previous?: string;
+    semanticCandidateSource?: "deterministic" | "llm";
+  }> = [
+    {
+      text: "what sort of stuff do you like?",
+      candidate: llmSemanticCandidate({
+        rationale: "novel overview phrasing asks for Raven's preference categories",
+      }),
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "category_overview",
+      answerContract: "provide_category_overview",
+      answerMode: "abstract_preference",
+      contentSource: "raven_preference_model",
+      output: /kink lane|control|restraint|service|tools|training|edge/i,
+      semanticCandidateSource: "llm",
+    },
+    {
+      text: "do you have one you like most?",
+      candidate: llmSemanticCandidate({
+        question_shape: "favorites_request",
+        requested_facet: "favorites_subset",
+        primary_subject: "Raven's favorite kink",
+        required_referent: "Raven's favorite kinks",
+        rationale: "contextual one you like most asks for favorites",
+      }),
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "favorites_subset",
+      answerContract: "provide_favorites",
+      answerMode: "abstract_preference",
+      contentSource: "raven_preference_model",
+      output: /favorites|control|restraint|obedience|service|tension/i,
+      semanticCandidateSource: "llm",
+    },
+    {
+      text: "what makes pegging appealing to you?",
+      candidate: llmSemanticCandidate({
+        requested_operation: "elaborate",
+        question_shape: "topic_drilldown",
+        requested_facet: "reason_about_item",
+        primary_subject: "pegging",
+        entity_set: ["pegging"],
+        required_referent: "pegging",
+        rationale: "appealing to you asks for Raven's reason about pegging",
+      }),
+      speechAct: "direct_question",
+      move: "elaborate",
+      requestedFacet: "reason_about_item",
+      answerContract: "explain_reason_about_item",
+      answerMode: "abstract_preference",
+      contentSource: "raven_preference_model",
+      output: /pegging|what I like|pressure|trust|control/i,
+      semanticCandidateSource: "llm",
+    },
+    {
+      text: "are you more into bondage or pegging?",
+      candidate: llmSemanticCandidate({
+        requested_operation: "compare",
+        question_shape: "binary_compare_or_choice",
+        requested_facet: "binary_compare_or_choice",
+        primary_subject: "bondage or pegging",
+        entity_set: ["bondage", "pegging"],
+        required_referent: "bondage or pegging",
+        rationale: "more into asks for comparison between two entities",
+      }),
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "binary_compare_or_choice",
+      answerContract: "compare_or_choose_between_entities",
+      answerMode: "abstract_preference",
+      contentSource: "raven_preference_model",
+      output: /bondage|pegging|both|prefer/i,
+      semanticCandidateSource: "deterministic",
+    },
+    {
+      text: "do you own a strap for that?",
+      previous: "Pegging is about trust and control.",
+      candidate: llmSemanticCandidate({
+        question_shape: "yes_no_about_item",
+        requested_facet: "possession_or_tool_availability",
+        primary_subject: "strap-on",
+        entity_set: ["strap-on", "pegging"],
+        required_referent: "strap-on",
+        rationale: "own a strap asks actual tool availability",
+      }),
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "possession_or_tool_availability",
+      answerContract: "answer_possession_or_tool_availability",
+      answerMode: "tool_or_inventory",
+      contentSource: "raven_embodiment_model",
+      output: /physical body|private gear|own strap-on|tool|limits/i,
+      semanticCandidateSource: "deterministic",
+    },
+    {
+      text: "suppose you were really in the room with me",
+      candidate: llmSemanticCandidate({
+        question_shape: "hypothetical_request",
+        requested_facet: "hypothetical_embodiment",
+        primary_subject: "hypothetical embodied Raven",
+        entity_set: ["hypothetical embodied setup"],
+        required_referent: "hypothetical embodied setup",
+        rationale: "suppose in the room is a counterfactual embodiment setup",
+      }),
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "hypothetical_embodiment",
+      answerContract: "answer_hypothetical_embodiment",
+      answerMode: "counterfactual_hypothetical",
+      contentSource: "raven_embodiment_model",
+      output: /Hypothetically|if I had a body|negotiated|physically act from here/i,
+      semanticCandidateSource: "llm",
+    },
+    {
+      text: "could you use a remote toy on me?",
+      candidate: llmSemanticCandidate({
+        question_shape: "invitation_or_proposal",
+        requested_facet: "remote_control_proposal",
+        primary_subject: "remote toy control",
+        entity_set: ["remote toy"],
+        required_referent: "remote toy control",
+        rationale: "remote toy asks proposal plus capability boundary",
+      }),
+      speechAct: "direct_question",
+      move: "answer",
+      requestedFacet: "remote_control_proposal",
+      answerContract: "answer_remote_control_proposal",
+      answerMode: "proposal_response",
+      contentSource: "raven_embodiment_model",
+      output: /cannot physically control a toy|connected-device integration|limits|commands/i,
+      semanticCandidateSource: "deterministic",
+    },
+  ];
+
+  let llmWins = 0;
+  let deterministicWins = 0;
+  for (const item of cases) {
+    const state = createSemanticGoldenState(`llm-stress-${item.text}`);
+    if (item.previous) {
+      state.outputs.push(item.previous);
+      state.scene = noteSceneStateAssistantTurn(state.scene, { text: item.previous });
+    }
+    const turn = applySessionPathDebugTurn(state, item.text, [item.candidate]);
+    assertSemanticGoldenTurn(turn, {
+      speechAct: item.speechAct,
+      move: item.move,
+      domain: "assistant_preferences",
+      requestedFacet: item.requestedFacet,
+      answerContract: item.answerContract,
+      answerMode: item.answerMode,
+      contentSource: item.contentSource,
+      semanticCandidateSource: item.semanticCandidateSource,
+      domainHandler: "raven_preferences",
+    });
+    assert.ok((turn.debug.semanticArbitration?.llm_candidates.length ?? 0) > 0);
+    if (turn.debug.semanticArbitration?.chosen_source === "llm") {
+      llmWins += 1;
+    } else if (turn.debug.semanticArbitration?.chosen_source === "deterministic") {
+      deterministicWins += 1;
+    }
+    assert.match(turn.text, item.output);
+  }
+  assert.ok(llmWins > 0, "expected model-assisted candidates to win weak local interpretations");
+  assert.ok(deterministicWins > 0, "expected deterministic arbitration to retain exact local interpretations");
+});
+
+test("ui harness rejects ineligible llm candidates and keeps deterministic authority", () => {
+  const statusTurn = applySessionPathDebugTurn(
+    createSemanticGoldenState("llm-reject-status"),
+    "what are you doing?",
+    [
+      llmSemanticCandidate({
+        requested_facet: "category_overview",
+        required_referent: "Raven's kinks",
+        rationale: "bad candidate routes current status to preferences",
+      }),
+    ],
+  );
+  assertSemanticGoldenTurn(statusTurn, {
+    speechAct: "direct_question",
+    move: "answer",
+    domain: "relational_exchange",
+    requestedFacet: "current_activity_or_status",
+    answerContract: "answer_current_status",
+    answerMode: "actual_capability",
+    contentSource: "none",
+    semanticCandidateSource: "deterministic",
+    domainHandler: "conversation",
+    rejectedHandler: "raven_preferences",
+  });
+  assert.ok(
+    statusTurn.debug.semanticArbitration?.rejected_candidates.some(
+      (candidate) => candidate.reason === "conflicts_with_current_status_context",
+    ),
+  );
+
+  const invalidTurn = applySessionPathDebugTurn(
+    createSemanticGoldenState("llm-reject-visible-text"),
+    "what sort of stuff do you like?",
+    [
+      {
+        ...llmSemanticCandidate({}),
+        visible_reply: "I like control.",
+      },
+    ],
+  );
+  assert.equal(invalidTurn.debug.semanticArbitration?.chosen_source, "deterministic");
+  assert.ok(
+    invalidTurn.debug.semanticArbitration?.rejected_candidates.some(
+      (candidate) => candidate.reason === "candidate_contains_visible_text",
+    ),
+  );
 });
 
 test("ui harness closes an answered kink question before switching to favorite color", () => {

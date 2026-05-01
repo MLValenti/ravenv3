@@ -5,6 +5,13 @@ import {
   isAssistantPreferenceQuestion,
   normalizeAssistantSelfQuestionText,
 } from "./interaction-mode.ts";
+import {
+  semanticCandidateFromTurnMeaning,
+  validateSemanticCandidateSchema,
+  type RejectedSemanticCandidate,
+  type SemanticCandidate,
+  type SemanticCandidateArbitrationTrace,
+} from "./semantic-candidate-generator.ts";
 
 export type TurnSpeechAct =
   | "greeting"
@@ -76,6 +83,7 @@ export type TurnQuestionShape =
   | "clarification_request"
   | "definition_request"
   | "current_status_request"
+  | "hypothetical_request"
   | "factual_request"
   | "greeting_or_opener"
   | "statement_or_disclosure"
@@ -90,6 +98,9 @@ export type TurnRequestedFacet =
   | "binary_compare_or_choice"
   | "reason_about_item"
   | "possession_or_tool_availability"
+  | "procedural_preference"
+  | "hypothetical_embodiment"
+  | "remote_control_proposal"
   | "current_activity_or_status"
   | "definition"
   | "clarifying_enumeration"
@@ -111,6 +122,9 @@ export type TurnAnswerContract =
   | "address_topic_directly"
   | "explain_reason_about_item"
   | "answer_possession_or_tool_availability"
+  | "provide_procedural_preference"
+  | "answer_hypothetical_embodiment"
+  | "answer_remote_control_proposal"
   | "answer_current_status"
   | "clarify_enumeration"
   | "answer_invitation_or_boundary"
@@ -230,6 +244,8 @@ export type TurnMeaningInput = {
   previousAssistantText?: string | null;
   previousUserText?: string | null;
   currentTopic?: string | null;
+  llmSemanticCandidates?: unknown[] | null;
+  llmSemanticRejectedCandidates?: RejectedSemanticCandidate[] | null;
 };
 
 export type CanonicalTurnState = {
@@ -237,6 +253,7 @@ export type CanonicalTurnState = {
   planned_move: PlannedMove;
   semantic_owner: "semantic_planner";
   fallback_allowed: boolean;
+  semantic_arbitration: SemanticCandidateArbitrationTrace;
 };
 
 const PREFERENCE_DOMAIN_PATTERN =
@@ -348,12 +365,48 @@ function isCurrentStatusRequest(normalized: string): boolean {
 
 function isPossessionOrToolAvailabilityRequest(normalized: string): boolean {
   return (
-    /\b(?:do you have|have you got|do you own|got any|is there|are there)\b[^?]{0,80}\b(?:strap-?on|strap|gear|cuffs?|rope|collar|toy|toys|plug|dildo|wand|cage)\b/i.test(
+    /\b(?:do you have|have you got|do you own|would you have|would you own|got any|is there|are there)\b[^?]{0,80}\b(?:strap-?on|strap|gear|cuffs?|rope|collar|toy|toys|plug|dildo|wand|cage)\b/i.test(
       normalized,
     ) ||
     /\bwould you use\b[^?]{0,80}\b(?:strap-?on|strap|gear|cuffs?|rope|collar|toy|toys|plug|dildo|wand|cage)\b/i.test(
       normalized,
     )
+  );
+}
+
+function isProceduralPreferenceRequest(normalized: string): boolean {
+  return (
+    /\bwhat\s+(?:position|positions|pose)\b[^?]{0,80}\b(?:you like|do you like|you prefer|would you choose|when|for)\b/i.test(
+      normalized,
+    ) ||
+    /\b(?:what|which)\s+(?:position|positions|pose)\s+(?:do|would)\s+you\s+(?:like|prefer|choose)\b/i.test(
+      normalized,
+    ) ||
+    /\bhow would you position\b/i.test(normalized)
+  );
+}
+
+function isHypotheticalEmbodimentRequest(normalized: string): boolean {
+  return (
+    /\bwhat if\b[^?!.]{0,120}\b(?:you had a body|had a body|physically here|in the room|same room)\b/i.test(
+      normalized,
+    ) ||
+    /\bif you (?:had|were)\b[^?!.]{0,120}\b(?:a body|physically here|in the room|same room)\b/i.test(
+      normalized,
+    )
+  );
+}
+
+function isRemoteControlProposal(normalized: string): boolean {
+  return (
+    /\b(?:remote|remotely|from a distance)\b[^?!.]{0,120}\b(?:peg|toy|control|use)\b/i.test(
+      normalized,
+    ) ||
+    /\b(?:peg|control|use)\b[^?!.]{0,120}\b(?:remote|remotely|from a distance|toy you control|remote toy)\b/i.test(
+      normalized,
+    ) ||
+    /\btoy you control\b/i.test(normalized) ||
+    /\bremote toy\b/i.test(normalized)
   );
 }
 
@@ -422,6 +475,9 @@ function deriveQuestionShape(input: {
   if (input.requested_operation === "explain_application") {
     return "application_request";
   }
+  if (isHypotheticalEmbodimentRequest(input.normalized)) {
+    return "hypothetical_request";
+  }
   if (input.subject_domain === "definition") {
     return "definition_request";
   }
@@ -475,6 +531,15 @@ function requestedFacetForShape(input: {
   }
   if (isClarifyingEnumeration(input.normalized)) {
     return "clarifying_enumeration";
+  }
+  if (isRemoteControlProposal(input.normalized)) {
+    return "remote_control_proposal";
+  }
+  if (isHypotheticalEmbodimentRequest(input.normalized)) {
+    return "hypothetical_embodiment";
+  }
+  if (isProceduralPreferenceRequest(input.normalized)) {
+    return "procedural_preference";
   }
   if (isPossessionOrToolAvailabilityRequest(input.normalized)) {
     return "possession_or_tool_availability";
@@ -536,6 +601,12 @@ function answerContractForFacet(facet: TurnRequestedFacet): TurnAnswerContract {
       return "explain_reason_about_item";
     case "possession_or_tool_availability":
       return "answer_possession_or_tool_availability";
+    case "procedural_preference":
+      return "provide_procedural_preference";
+    case "hypothetical_embodiment":
+      return "answer_hypothetical_embodiment";
+    case "remote_control_proposal":
+      return "answer_remote_control_proposal";
     case "current_activity_or_status":
       return "answer_current_status";
     case "clarifying_enumeration":
@@ -575,6 +646,12 @@ function slotsForFacet(facet: TurnRequestedFacet): string[] {
       return ["item_referent", "reason"];
     case "possession_or_tool_availability":
       return ["tool_referent", "availability_boundary"];
+    case "procedural_preference":
+      return ["item_referent", "procedure_preference", "boundary"];
+    case "hypothetical_embodiment":
+      return ["hypothetical_setup", "embodied_stance", "boundary"];
+    case "remote_control_proposal":
+      return ["proposal", "remote_capability_boundary", "available_next_step"];
     case "current_activity_or_status":
       return ["current_status"];
     case "definition":
@@ -593,6 +670,13 @@ function slotsForFacet(facet: TurnRequestedFacet): string[] {
 }
 
 function domainHandlerForMeaning(subjectDomain: TurnSubjectDomain, facet: TurnRequestedFacet): TurnDomainHandler {
+  if (
+    facet === "procedural_preference" ||
+    facet === "hypothetical_embodiment" ||
+    facet === "remote_control_proposal"
+  ) {
+    return "raven_preferences";
+  }
   if (facet === "definition") {
     return "definitions";
   }
@@ -642,6 +726,9 @@ const HANDLER_FACETS: Record<TurnDomainHandler, TurnRequestedFacet[]> = {
     "binary_compare_or_choice",
     "reason_about_item",
     "possession_or_tool_availability",
+    "procedural_preference",
+    "hypothetical_embodiment",
+    "remote_control_proposal",
     "clarifying_enumeration",
     "invitation_response",
     "application_explanation",
@@ -649,7 +736,12 @@ const HANDLER_FACETS: Record<TurnDomainHandler, TurnRequestedFacet[]> = {
     "reciprocal_probe",
   ],
   definitions: ["definition"],
-  relational_dynamics: ["application_explanation", "invitation_response", "clarification"],
+  relational_dynamics: [
+    "application_explanation",
+    "invitation_response",
+    "remote_control_proposal",
+    "clarification",
+  ],
   generic_qa: ["factual_answer"],
   conversation: ["current_activity_or_status", "clarification", "continuation", "reciprocal_probe"],
   planning: ["continuation", "clarification"],
@@ -930,6 +1022,7 @@ function isAssistantPreferenceQuestionLike(normalized: string, selfNormalized: s
   if (
     isCategoryOverviewQuestion(selfNormalized) ||
     isPossessionOrToolAvailabilityRequest(selfNormalized) ||
+    isProceduralPreferenceRequest(selfNormalized) ||
     isReasonAboutItemRequest(selfNormalized)
   ) {
     return true;
@@ -1062,6 +1155,60 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
 
   const disclosedPreference = extractUserPreferenceDisclosure(rawText);
 
+  if (isHypotheticalEmbodimentRequest(normalized)) {
+    const referent =
+      extractPreferenceDomainReferent(rawText) ??
+      extractToolReferent(rawText) ??
+      "hypothetical embodied setup";
+    return buildMeaning({
+      rawText,
+      normalized,
+      speech_act: "direct_question",
+      target: "assistant",
+      subject_domain: "assistant_preferences",
+      requested_operation: "answer",
+      referent,
+      stance: "curious",
+      continuity_attachment: "active_thread",
+      confidence: 0.86,
+      question_shape: "hypothetical_request",
+      requested_facet: "hypothetical_embodiment",
+      answer_contract: "answer_hypothetical_embodiment",
+      current_domain_handler: "raven_preferences",
+      alternative_interpretations: [
+        alternative("request_for_advice", "explain_application", 0.42, "counterfactual could be applied to the active dynamic"),
+      ],
+    });
+  }
+
+  if (isRemoteControlProposal(normalized)) {
+    const referent =
+      extractPreferenceDomainReferent(rawText) ??
+      extractToolReferent(rawText) ??
+      extractRecentPreferenceReferent(input.previousAssistantText) ??
+      extractRecentPreferenceReferent(input.currentTopic) ??
+      "remote toy control";
+    return buildMeaning({
+      rawText,
+      normalized,
+      speech_act: isQuestionLike(normalized) ? "direct_question" : "request_for_advice",
+      target: "assistant",
+      subject_domain: "assistant_preferences",
+      requested_operation: "answer",
+      referent,
+      stance: "curious",
+      continuity_attachment: "active_thread",
+      confidence: 0.84,
+      question_shape: "invitation_or_proposal",
+      requested_facet: "remote_control_proposal",
+      answer_contract: "answer_remote_control_proposal",
+      current_domain_handler: "raven_preferences",
+      alternative_interpretations: [
+        alternative("direct_question", "answer", 0.48, "remote tool proposal also asks about actual capability"),
+      ],
+    });
+  }
+
   if (isClarifyingEnumeration(normalized)) {
     const entities = extractPreferenceEntities(rawText);
     return buildMeaning({
@@ -1186,14 +1333,17 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
     const binaryEntities = extractBinaryChoiceEntities(selfNormalized);
     const hasToolFacet = isPossessionOrToolAvailabilityRequest(normalized);
     const hasReasonFacet = isReasonAboutItemRequest(normalized);
+    const hasProceduralFacet = isProceduralPreferenceRequest(normalized);
     const requestedOperation: TurnRequestedOperation =
       binaryEntities.length === 2
         ? "compare"
         : hasReasonFacet
           ? "elaborate"
-        : isElaborationRequest(normalized)
-          ? "elaborate"
-          : "answer";
+          : hasProceduralFacet
+            ? "answer"
+            : isElaborationRequest(normalized)
+              ? "elaborate"
+              : "answer";
     const toolReferent = extractToolReferent(rawText);
     const recentReferent =
       extractRecentPreferenceReferent(input.previousAssistantText) ??
@@ -1204,6 +1354,10 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
         ? binaryEntities.join(" or ")
         : toolReferent && hasToolFacet
           ? toolReferent
+        : hasProceduralFacet
+          ? extractPreferenceDomainReferent(selfNormalized) ??
+            extractRecentPreferenceReferent(input.previousAssistantText) ??
+            "the active preference topic"
         : hasReasonFacet && /\b(?:it|that|this)\b/i.test(normalized)
           ? recentReferent ?? extractPreferenceDomainReferent(selfNormalized) ?? "the active preference topic"
         : extractAssistantPreferenceReferent(selfNormalized) ??
@@ -1230,11 +1384,15 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
           : uniqueEntities([referent, ...extractPreferenceEntities(rawText)]),
       requested_facet: hasToolFacet
         ? "possession_or_tool_availability"
+        : hasProceduralFacet
+          ? "procedural_preference"
         : hasReasonFacet
           ? "reason_about_item"
           : undefined,
       answer_contract: hasToolFacet
         ? "answer_possession_or_tool_availability"
+        : hasProceduralFacet
+          ? "provide_procedural_preference"
         : hasReasonFacet
           ? "explain_reason_about_item"
           : undefined,
@@ -1293,6 +1451,25 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
       confidence: 0.82,
       question_shape: "yes_no_about_item",
       answer_contract: "answer_yes_no_with_item",
+    });
+  }
+
+  if (/^\s*what else\??\s*$/i.test(rawText)) {
+    return buildMeaning({
+      rawText,
+      normalized,
+      speech_act: "request_for_elaboration",
+      target: "shared_topic",
+      subject_domain: "general",
+      requested_operation: "continue",
+      referent: cleanReferent(input.currentTopic) ?? null,
+      stance: "curious",
+      continuity_attachment: input.previousAssistantText ? "active_thread" : "none",
+      confidence: 0.74,
+      question_shape: "unknown",
+      requested_facet: "continuation",
+      answer_contract: "continue",
+      current_domain_handler: "conversation",
     });
   }
 
@@ -1599,14 +1776,315 @@ export function planSemanticResponse(turnMeaning: TurnMeaning): PlannedMove {
   };
 }
 
+function facetRequiresReferent(facet: TurnRequestedFacet): boolean {
+  return (
+    facet === "yes_no_about_item" ||
+    facet === "reason_about_item" ||
+    facet === "possession_or_tool_availability" ||
+    facet === "procedural_preference" ||
+    facet === "application_explanation" ||
+    facet === "definition"
+  );
+}
+
+function buildMeaningFromSemanticCandidate(
+  input: TurnMeaningInput,
+  candidate: SemanticCandidate,
+): TurnMeaning {
+  const normalized = normalizeLower(input.userText);
+  return buildMeaning({
+    rawText: input.userText,
+    normalized,
+    speech_act: candidate.speech_act,
+    target: candidate.target,
+    subject_domain: candidate.subject_domain,
+    requested_operation: candidate.requested_operation,
+    referent: candidate.required_referent ?? candidate.primary_subject,
+    stance: candidate.speech_act === "challenge" ? "challenging" : "curious",
+    continuity_attachment: candidate.continuity_attachment,
+    confidence: candidate.confidence,
+    question_shape: candidate.question_shape,
+    requested_facet: candidate.requested_facet,
+    primary_subject: candidate.primary_subject,
+    secondary_subjects: candidate.secondary_subjects,
+    entity_set: candidate.entity_set,
+    required_referent: candidate.required_referent,
+    required_scope: candidate.required_scope,
+    current_domain_handler: candidate.current_domain_handler,
+    alternative_interpretations: candidate.alternative_interpretations,
+  });
+}
+
+function isStrongDefinitionSurface(normalizedText: string): boolean {
+  return /^(?:define|what(?:'s| is| does)\b)|\bmeaning\??$/i.test(normalizedText);
+}
+
+function conflictsWithStrongLocalContext(
+  deterministic: TurnMeaning,
+  candidate: TurnMeaning,
+): string | null {
+  if (deterministic.speech_act === "greeting" && candidate.speech_act !== "greeting") {
+    return "conflicts_with_strong_greeting_context";
+  }
+  if (
+    deterministic.requested_facet === "current_activity_or_status" &&
+    candidate.requested_facet !== "current_activity_or_status"
+  ) {
+    return "conflicts_with_current_status_context";
+  }
+  if (
+    deterministic.requested_facet === "definition" &&
+    candidate.requested_facet !== "definition" &&
+    isStrongDefinitionSurface(deterministic.normalized_text)
+  ) {
+    return "conflicts_with_definition_context";
+  }
+  if (
+    deterministic.confidence >= 0.9 &&
+    deterministic.current_domain_handler !== "raven_preferences" &&
+    candidate.current_domain_handler === "raven_preferences"
+  ) {
+    return "overclaims_raven_preferences_against_strong_local_context";
+  }
+  return null;
+}
+
+function facetSpecificityRank(facet: TurnRequestedFacet): number {
+  switch (facet) {
+    case "favorites_subset":
+    case "reason_about_item":
+    case "procedural_preference":
+    case "possession_or_tool_availability":
+    case "hypothetical_embodiment":
+    case "remote_control_proposal":
+    case "binary_compare_or_choice":
+    case "yes_no_about_item":
+      return 3;
+    case "application_explanation":
+    case "invitation_response":
+    case "challenge_response":
+    case "clarifying_enumeration":
+      return 2;
+    case "category_overview":
+    case "definition":
+    case "factual_answer":
+    case "current_activity_or_status":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
+function canModelCandidateRefineCoarseLocalMeaning(input: {
+  deterministic: TurnMeaning;
+  candidate: TurnMeaning;
+  deterministicScore: number;
+  candidateScore: number;
+}): boolean {
+  if (input.candidateScore < input.deterministicScore - 0.25) {
+    return false;
+  }
+  if (
+    input.deterministic.current_domain_handler === input.candidate.current_domain_handler &&
+    facetSpecificityRank(input.candidate.requested_facet) >
+      facetSpecificityRank(input.deterministic.requested_facet)
+  ) {
+    return true;
+  }
+  if (
+    input.deterministic.requested_facet === "definition" &&
+    input.candidate.requested_facet !== "definition" &&
+    input.candidate.target === "assistant" &&
+    !isStrongDefinitionSurface(input.deterministic.normalized_text)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function semanticMeaningScore(meaning: TurnMeaning): number {
+  let score = meaning.confidence;
+  if (meaning.current_domain_handler !== "conversation" || meaning.requested_facet === "current_activity_or_status") {
+    score += 0.1;
+  }
+  if (meaning.requested_facet !== "unknown" && meaning.answer_contract !== "continue") {
+    score += 0.08;
+  }
+  if (!facetRequiresReferent(meaning.requested_facet) || meaning.required_referent) {
+    score += 0.06;
+  }
+  if (meaning.entity_set.length > 0) {
+    score += 0.04;
+  }
+  if (
+    meaning.continuity_attachment === "immediate_prior_answer" ||
+    meaning.continuity_attachment === "active_thread"
+  ) {
+    score += 0.03;
+  }
+  score += facetSpecificityRank(meaning.requested_facet) * 0.03;
+  if (meaning.current_domain_handler === "raven_preferences" && meaning.requested_facet === "definition") {
+    score -= 0.5;
+  }
+  return score;
+}
+
+function chooseSemanticCandidate(input: {
+  turnInput: TurnMeaningInput;
+  deterministicMeaning: TurnMeaning;
+  rawLlmCandidates: unknown[];
+  preRejectedCandidates?: RejectedSemanticCandidate[];
+}): { turnMeaning: TurnMeaning; trace: SemanticCandidateArbitrationTrace } {
+  const deterministicCandidate = semanticCandidateFromTurnMeaning(input.deterministicMeaning);
+  const rejectedCandidates: RejectedSemanticCandidate[] = [...(input.preRejectedCandidates ?? [])];
+  const validLlmCandidates: SemanticCandidate[] = [];
+  const scored: Array<{ candidate: SemanticCandidate; meaning: TurnMeaning; score: number }> = [
+    {
+      candidate: deterministicCandidate,
+      meaning: input.deterministicMeaning,
+      score: semanticMeaningScore(input.deterministicMeaning),
+    },
+  ];
+
+  input.rawLlmCandidates.slice(0, 3).forEach((rawCandidate, index) => {
+    const schema = validateSemanticCandidateSchema(rawCandidate);
+    if (!schema.ok) {
+      rejectedCandidates.push({
+        source: "llm",
+        index,
+        reason: schema.reason,
+        candidate: null,
+      });
+      return;
+    }
+    const candidate = { ...schema.candidate, source: "llm" as const };
+    validLlmCandidates.push(candidate);
+    const meaning = buildMeaningFromSemanticCandidate(input.turnInput, candidate);
+    if (meaning.current_domain_handler !== candidate.current_domain_handler) {
+      rejectedCandidates.push({
+        source: "llm",
+        index,
+        reason: "unsupported_handler_eligibility",
+        candidate,
+      });
+      return;
+    }
+    if (facetRequiresReferent(candidate.requested_facet) && !candidate.required_referent) {
+      rejectedCandidates.push({
+        source: "llm",
+        index,
+        reason: "missing_required_referent",
+        candidate,
+      });
+      return;
+    }
+    if (candidate.requested_facet === "binary_compare_or_choice" && candidate.entity_set.length < 2) {
+      rejectedCandidates.push({
+        source: "llm",
+        index,
+        reason: "missing_compare_entities",
+        candidate,
+      });
+      return;
+    }
+    const conflict = conflictsWithStrongLocalContext(input.deterministicMeaning, meaning);
+    if (conflict) {
+      rejectedCandidates.push({
+        source: "llm",
+        index,
+        reason: conflict,
+        candidate,
+      });
+      return;
+    }
+    scored.push({ candidate, meaning, score: semanticMeaningScore(meaning) });
+  });
+
+  scored.sort((left, right) => right.score - left.score);
+  const deterministicScore = scored.find((entry) => entry.candidate.source === "deterministic")?.score ?? 0;
+  const deterministicEntry = scored.find((entry) => entry.candidate.source === "deterministic");
+  const bestLlm = scored.find((entry) => entry.candidate.source === "llm");
+  const best = scored[0] ?? {
+    candidate: deterministicCandidate,
+    meaning: input.deterministicMeaning,
+    score: deterministicScore,
+  };
+  const deterministicNeedsHelp =
+    input.deterministicMeaning.requested_facet === "unknown" ||
+    input.deterministicMeaning.subject_domain === "general" ||
+    (input.deterministicMeaning.requested_facet === "definition" &&
+      /\b(?:do you like|are you into|you into|stuff|things|dynamics)\b/i.test(
+        input.deterministicMeaning.normalized_text,
+      )) ||
+    input.deterministicMeaning.answer_contract === "continue";
+  const llmMayRefineDeterministic =
+    bestLlm &&
+    canModelCandidateRefineCoarseLocalMeaning({
+      deterministic: input.deterministicMeaning,
+      candidate: bestLlm.meaning,
+      deterministicScore,
+      candidateScore: bestLlm.score,
+    });
+  const chosen =
+    bestLlm &&
+    (deterministicNeedsHelp || bestLlm.score >= deterministicScore + 0.07 || llmMayRefineDeterministic)
+      ? bestLlm
+      : deterministicEntry ?? best;
+
+  scored.forEach((entry, index) => {
+    if (entry.candidate.source !== "llm") {
+      return;
+    }
+    if (entry.candidate === chosen.candidate) {
+      return;
+    }
+    if (
+      rejectedCandidates.some(
+        (rejected) => rejected.candidate === entry.candidate,
+      )
+    ) {
+      return;
+    }
+    rejectedCandidates.push({
+      source: "llm",
+      index,
+      reason: "lower_arbitration_score",
+      candidate: entry.candidate,
+    });
+  });
+
+  return {
+    turnMeaning: chosen.meaning,
+    trace: {
+      deterministic_candidate: deterministicCandidate,
+      llm_candidates: validLlmCandidates,
+      chosen_candidate: chosen.candidate,
+      chosen_source: chosen.candidate.source,
+      rejected_candidates: rejectedCandidates,
+      arbitration_reason:
+        chosen.candidate.source === "llm"
+          ? "llm_candidate_passed_schema_eligibility_and_scored_higher"
+          : "deterministic_candidate_retained",
+    },
+  };
+}
+
 export function updateCanonicalTurnState(input: TurnMeaningInput): CanonicalTurnState {
-  const turnMeaning = interpretTurnMeaning(input);
+  const deterministicMeaning = interpretTurnMeaning(input);
+  const arbitration = chooseSemanticCandidate({
+    turnInput: input,
+    deterministicMeaning,
+    rawLlmCandidates: input.llmSemanticCandidates ?? [],
+    preRejectedCandidates: input.llmSemanticRejectedCandidates ?? [],
+  });
+  const turnMeaning = arbitration.turnMeaning;
   const plannedMove = planSemanticResponse(turnMeaning);
   return {
     turn_meaning: turnMeaning,
     planned_move: plannedMove,
     semantic_owner: "semantic_planner",
     fallback_allowed: plannedMove.content_key === "unknown_clarify" || plannedMove.confidence < 0.4,
+    semantic_arbitration: arbitration.trace,
   };
 }
 
@@ -1626,6 +2104,25 @@ export type SemanticTurnTrace = {
     ok: boolean;
     reason: string;
   } | null;
+  visible_lint_result: {
+    ok: boolean;
+    reason: string;
+  } | null;
+  answer_intent: {
+    answer_mode: string;
+    primary_claim_type: string;
+    required_answer_slots: string[];
+    embodiment_context: string;
+    visible_response_contract: {
+      answer_mode: string;
+      must_address_referent: boolean;
+      requires_boundary: boolean;
+      required_slots: string[];
+      must_include_any: string[];
+      must_not_include: string[];
+    };
+  } | null;
+  semantic_arbitration: SemanticCandidateArbitrationTrace | null;
   required_answer_slots: string[];
 };
 
@@ -1642,6 +2139,12 @@ export function buildSemanticTurnTrace(input: {
     ok: boolean;
     reason: string;
   } | null;
+  visibleLintResult?: {
+    ok: boolean;
+    reason: string;
+  } | null;
+  answerIntent?: SemanticTurnTrace["answer_intent"];
+  semanticArbitration?: SemanticCandidateArbitrationTrace | null;
 }): SemanticTurnTrace {
   return {
     turn_meaning: input.turnMeaning,
@@ -1656,6 +2159,9 @@ export function buildSemanticTurnTrace(input: {
     chosen_handler: input.turnMeaning.current_domain_handler,
     rejected_handlers: input.turnMeaning.rejected_domain_handlers,
     answer_contract_validation: input.answerContractValidation ?? null,
+    visible_lint_result: input.visibleLintResult ?? null,
+    answer_intent: input.answerIntent ?? null,
+    semantic_arbitration: input.semanticArbitration ?? null,
     required_answer_slots: input.turnMeaning.required_answer_slots,
   };
 }

@@ -156,7 +156,12 @@ import {
 } from "@/lib/session/session-state-contract";
 import {
   updateCanonicalTurnState,
+  type PlannedMove,
+  type TurnMeaning,
 } from "@/lib/session/turn-meaning";
+import {
+  generateLlmSemanticCandidates,
+} from "@/lib/session/semantic-candidate-generator";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -547,6 +552,28 @@ function asNumber(value: unknown, fallback: number): number {
   return Number.isFinite(numeric) ? numeric : fallback;
 }
 
+function buildSemanticGuidanceBlock(input: {
+  turnMeaning: TurnMeaning;
+  plannedMove: PlannedMove;
+  candidateSource: string;
+}): string {
+  const { turnMeaning, plannedMove } = input;
+  return [
+    "Semantic turn contract:",
+    `candidate_source: ${input.candidateSource}`,
+    `speech_act: ${turnMeaning.speech_act}`,
+    `target: ${turnMeaning.target}`,
+    `subject_domain: ${turnMeaning.subject_domain}`,
+    `requested_operation: ${turnMeaning.requested_operation}`,
+    `question_shape: ${turnMeaning.question_shape}`,
+    `requested_facet: ${turnMeaning.requested_facet}`,
+    `required_referent: ${turnMeaning.required_referent ?? "none"}`,
+    `planned_move: ${plannedMove.move}`,
+    `answer_contract: ${turnMeaning.answer_contract}`,
+    "Choose visible content that satisfies this semantic contract. Do not invent a different move.",
+  ].join("\n");
+}
+
 function normalizeSamplingOptions(
   payload: ChatRequestBody,
   plannerEnabled: boolean,
@@ -840,6 +867,7 @@ async function buildPreparedMessages(
   turnPlan: TurnPlan,
   conversationStateSnapshot: ConversationStateSnapshot,
   responseStrategyBlock: string,
+  semanticGuidanceBlock: string,
 ): Promise<{
   messages: HistoryMessage[];
   promptDebug: PromptAssemblyDebug;
@@ -994,6 +1022,7 @@ async function buildPreparedMessages(
   ];
   const observationMessages: HistoryMessage[] = [
     { role: "system", content: buildDialogueActPrompt(dialogueAct) },
+    { role: "system", content: semanticGuidanceBlock },
     // Keep response-strategy guidance for structured rails, but do not push it into ordinary open conversation by default.
     ...(includeResponseStrategyPromptBlock
       ? ([{ role: "system", content: responseStrategyBlock }] as HistoryMessage[])
@@ -1232,6 +1261,54 @@ export async function POST(request: Request) {
   const turnPlan = buildTurnPlan(messages, {
     conversationState: conversationStateSnapshot,
   });
+  const semanticCandidateResult = planner.enabled || (lastUserMessage ? parseMemoryCommand(lastUserMessage.content) : null)
+    ? { candidates: [], rejected: [] }
+    : await generateLlmSemanticCandidates(
+        {
+          userText: lastUserMessage?.content ?? "",
+          previousAssistantText: conversationState.lastAssistantOutput ?? previousAssistantText(messages),
+          previousUserText: previousUserText(messages),
+          currentTopic:
+            conversationStateSnapshot.last_conversation_topic !== "none"
+              ? conversationStateSnapshot.last_conversation_topic
+              : null,
+        },
+        async (prompt) => {
+          const response = await fetch(`${validatedBaseUrl.normalizedBaseUrl}/api/chat`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              model,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    "Return JSON only. Generate semantic interpretation candidates, never visible reply text.",
+                },
+                { role: "user", content: prompt },
+              ],
+              stream: false,
+              options: {
+                ...samplingOptions,
+                temperature: 0.1,
+                top_p: 0.7,
+              },
+            }),
+          });
+          if (!response.ok) {
+            return "{\"candidates\":[]}";
+          }
+          const body = (await response.json().catch(() => null)) as {
+            message?: { content?: unknown };
+            response?: unknown;
+          } | null;
+          return typeof body?.message?.content === "string"
+            ? body.message.content
+            : typeof body?.response === "string"
+              ? body.response
+              : "{\"candidates\":[]}";
+        },
+      ).catch(() => ({ candidates: [], rejected: [] }));
   const canonicalTurnState = updateCanonicalTurnState({
     userText: lastUserMessage?.content ?? "",
     previousAssistantText: conversationState.lastAssistantOutput ?? previousAssistantText(messages),
@@ -1240,6 +1317,8 @@ export async function POST(request: Request) {
       conversationStateSnapshot.last_conversation_topic !== "none"
         ? conversationStateSnapshot.last_conversation_topic
         : null,
+    llmSemanticCandidates: semanticCandidateResult.candidates,
+    llmSemanticRejectedCandidates: semanticCandidateResult.rejected,
   });
   const turnMeaning = canonicalTurnState.turn_meaning;
   const semanticMove = canonicalTurnState.planned_move;
@@ -1251,6 +1330,11 @@ export async function POST(request: Request) {
     responseStrategy,
     conversationStateSnapshot,
   );
+  const semanticGuidanceBlock = buildSemanticGuidanceBlock({
+    turnMeaning,
+    plannedMove: semanticMove,
+    candidateSource: canonicalTurnState.semantic_arbitration.chosen_source,
+  });
   const memoryPreferences = await getMemoryPreferencesFromDb();
   const memoryAutoSave =
     typeof payload.memoryAutoSave === "boolean"
@@ -1602,6 +1686,7 @@ export async function POST(request: Request) {
     turnPlan,
     conversationStateSnapshot,
     responseStrategyBlock,
+    semanticGuidanceBlock,
   );
   const promptDebugEntry = {
     sessionId,
@@ -1610,6 +1695,10 @@ export async function POST(request: Request) {
     promptRouteMode: preparedPrompt.promptRouteMode,
     stateSnapshot: preparedPrompt.promptDebug.stateSnapshot,
     responseStrategy,
+    semanticCandidateSource: canonicalTurnState.semantic_arbitration.chosen_source,
+    semanticCandidateRejections: canonicalTurnState.semantic_arbitration.rejected_candidates.map(
+      (candidate) => candidate.reason,
+    ),
     promptSizeEstimate: preparedPrompt.promptDebug.promptSizeEstimate,
     includedTurns: preparedPrompt.promptDebug.includedTurns,
     excludedTurns: preparedPrompt.promptDebug.excludedTurns,
@@ -1790,6 +1879,12 @@ export async function POST(request: Request) {
     "x-raven-turn-plan": `${turnPlan.requiredMove}:${turnPlan.requestedAction}`,
     "x-raven-turn-meaning": `${turnMeaning.speech_act}:${turnMeaning.subject_domain}:${turnMeaning.requested_operation}`,
     "x-raven-semantic-move": `${semanticMove.move}:${semanticMove.content_key}`,
+    "x-raven-semantic-candidate-source": canonicalTurnState.semantic_arbitration.chosen_source,
+    "x-raven-semantic-rejections": encodeHeaderList(
+      canonicalTurnState.semantic_arbitration.rejected_candidates.map(
+        (candidate) => candidate.reason,
+      ),
+    ),
     "x-raven-shape-source": shaped.debug?.selectedSource ?? "model",
     "x-raven-prompt-profile": preparedPrompt.promptProfile,
     "x-raven-prompt-route": preparedPrompt.promptRouteMode,

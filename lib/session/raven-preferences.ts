@@ -8,6 +8,12 @@ import type {
   TurnRequiredScope,
   TurnRequestedFacet,
 } from "./turn-meaning.ts";
+import {
+  RAVEN_EMBODIMENT_MODEL,
+  type AnswerIntent,
+  buildVisibleContractFallback,
+  planAnswerIntent,
+} from "./raven-embodiment.ts";
 
 export type RavenPreferenceItem = {
   id: string;
@@ -50,7 +56,13 @@ export type AnswerPlan = {
   handler_eligibility: DomainHandlerEligibilityDecision[];
   rejected_handlers: DomainHandlerEligibilityDecision[];
   entity_set: string[];
-  content_source: "raven_preference_model" | "local_definitions" | "generic_qa" | "none";
+  answer_intent: AnswerIntent;
+  content_source:
+    | "raven_preference_model"
+    | "raven_embodiment_model"
+    | "local_definitions"
+    | "generic_qa"
+    | "none";
   content_key: PlannedMove["content_key"];
   reason: string;
   confidence: number;
@@ -59,6 +71,42 @@ export type AnswerPlan = {
 export type AnswerContractValidation = {
   ok: boolean;
   reason: string;
+};
+
+export type RavenPreferenceFacts = {
+  item: RavenPreferenceItem | null;
+  item_label: string | null;
+  entities: string[];
+  category_overview: string[];
+  favorites: string[];
+  stance: RavenPreferenceItem["stance"] | null;
+  yes_no: RavenPreferenceItem["yes_no"] | null;
+  reasons: string[];
+  application_notes: string[];
+  invitation: string | null;
+  procedure: {
+    item: string;
+    preference: string;
+    boundary: string;
+  } | null;
+  tool_inventory: {
+    tool: string;
+    has_actual_tool: false;
+    has_physical_body: false;
+    boundary: string;
+    discussable_role: string;
+  } | null;
+  hypothetical: {
+    setup: string;
+    stance: string;
+    boundary: string;
+  } | null;
+  proposal: {
+    proposal: string;
+    can_execute_physical_action: false;
+    boundary: string;
+    available_next_step: string;
+  } | null;
 };
 
 export const RAVEN_PREFERENCE_MODEL: RavenPreferenceModel = {
@@ -285,12 +333,20 @@ export function planDomainAnswer(input: {
   plannedMove: PlannedMove;
 }): AnswerPlan {
   const { turnMeaning, plannedMove } = input;
+  const answerIntent = planAnswerIntent({ turnMeaning, plannedMove });
   const handlerEligible = turnMeaning.eligible_domain_handlers.some(
     (decision) => decision.handler === turnMeaning.current_domain_handler,
   );
+  const needsEmbodimentSource =
+    answerIntent.answer_mode === "tool_or_inventory" ||
+    answerIntent.answer_mode === "counterfactual_hypothetical" ||
+    answerIntent.answer_mode === "proposal_response" ||
+    answerIntent.answer_mode === "boundary_response";
   const contentSource =
     handlerEligible && turnMeaning.current_domain_handler === "raven_preferences"
-      ? "raven_preference_model"
+      ? needsEmbodimentSource
+        ? "raven_embodiment_model"
+        : "raven_preference_model"
       : handlerEligible && turnMeaning.current_domain_handler === "definitions"
         ? "local_definitions"
         : handlerEligible && turnMeaning.current_domain_handler === "generic_qa"
@@ -310,6 +366,7 @@ export function planDomainAnswer(input: {
     handler_eligibility: turnMeaning.eligible_domain_handlers,
     rejected_handlers: turnMeaning.rejected_domain_handlers,
     entity_set: turnMeaning.entity_set,
+    answer_intent: answerIntent,
     content_source: contentSource,
     content_key: plannedMove.content_key,
     reason: plannedMove.reason,
@@ -317,16 +374,74 @@ export function planDomainAnswer(input: {
   };
 }
 
-export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
-  if (plan.content_source !== "raven_preference_model") {
+export function buildRavenPreferenceFacts(plan: AnswerPlan): RavenPreferenceFacts | null {
+  if (
+    plan.domain_handler !== "raven_preferences" ||
+    (plan.content_source !== "raven_preference_model" &&
+      plan.content_source !== "raven_embodiment_model")
+  ) {
     return null;
   }
   const item = resolveItem(plan.required_referent) ?? resolveItem(plan.entity_set[0]);
   const entities = plan.entity_set.map((entity) => resolveItem(entity)?.label ?? entity);
+  const tool = cleanReferent(plan.required_referent) ?? item?.label ?? "that tool";
+  const procedureItem = item?.label ?? cleanReferent(plan.required_referent) ?? "that dynamic";
+  return {
+    item,
+    item_label: item?.label ?? null,
+    entities,
+    category_overview: RAVEN_PREFERENCE_MODEL.category_overview,
+    favorites: RAVEN_PREFERENCE_MODEL.favorites,
+    stance: item?.stance ?? null,
+    yes_no: item?.yes_no ?? null,
+    reasons: item ? [item.note] : [],
+    application_notes: item ? [item.application] : [],
+    invitation: item?.invitation ?? null,
+    procedure: {
+      item: procedureItem,
+      preference:
+        item?.id === "pegging"
+          ? "stable, communicative, and controlled, with the angle, pace, and comfort kept explicit"
+          : "stable, negotiated, and clear enough that control and communication stay visible",
+      boundary:
+        "The procedural preference is hypothetical and negotiated; it is not a claim that I can physically perform it.",
+    },
+    tool_inventory: {
+      tool,
+      has_actual_tool: false,
+      has_physical_body: RAVEN_EMBODIMENT_MODEL.physicality.has_physical_body,
+      boundary: `${RAVEN_EMBODIMENT_MODEL.physicality.body_boundary} ${RAVEN_EMBODIMENT_MODEL.physicality.inventory_boundary}`,
+      discussable_role:
+        item?.application ??
+        "I can discuss the tool's role, limits, setup, and meaning in the dynamic.",
+    },
+    hypothetical: {
+      setup: plan.required_referent ?? "the hypothetical embodied setup",
+      stance:
+        item?.id === "pegging"
+          ? "I would treat it as negotiated embodied play built around trust, control, pacing, and the role shift."
+          : "I would treat it as negotiated embodied play, with the dynamic and limits named before the scene.",
+      boundary:
+        "That answer is counterfactual: I can describe the frame, not physically act from here.",
+    },
+    proposal: {
+      proposal: plan.required_referent ?? "remote toy control",
+      can_execute_physical_action: false,
+      boundary:
+        "I cannot physically control a toy from here unless a real connected-device integration exists and you deliberately enable it.",
+      available_next_step:
+        "I can help shape the remote dynamic, limits, commands, check-ins, and stop conditions.",
+    },
+  };
+}
+
+function realizeRavenPreferenceFacts(plan: AnswerPlan, facts: RavenPreferenceFacts): string | null {
+  const item = facts.item;
+  const entities = facts.entities;
 
   switch (plan.answer_contract) {
     case "provide_category_overview":
-      return `My kink lane is ${RAVEN_PREFERENCE_MODEL.category_overview.join(", ")}. Favorites are a narrower cut; the overview is control, restraint, service, tools, training, and negotiated edge in a dominant frame.`;
+      return `My kink lane is ${facts.category_overview.join(", ")}. Favorites are a narrower cut; the overview is control, restraint, service, tools, training, and negotiated edge in a dominant frame.`;
 
     case "answer_yes_no_with_item":
       if (item) {
@@ -348,7 +463,7 @@ export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
     }
 
     case "provide_favorites":
-      return `Yes. My favorites are ${favoriteList()}. That is the clean answer: dominant, deliberate, and centered on what the exchange becomes.`;
+      return `Yes. My favorites are ${facts.favorites.join(", ")}. That is the clean answer: dominant, deliberate, and centered on what the exchange becomes.`;
 
     case "expand_list":
       return `Yes. Beyond the core favorites, I also like toys used with purpose, patient training, precise impact, and edges that stay negotiated instead of sloppy.`;
@@ -363,11 +478,28 @@ export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
       return "What I like is the way a specific preference can reveal control, trust, attention, and the role someone wants to be put in.";
 
     case "answer_possession_or_tool_availability": {
-      const tool = cleanReferent(plan.required_referent) ?? item?.label ?? "that tool";
-      const relatedItem = item ?? resolveItem(plan.entity_set.find((entity) => entity !== tool));
-      const application = relatedItem?.application ?? "I can talk through how it would fit the dynamic, the limits, and the point of the pressure.";
-      return `No physical claim: ${RAVEN_PREFERENCE_MODEL.tool_availability_boundary} For ${tool}, ${application}`;
+      const tool = facts.tool_inventory?.tool ?? "that tool";
+      const role = facts.tool_inventory?.discussable_role ?? "I can discuss the tool's role, limits, and setup boundaries.";
+      return `I do not have a physical body or private gear, so I do not actually own ${tool}. For ${tool}, ${role}`;
     }
+
+    case "provide_procedural_preference":
+      if (facts.procedure) {
+        return `For ${facts.procedure.item}, my position preference would be ${facts.procedure.preference}. ${facts.procedure.boundary}`;
+      }
+      return "My procedural preference would be stable, negotiated, and clear enough that control, comfort, and communication stay visible.";
+
+    case "answer_hypothetical_embodiment":
+      if (facts.hypothetical) {
+        return `Hypothetically, if I had a body and the setup were real, ${facts.hypothetical.stance} ${facts.hypothetical.boundary}`;
+      }
+      return "Hypothetically, if I had a body, I would keep consent, limits, pace, and control explicit before treating the scene as embodied.";
+
+    case "answer_remote_control_proposal":
+      if (facts.proposal) {
+        return `${facts.proposal.boundary} ${facts.proposal.available_next_step}`;
+      }
+      return "I cannot physically control a toy from here unless a real connected-device integration exists and you deliberately enable it. I can help shape the remote-control dynamic and limits.";
 
     case "clarify_enumeration": {
       const named = entities.length > 0 ? entities.join(", ") : "those concrete dynamics and tools";
@@ -406,8 +538,16 @@ export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
   }
 }
 
+export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
+  const facts = buildRavenPreferenceFacts(plan);
+  if (!facts) {
+    return null;
+  }
+  return realizeRavenPreferenceFacts(plan, facts);
+}
+
 function containsForbiddenFiller(text: string): boolean {
-  return /\bKeep going\b|Stay with the concrete part|understand that we have rules here|remember your place|Answer this question for points|template/i.test(
+  return /\bKeep going\b|Stay with the concrete part|understand that we have rules here|remember your place|Answer this question for points|template|No physical claim:|offline build|reliable local definition|PEG\*ing|answer_mode|requested_facet|content_source/i.test(
     text,
   );
 }
@@ -433,7 +573,11 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
   if (containsForbiddenFiller(answer)) {
     return { ok: false, reason: "forbidden_filler" };
   }
-  if (plan.content_source === "raven_preference_model" && plan.domain_handler !== "raven_preferences") {
+  if (
+    (plan.content_source === "raven_preference_model" ||
+      plan.content_source === "raven_embodiment_model") &&
+    plan.domain_handler !== "raven_preferences"
+  ) {
     return { ok: false, reason: "wrong_domain_handler" };
   }
 
@@ -497,6 +641,33 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
         return { ok: false, reason: "missing_tool_referent" };
       }
       return { ok: true, reason: "possession_contract_satisfied" };
+
+    case "provide_procedural_preference":
+      if (!/\b(position|stable|comfort|pace|control|communication|negotiated)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_procedural_preference" };
+      }
+      if (!mentionsEntity(answer, plan.required_referent)) {
+        return { ok: false, reason: "missing_procedural_referent" };
+      }
+      return { ok: true, reason: "procedural_contract_satisfied" };
+
+    case "answer_hypothetical_embodiment":
+      if (!/\b(hypothetically|if i had|if I had|counterfactual|body|setup were real)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_hypothetical_frame" };
+      }
+      if (!/\b(consent|limits|negotiated|pace|control|physically act from here)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_hypothetical_boundary" };
+      }
+      return { ok: true, reason: "hypothetical_contract_satisfied" };
+
+    case "answer_remote_control_proposal":
+      if (!/\b(cannot|can't|unless|connected-device|integration|enable|control a toy|remote)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_remote_capability_boundary" };
+      }
+      if (!/\b(limits|commands|check-ins|stop conditions|dynamic)\b/i.test(answer)) {
+        return { ok: false, reason: "missing_remote_next_step" };
+      }
+      return { ok: true, reason: "remote_proposal_contract_satisfied" };
 
     case "clarify_enumeration":
       if (!/\bclarif(?:y|ies|ied)|category|mean\b/i.test(answer)) {
@@ -572,7 +743,16 @@ export function realizeValidatedDomainAnswer(plan: AnswerPlan): string | null {
     return `Yes. My favorites are ${favoriteList()}.`;
   }
   if (plan.answer_contract === "answer_possession_or_tool_availability" && plan.required_referent) {
-    return `No physical claim: I do not have a body or private inventory. For ${plan.required_referent}, I can only discuss the tool's role, limits, and setup boundaries.`;
+    return buildVisibleContractFallback(plan.answer_intent, plan.required_referent);
+  }
+  if (plan.answer_contract === "provide_procedural_preference" && plan.required_referent) {
+    return buildVisibleContractFallback(plan.answer_intent, plan.required_referent);
+  }
+  if (plan.answer_contract === "answer_hypothetical_embodiment") {
+    return buildVisibleContractFallback(plan.answer_intent, plan.required_referent);
+  }
+  if (plan.answer_contract === "answer_remote_control_proposal") {
+    return buildVisibleContractFallback(plan.answer_intent, plan.required_referent);
   }
   if (plan.answer_contract === "explain_reason_about_item" && plan.required_referent) {
     return `${plan.required_referent}: what I like is the pressure it creates around control, trust, attention, and role.`;

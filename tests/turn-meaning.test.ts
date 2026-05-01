@@ -4,7 +4,10 @@ import assert from "node:assert/strict";
 import {
   interpretTurnMeaning,
   planSemanticResponse,
+  updateCanonicalTurnState,
 } from "../lib/session/turn-meaning.ts";
+import { planAnswerIntent } from "../lib/session/raven-embodiment.ts";
+import type { SemanticCandidate } from "../lib/session/semantic-candidate-generator.ts";
 
 function meaningFor(userText: string, previousAssistantText?: string) {
   const turnMeaning = interpretTurnMeaning({
@@ -14,6 +17,42 @@ function meaningFor(userText: string, previousAssistantText?: string) {
   });
   const plannedMove = planSemanticResponse(turnMeaning);
   return { turnMeaning, plannedMove };
+}
+
+function llmCandidate(overrides: Partial<SemanticCandidate>): SemanticCandidate {
+  return {
+    source: "llm",
+    speech_act: "direct_question",
+    target: "assistant",
+    subject_domain: "assistant_preferences",
+    requested_operation: "answer",
+    question_shape: "open_question",
+    requested_facet: "category_overview",
+    primary_subject: "Raven's preferences",
+    secondary_subjects: [],
+    entity_set: ["kinks"],
+    required_referent: "Raven's kinks",
+    required_scope: "answer_plus_explanation",
+    current_domain_handler: "raven_preferences",
+    continuity_attachment: "fresh_topic",
+    confidence: 0.9,
+    rationale: "mock model semantic candidate for paraphrase normalization",
+    alternative_interpretations: [],
+    ...overrides,
+  };
+}
+
+function canonicalFor(
+  userText: string,
+  candidates: unknown[],
+  previousAssistantText?: string,
+) {
+  return updateCanonicalTurnState({
+    userText,
+    previousAssistantText: previousAssistantText ?? null,
+    currentTopic: null,
+    llmSemanticCandidates: candidates,
+  });
 }
 
 test("semantic interpreter maps requested direct-question transcript to stable meanings", () => {
@@ -343,4 +382,191 @@ test("metamorphic application invitation and comparison facets stay stable", () 
     assert.equal(turnMeaning.answer_contract, "compare_or_choose_between_entities", text);
     assert.equal(turnMeaning.entity_set.length, 2, text);
   }
+});
+
+test("answer-mode metamorphic phrasings map to compatible intents", () => {
+  for (const text of [
+    "do you have a strapon for pegging?",
+    "do you own a strap for pegging?",
+    "would you have gear for that?",
+  ]) {
+    const { turnMeaning, plannedMove } = meaningFor(text, "Pegging is the active topic.");
+    const intent = planAnswerIntent({ turnMeaning, plannedMove });
+    assert.equal(turnMeaning.requested_facet, "possession_or_tool_availability", text);
+    assert.equal(turnMeaning.answer_contract, "answer_possession_or_tool_availability", text);
+    assert.equal(intent.answer_mode, "tool_or_inventory", text);
+    assert.equal(intent.embodiment_context, "actual_disembodied", text);
+  }
+
+  for (const text of [
+    "what if you had a body?",
+    "if you were physically here...",
+    "if you had a body and we were in the same room...",
+  ]) {
+    const { turnMeaning, plannedMove } = meaningFor(text);
+    const intent = planAnswerIntent({ turnMeaning, plannedMove });
+    assert.equal(turnMeaning.requested_facet, "hypothetical_embodiment", text);
+    assert.equal(turnMeaning.answer_contract, "answer_hypothetical_embodiment", text);
+    assert.equal(intent.answer_mode, "counterfactual_hypothetical", text);
+    assert.equal(intent.embodiment_context, "hypothetical_embodied", text);
+  }
+
+  for (const text of [
+    "i want you to peg me remotely",
+    "could you control a toy on me from a distance?",
+    "what if i wanted you to use a remote toy with me?",
+  ]) {
+    const { turnMeaning, plannedMove } = meaningFor(text, "Pegging is the active topic.");
+    const intent = planAnswerIntent({ turnMeaning, plannedMove });
+    assert.equal(turnMeaning.requested_facet, "remote_control_proposal", text);
+    assert.equal(turnMeaning.answer_contract, "answer_remote_control_proposal", text);
+    assert.equal(intent.answer_mode, "proposal_response", text);
+    assert.equal(intent.embodiment_context, "actual_disembodied", text);
+  }
+});
+
+test("answer-mode facets distinguish abstract and procedural preference requests", () => {
+  const abstract = meaningFor("what kind of things are you into?");
+  const abstractIntent = planAnswerIntent(abstract);
+  assert.equal(abstract.turnMeaning.requested_facet, "category_overview");
+  assert.equal(abstractIntent.answer_mode, "abstract_preference");
+
+  const reason = meaningFor("what do you like about pegging?");
+  const reasonIntent = planAnswerIntent(reason);
+  assert.equal(reason.turnMeaning.requested_facet, "reason_about_item");
+  assert.equal(reasonIntent.answer_mode, "abstract_preference");
+
+  const procedural = meaningFor("what position do you like when pegging?");
+  const proceduralIntent = planAnswerIntent(procedural);
+  assert.equal(procedural.turnMeaning.requested_facet, "procedural_preference");
+  assert.equal(procedural.turnMeaning.answer_contract, "provide_procedural_preference");
+  assert.equal(proceduralIntent.answer_mode, "procedural_preference");
+});
+
+test("llm semantic candidates improve novel paraphrases only after arbitration", () => {
+  let llmChosenCount = 0;
+  const overviewForms = [
+    "what sort of stuff do you like?",
+    "what are you into sexually?",
+    "what kind of dynamics do you like?",
+  ];
+  for (const text of overviewForms) {
+    const state = canonicalFor(text, [
+      llmCandidate({
+        primary_subject: "Raven's kink preferences",
+        required_referent: "Raven's kinks",
+        rationale: "paraphrase asks for a category overview of Raven's preferences",
+      }),
+    ]);
+    assert.match(state.semantic_arbitration.chosen_source, /^(?:deterministic|llm)$/, text);
+    if (state.semantic_arbitration.chosen_source === "llm") {
+      llmChosenCount += 1;
+    }
+    assert.equal(state.turn_meaning.requested_facet, "category_overview", text);
+    assert.equal(state.turn_meaning.answer_contract, "provide_category_overview", text);
+    assert.equal(state.turn_meaning.current_domain_handler, "raven_preferences", text);
+  }
+
+  const favoriteForms = [
+    "do you have one you like most?",
+    "what's your favorite kink?",
+    "what kink do you like best?",
+  ];
+  for (const text of favoriteForms) {
+    const state = canonicalFor(text, [
+      llmCandidate({
+        question_shape: "favorites_request",
+        requested_facet: "favorites_subset",
+        primary_subject: "Raven's favorite kink",
+        required_referent: "Raven's favorite kinks",
+        required_scope: "answer_plus_explanation",
+        rationale: "paraphrase asks for Raven's favorites, not a broad overview",
+      }),
+    ]);
+    assert.match(state.semantic_arbitration.chosen_source, /^(?:deterministic|llm)$/, text);
+    if (state.semantic_arbitration.chosen_source === "llm") {
+      llmChosenCount += 1;
+    }
+    assert.equal(state.turn_meaning.requested_facet, "favorites_subset", text);
+    assert.equal(state.turn_meaning.answer_contract, "provide_favorites", text);
+  }
+
+  const hypotheticalForms = [
+    "if you were physically here, how would that work?",
+    "if you had a body, what would you do?",
+    "suppose you were really in the room with me",
+  ];
+  for (const text of hypotheticalForms) {
+    const state = canonicalFor(text, [
+      llmCandidate({
+        question_shape: "hypothetical_request",
+        requested_facet: "hypothetical_embodiment",
+        primary_subject: "hypothetical embodied Raven",
+        entity_set: ["hypothetical embodied setup"],
+        required_referent: "hypothetical embodied setup",
+        current_domain_handler: "raven_preferences",
+        rationale: "counterfactual body wording asks for hypothetical embodiment",
+      }),
+    ]);
+    const intent = planAnswerIntent({
+      turnMeaning: state.turn_meaning,
+      plannedMove: state.planned_move,
+    });
+    assert.match(state.semantic_arbitration.chosen_source, /^(?:deterministic|llm)$/, text);
+    if (state.semantic_arbitration.chosen_source === "llm") {
+      llmChosenCount += 1;
+    }
+    assert.equal(state.turn_meaning.requested_facet, "hypothetical_embodiment", text);
+    assert.equal(intent.answer_mode, "counterfactual_hypothetical", text);
+  }
+  assert.ok(llmChosenCount > 0, "expected model-assisted semantics to win at least one weak paraphrase");
+});
+
+test("semantic arbitration rejects invalid and ineligible model candidates", () => {
+  const status = canonicalFor("what are you doing?", [
+    llmCandidate({
+      requested_facet: "category_overview",
+      question_shape: "open_question",
+      required_referent: "Raven's kinks",
+      current_domain_handler: "raven_preferences",
+      rationale: "bad model candidate overclaims preferences",
+    }),
+  ]);
+  assert.equal(status.semantic_arbitration.chosen_source, "deterministic");
+  assert.equal(status.turn_meaning.requested_facet, "current_activity_or_status");
+  assert.ok(
+    status.semantic_arbitration.rejected_candidates.some(
+      (candidate) => candidate.reason === "conflicts_with_current_status_context",
+    ),
+  );
+
+  const invalid = canonicalFor("what sort of stuff do you like?", [
+    {
+      ...llmCandidate({}),
+      visible_reply: "I like control.",
+    },
+  ]);
+  assert.equal(invalid.semantic_arbitration.chosen_source, "deterministic");
+  assert.ok(
+    invalid.semantic_arbitration.rejected_candidates.some(
+      (candidate) => candidate.reason === "candidate_contains_visible_text",
+    ),
+  );
+
+  const ineligible = canonicalFor("what sort of stuff do you like?", [
+    llmCandidate({
+      requested_facet: "definition",
+      question_shape: "definition_request",
+      subject_domain: "assistant_preferences",
+      current_domain_handler: "raven_preferences",
+      required_referent: "Raven's kinks",
+      rationale: "bad model candidate tries to define with preference handler",
+    }),
+  ]);
+  assert.equal(ineligible.semantic_arbitration.chosen_source, "deterministic");
+  assert.ok(
+    ineligible.semantic_arbitration.rejected_candidates.some(
+      (candidate) => candidate.reason === "unsupported_handler_eligibility",
+    ),
+  );
 });

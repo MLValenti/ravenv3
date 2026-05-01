@@ -53,8 +53,13 @@ import {
 } from "./turn-meaning.ts";
 import {
   planDomainAnswer,
+  realizeValidatedDomainAnswer,
   validateAnswerContract,
 } from "./raven-preferences.ts";
+import {
+  buildVisibleContractFallback,
+  lintVisibleResponse,
+} from "./raven-embodiment.ts";
 
 export type ResponseGateInput = {
   text: string;
@@ -67,6 +72,7 @@ export type ResponseGateInput = {
   commitmentState: CommitmentState;
   sessionMemory?: SessionMemory | null;
   inventory?: SessionInventoryItem[] | null;
+  semanticCandidates?: unknown[] | null;
   observationTrust?: {
     canDescribeVisuals: boolean;
     reason: string;
@@ -1784,6 +1790,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       input.sessionMemory?.last_user_question?.value ??
       null,
     currentTopic: continuityTopic,
+    llmSemanticCandidates: input.semanticCandidates ?? [],
   });
   const turnMeaning = canonicalTurnState.turn_meaning;
   const plannedMove = canonicalTurnState.planned_move;
@@ -1808,6 +1815,53 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     });
   };
   const finalizeCurrentResult = (): ResponseGateResult => {
+    const answerPlan = planDomainAnswer({ turnMeaning, plannedMove });
+    let visibleLintResult: { ok: boolean; reason: string } | null = null;
+    if (isSemanticPlannerOwnedMove(plannedMove)) {
+      const contractBeforeLint = validateAnswerContract(answerPlan, normalize(text));
+      const userTextHasSpecialSelfDisclosure =
+        /\bfavou?rite\s+(?:colou?r|thing to talk about)|\b(?:like|enjoy)\s+talking\s+about\b/i.test(
+          input.userText,
+        );
+      if (
+        !contractBeforeLint.ok &&
+        contractBeforeLint.reason !== "forbidden_filler" &&
+        !userTextHasSpecialSelfDisclosure
+      ) {
+        const groundedReply = realizeValidatedDomainAnswer(answerPlan);
+        if (groundedReply) {
+          const oldText = text;
+          text = groundedReply;
+          forced = true;
+          reason = `semantic_contract_repair_${contractBeforeLint.reason}`;
+          traceDecision(oldText, text, reason, "semanticContractRepair");
+        }
+      }
+    }
+    const hasStructuredVisibleContract =
+      answerPlan.content_source === "raven_preference_model" ||
+      answerPlan.content_source === "raven_embodiment_model" ||
+      answerPlan.content_source === "local_definitions";
+    if (isSemanticPlannerOwnedMove(plannedMove) && hasStructuredVisibleContract) {
+      const lint = lintVisibleResponse(normalize(text), answerPlan.answer_intent);
+      visibleLintResult = lint;
+      if (!lint.ok) {
+        const oldText = text;
+        const semanticRepair = buildHumanQuestionFallback(input.userText, input.toneProfile ?? "neutral", {
+          previousAssistantText: input.lastAssistantText,
+          currentTopic: continuityTopic,
+          inventory: input.inventory ?? undefined,
+        });
+        const repairedLint = lintVisibleResponse(semanticRepair, answerPlan.answer_intent);
+        text = repairedLint.ok
+          ? semanticRepair
+          : buildVisibleContractFallback(answerPlan.answer_intent, turnMeaning.required_referent);
+        forced = true;
+        reason = `visible_output_lint_${lint.reason}`;
+        traceDecision(oldText, text, reason, "visibleOutputLint");
+        visibleLintResult = lintVisibleResponse(normalize(text), answerPlan.answer_intent);
+      }
+    }
     const finalOutput = normalize(text);
     const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
     const classifiedWinningSourceFamily = classifyWinningSourceFamily(
@@ -1815,17 +1869,20 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       reason,
       finalMatchesRaw,
     );
+    const semanticRepairOwned =
+      isSemanticPlannerOwnedMove(plannedMove) &&
+      (reason.startsWith("semantic_contract_repair_") ||
+        reason.startsWith("visible_output_lint_"));
     const winningSourceFamily =
-      isSemanticPlannerOwnedMove(plannedMove) && !forced
+      isSemanticPlannerOwnedMove(plannedMove) && (!forced || semanticRepairOwned)
         ? "semantic_planner"
         : classifiedWinningSourceFamily;
-    const answerPlan = planDomainAnswer({ turnMeaning, plannedMove });
     const answerContractValidation = validateAnswerContract(answerPlan, finalOutput);
     const semanticTrace = buildSemanticTurnTrace({
       turnMeaning,
       plannedMove,
       winningSubsystem: winningSourceFamily,
-      contentSource: classifiedWinningSourceFamily,
+      contentSource: answerPlan.content_source,
       styleWrapperApplied: false,
       guardIntervention: forced,
       commitOwnerId: input.commitOwnerId ?? null,
@@ -1833,6 +1890,9 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         replacementChain.length > 0 ||
         (isSemanticPlannerOwnedMove(plannedMove) && classifiedWinningSourceFamily !== "raw_model"),
       answerContractValidation,
+      visibleLintResult,
+      answerIntent: answerPlan.answer_intent,
+      semanticArbitration: canonicalTurnState.semantic_arbitration,
     });
     if (forced && replacementChain.length === 0) {
       replacementChain.push({

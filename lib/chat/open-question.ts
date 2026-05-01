@@ -1338,7 +1338,7 @@ export function buildHumanQuestionFallback(
     if (/^what color is\b/i.test(normalize(question))) {
       return `${capitalizeFirst(subject)} is the thing you asked about. The direct answer should name its color.`;
     }
-    return `I do not have a reliable local definition for ${subject} in this offline build, so I should not pretend one. Give me the domain you mean, and I can keep it precise.`;
+    return `I do not have enough local context to define ${subject} cleanly. Tell me the domain you mean, and I can keep it precise.`;
   };
 
   switch (analysis.kind) {
