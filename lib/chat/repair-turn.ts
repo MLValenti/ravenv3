@@ -40,6 +40,7 @@ export type RepairResolution = {
 
 const WEAK_REFERENT_PATTERNS = [
   /^(?:none|null|nil|n\/a|na)$/i,
+  /^(?:slut|pet|mistress|sir|good girl|good boy)$/i,
   /^(?:that|this|it|something|anything|nothing|stuff|part|thing|line|point)$/i,
   /^(?:about )?(?:that|this|it|something|anything|nothing|stuff|none)$/i,
   /^(?:the )?part$/i,

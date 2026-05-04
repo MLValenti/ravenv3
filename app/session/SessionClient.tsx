@@ -113,11 +113,6 @@ import {
   type DifficultyLevel,
   type TonePolicy,
 } from "@/lib/session/state-policy";
-import {
-  formatDeviceActionForDisplay,
-  parseDeviceActionRequest,
-  stripActionJsonBlock,
-} from "@/lib/session/action-request";
 import type { DeviceActionRequest } from "@/lib/session/action-request";
 import {
   buildVerificationSummary,
@@ -137,7 +132,8 @@ import { buildShortClarificationReply } from "@/lib/session/short-follow-up";
 import { inspectGameStartContract } from "@/lib/session/game-start-contract";
 import {
   chooseDeliveredAssistantText,
-  sanitizeSessionVisibleAssistantText,
+  prepareAssistantOutputChannels,
+  type PreparedAssistantOutputChannels,
   shouldAcceptAssistantTurnOwnership,
   shouldPreferServerTurnContract,
   shouldPreserveQueuedUserTurnOnSessionStart,
@@ -3435,7 +3431,7 @@ export default function SessionPage() {
     text: string;
     speechText: string;
     displayText: string;
-    actionParsed: ReturnType<typeof parseDeviceActionRequest>;
+    actionParsed: PreparedAssistantOutputChannels["actionParsed"];
     traceMeta: AssistantTraceMeta | null;
     anchorUserMessageId: number;
   }): boolean {
@@ -3552,50 +3548,48 @@ export default function SessionPage() {
     if (speechText) {
       speakRavenText(speechText);
     }
-    return Boolean(displayText || speechText || text.trim());
+    return Boolean(displayText || speechText || text.trim() || actionParsed.ok);
   }
 
   function prepareSessionVisibleOutput(
     text: string,
     traceMeta?: AssistantTraceMeta | null,
   ): {
-    actionParsed: ReturnType<typeof parseDeviceActionRequest>;
+    actionParsed: PreparedAssistantOutputChannels["actionParsed"];
     speechText: string;
     displayText: string;
     hasRenderableText: boolean;
   } {
-    const maybeAction = parseDeviceActionRequest(text);
-    const strippedText = stripActionJsonBlock(text);
-    const rawSpeechText = strippedText || (maybeAction.ok ? "" : text.trim());
-    const scrubbedSpeech = rawSpeechText
-      ? sanitizeSessionVisibleAssistantText(rawSpeechText)
-      : { text: "", changed: false, blocked: false };
-    if (scrubbedSpeech.changed) {
+    const outputChannels = prepareAssistantOutputChannels(text);
+    if (outputChannels.debug_trace.visible_scrubbed) {
       pushTurnTrace("turn.output.scrubbed", {
         request_id: traceMeta?.requestId ?? "none",
         session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
         user_message_id: traceMeta?.sourceUserMessageId ?? turnGateRef.current.lastUserMessageId,
         final_output_source: traceMeta?.finalOutputSource ?? "unknown",
-        blocked: scrubbedSpeech.blocked,
-        before_text: rawSpeechText.slice(0, 240),
-        after_text: scrubbedSpeech.text.slice(0, 240),
+        blocked: outputChannels.debug_trace.visible_blocked,
+        before_text: outputChannels.debug_trace.raw_visible_reply.slice(0, 240),
+        after_text: outputChannels.visible_reply.slice(0, 240),
         at_ms: now(),
       });
     }
-    const actionDisplayText = maybeAction.ok
-      ? formatDeviceActionForDisplay(maybeAction.request)
-      : "";
+    const actionDisplayText = outputChannels.debug_trace.device_action_display_text;
+    if (actionDisplayText) {
+      pushFeed({
+        timestamp: now(),
+        label: "session.action.display",
+        detail: actionDisplayText,
+      });
+    }
     // Mirror the server route's final internal-leak scrub right before the session client
     // commits user-visible text, so local fallback paths cannot surface runtime labels.
-    const speechText = scrubbedSpeech.text;
-    const displayText = [speechText, actionDisplayText]
-      .filter((item) => item.length > 0)
-      .join("\n");
+    const speechText = outputChannels.visible_reply;
+    const displayText = speechText;
     return {
-      actionParsed: maybeAction,
+      actionParsed: outputChannels.actionParsed,
       speechText,
       displayText,
-      hasRenderableText: Boolean(displayText || speechText),
+      hasRenderableText: outputChannels.hasRenderableText,
     };
   }
 
@@ -5081,6 +5075,17 @@ export default function SessionPage() {
     });
     const responseGate = applyResponseGate({
       text: commitmentDecision.text,
+      candidateSource: bypassModel
+        ? deterministicObservationReply
+          ? "deterministic_observation"
+          : deterministicTaskReply
+            ? "deterministic_task"
+            : deterministicQuestionReply
+              ? "deterministic_open_question"
+              : scaffolded
+                ? "scene_scaffold"
+                : "scene_fallback"
+        : generated?.trace.source ?? "model",
       userText: pendingTurn.text,
       dialogueAct: pendingTurn.dialogueAct,
       lastAssistantText:

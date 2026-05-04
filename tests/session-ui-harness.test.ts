@@ -197,6 +197,11 @@ function applyUserTurn(state: HarnessState, userText: string): string {
   const candidate = bypassModel
     ? deterministicCandidate ?? sceneFallback
     : deterministicCandidate ?? sceneFallback;
+  const candidateSource = scaffolded
+    ? "scene_scaffold"
+    : deterministicWeakInputReply
+      ? "deterministic_weak"
+      : "scene_fallback";
   const turnPlan =
     route.act === "user_question" || route.act === "short_follow_up"
       ? buildTurnPlan(
@@ -212,6 +217,7 @@ function applyUserTurn(state: HarnessState, userText: string): string {
 
   const gated = applyResponseGate({
     text: candidate,
+    candidateSource,
     userText,
     lastAssistantText: state.outputs[state.outputs.length - 1] ?? null,
     turnPlan,
@@ -264,6 +270,7 @@ function applySessionPathDebugTurn(
       continuity_attachment: string;
       question_shape: string;
       requested_facet: string;
+      requested_facets: string[];
       primary_subject: string | null;
       secondary_subjects: string[];
       entity_set: string[];
@@ -275,7 +282,17 @@ function applySessionPathDebugTurn(
       current_domain_handler: string;
       eligible_domain_handlers: Array<{ handler: string; eligible: boolean; reason: string }>;
       rejected_domain_handlers: Array<{ handler: string; eligible: boolean; reason: string }>;
+      dynamic_slots: unknown;
       confidence: number;
+      components: Array<{
+        speech_act: string;
+        requested_facet?: string;
+        answer_contract?: string;
+        primary_subject?: string | null;
+      }>;
+      compound_intent: boolean;
+      normalization_applied: boolean;
+      normalization_reason: string | null;
     };
     plannedMove: {
       move: string;
@@ -303,8 +320,31 @@ function applySessionPathDebugTurn(
       };
     } | null;
     semanticArbitration: SemanticCandidateArbitrationTrace | null;
+    relationalDynamicTrace: unknown;
+    semanticOwned: boolean;
+    semanticOwnerId: string | null;
+    contentSourceBeforeGate: string | null;
+    contentSourceAfterGate: string;
+    gateReplacedOutput: boolean;
+    replacementSource: string | null;
+    scaffoldSource: string | null;
+    deviceCommandChannelUsed: boolean;
+    visibleTextContainsToolCommand: boolean;
+    finalVisibleSource: string;
     commitOwnerId: string | null;
     legacyOverrideAttempted: boolean;
+    previousSemanticPlanId: string | null;
+    continuationAttachedToPlanId: string | null;
+    continuationAttachmentReason: string | null;
+    staleScaffoldRejected: boolean;
+    staleGameScaffoldRejected: boolean;
+    previousSubstantiveAskId: string | null;
+    clarificationAttachedToAskId: string | null;
+    clarificationRecoveryUsed: boolean;
+    rawEchoLintRejected: boolean;
+    compoundRelationalSlots: unknown;
+    equipmentDisclosureDetected: boolean;
+    equipmentRejectionReason: string | null;
     assistantCandidatesProduced: string[];
     finalCommittedAssistantOutputCount: number;
     finalCommittedAssistantText: string;
@@ -408,6 +448,16 @@ function applySessionPathDebugTurn(
   const candidate = bypassModel
     ? deterministicCandidate ?? sceneFallback
     : deterministicCandidate ?? sceneFallback;
+  const candidateSource =
+    conversationArrivalReply && candidate === conversationArrivalReply
+      ? "conversation_arrival"
+      : scaffolded && candidate === scaffolded
+        ? "scene_scaffold"
+        : deterministicWeakInputReply && candidate === deterministicWeakInputReply
+          ? "deterministic_weak"
+          : sceneFallback && candidate === sceneFallback
+            ? "scene_fallback"
+            : "unknown";
   const turnPlan =
     reducedUserTurn.route.act === "user_question" ||
     reducedUserTurn.route.act === "short_follow_up"
@@ -423,6 +473,7 @@ function applySessionPathDebugTurn(
       : null;
   const gated = applyResponseGate({
     text: candidate,
+    candidateSource,
     userText,
     lastAssistantText: state.outputs[state.outputs.length - 1] ?? null,
     turnPlan,
@@ -488,6 +539,7 @@ function applySessionPathDebugTurn(
         continuity_attachment: gated.semanticTrace.turn_meaning.continuity_attachment,
         question_shape: gated.semanticTrace.turn_meaning.question_shape,
         requested_facet: gated.semanticTrace.turn_meaning.requested_facet,
+        requested_facets: gated.semanticTrace.turn_meaning.requested_facets,
         primary_subject: gated.semanticTrace.turn_meaning.primary_subject,
         secondary_subjects: gated.semanticTrace.turn_meaning.secondary_subjects,
         entity_set: gated.semanticTrace.turn_meaning.entity_set,
@@ -500,7 +552,17 @@ function applySessionPathDebugTurn(
         current_domain_handler: gated.semanticTrace.turn_meaning.current_domain_handler,
         eligible_domain_handlers: gated.semanticTrace.turn_meaning.eligible_domain_handlers,
         rejected_domain_handlers: gated.semanticTrace.turn_meaning.rejected_domain_handlers,
+        dynamic_slots: gated.semanticTrace.turn_meaning.dynamic_slots,
         confidence: gated.semanticTrace.turn_meaning.confidence,
+        components: gated.semanticTrace.turn_meaning.components.map((component) => ({
+          speech_act: component.speech_act,
+          requested_facet: component.requested_facet,
+          answer_contract: component.answer_contract,
+          primary_subject: component.primary_subject,
+        })),
+        compound_intent: gated.semanticTrace.turn_meaning.compound_intent,
+        normalization_applied: gated.semanticTrace.turn_meaning.normalization_applied,
+        normalization_reason: gated.semanticTrace.turn_meaning.normalization_reason,
       },
       plannedMove: {
         move: gated.semanticTrace.planned_move.move,
@@ -515,8 +577,31 @@ function applySessionPathDebugTurn(
       answerContractValidation: gated.semanticTrace.answer_contract_validation,
       answerIntent: gated.semanticTrace.answer_intent,
       semanticArbitration: gated.semanticTrace.semantic_arbitration,
+      relationalDynamicTrace: gated.semanticTrace.relational_dynamic_trace,
+      semanticOwned: gated.semanticTrace.semantic_owned,
+      semanticOwnerId: gated.semanticTrace.semantic_owner_id,
+      contentSourceBeforeGate: gated.semanticTrace.content_source_before_gate,
+      contentSourceAfterGate: gated.semanticTrace.content_source_after_gate,
+      gateReplacedOutput: gated.semanticTrace.gate_replaced_output,
+      replacementSource: gated.semanticTrace.replacement_source,
+      scaffoldSource: gated.semanticTrace.scaffold_source,
+      deviceCommandChannelUsed: gated.semanticTrace.device_command_channel_used,
+      visibleTextContainsToolCommand: gated.semanticTrace.visible_text_contains_tool_command,
+      finalVisibleSource: gated.semanticTrace.final_visible_source,
       commitOwnerId: gated.semanticTrace.commit_owner_id,
       legacyOverrideAttempted: gated.semanticTrace.legacy_override_attempted,
+      previousSemanticPlanId: gated.semanticTrace.previous_semantic_plan_id,
+      continuationAttachedToPlanId: gated.semanticTrace.continuation_attached_to_plan_id,
+      continuationAttachmentReason: gated.semanticTrace.continuation_attachment_reason,
+      staleScaffoldRejected: gated.semanticTrace.stale_scaffold_rejected,
+      staleGameScaffoldRejected: gated.semanticTrace.stale_game_scaffold_rejected,
+      previousSubstantiveAskId: gated.semanticTrace.previous_substantive_ask_id,
+      clarificationAttachedToAskId: gated.semanticTrace.clarification_attached_to_ask_id,
+      clarificationRecoveryUsed: gated.semanticTrace.clarification_recovery_used,
+      rawEchoLintRejected: gated.semanticTrace.raw_echo_lint_rejected,
+      compoundRelationalSlots: gated.semanticTrace.compound_relational_slots,
+      equipmentDisclosureDetected: gated.semanticTrace.equipment_disclosure_detected,
+      equipmentRejectionReason: gated.semanticTrace.equipment_rejection_reason,
       assistantCandidatesProduced: [
         scaffolded,
         deterministicWeakInputReply,
@@ -968,6 +1053,120 @@ test("ui harness full relational transcript stays grounded and assistant-facing"
   assert.match(followUp.text, /start with one thing people usually miss about you|what should i know about you|what do you want me to know first/i);
   assert.doesNotMatch(followUp.text, /keep going|tell me more about profile|understand that we have rules here|remember your place/i);
   assert.notEqual(followUp.debug.finalWinnerSource, "weak_input");
+});
+
+test("ui harness relational dynamic transcript stays semantic-owned with one visible commit", () => {
+  const state: HarnessState = {
+    scene: createSceneState(),
+    gate: createTurnGate("ui-harness-relational-dynamic-transcript"),
+    outputs: [],
+    conversation: createConversationStateSnapshot("ui-harness-relational-dynamic-transcript"),
+    memory: createSessionMemory(),
+    contract: createSessionStateContract("ui-harness-relational-dynamic-transcript"),
+  };
+
+  for (const text of [
+    "hi",
+    "how are you?",
+    "doing well thanks",
+    "yes, so what kinks in detail do you like?",
+  ]) {
+    const turn = applySessionPathDebugTurn(state, text);
+    assert.equal(turn.debug.finalCommittedAssistantOutputCount, 1, text);
+    assert.doesNotMatch(
+      turn.text,
+      /Fine\. Say what you want|I do not have enough local context to define|Give me the domain you mean/i,
+      text,
+    );
+  }
+
+  const cases: Array<{
+    text: string;
+    speechAct: string;
+    facet: string;
+    answerMode: string;
+    slot?: string;
+    output: RegExp;
+  }> = [
+    {
+      text: "what do you think about exposure?",
+      speechAct: "ambiguous_dynamic_topic",
+      facet: "ambiguous_boundary_topic",
+      answerMode: "boundary_clarification",
+      slot: "user_preference",
+      output: /ambiguous|public|private|exposure/i,
+    },
+    {
+      text: "do you like having your slaves in chastity?",
+      speechAct: "expectation_request",
+      facet: "expectations",
+      answerMode: "expectation_response",
+      slot: "expectation",
+      output: /expect|chastity|limits|check-ins|follow-through/i,
+    },
+    {
+      text: "i have a chastity cage",
+      speechAct: "user_equipment_disclosure",
+      facet: "equipment_disclosure",
+      answerMode: "equipment_acknowledgement",
+      slot: "disclosed_object",
+      output: /chastity cage|physically control|dynamic|restraint|denial|permission/i,
+    },
+    {
+      text: "so how can i start serving you mistress?",
+      speechAct: "service_request",
+      facet: "service_initiation",
+      answerMode: "service_instruction",
+      slot: "requested_direction",
+      output: /start|limit|service style|report back|bounded first instruction/i,
+    },
+    {
+      text: "what would you like me to do for you?",
+      speechAct: "request_for_direction",
+      facet: "service_direction",
+      answerMode: "service_instruction",
+      slot: "requested_direction",
+      output: /attention|honesty|follow-through|rules|tasks|permission|accountability/i,
+    },
+    {
+      text: "i want to be your submissive and you my mistress",
+      speechAct: "role_proposal",
+      facet: "role_negotiation",
+      answerMode: "role_response",
+      slot: "desired_role",
+      output: /mistress\/submissive|roles|limits|stop conditions|one rule/i,
+    },
+  ];
+
+  for (const item of cases) {
+    const turn = applySessionPathDebugTurn(state, item.text);
+    assert.equal(turn.debug.turnMeaning.speech_act, item.speechAct, item.text);
+    assert.equal(turn.debug.turnMeaning.requested_facet, item.facet, item.text);
+    assert.equal(turn.debug.turnMeaning.answer_contract, item.facet, item.text);
+    assert.equal(turn.debug.turnMeaning.current_domain_handler, "relational_dynamics", item.text);
+    assert.equal(turn.debug.plannedMove.content_key, "relational_dynamic_answer", item.text);
+    assert.equal(turn.debug.contentSource, "relational_dynamic_model", item.text);
+    assert.equal(turn.debug.answerIntent?.answer_mode, item.answerMode, item.text);
+    assert.equal(turn.debug.winningSubsystem, "semantic_planner", item.text);
+    assert.equal(turn.debug.answerContractValidation?.ok, true, item.text);
+    assert.equal(turn.debug.finalCommittedAssistantOutputCount, 1, item.text);
+    assert.match(turn.text, item.output, item.text);
+    assert.doesNotMatch(
+      turn.text,
+      /Keep going|Fine\. Say what you want|I do not have enough local context to define|Give me the domain you mean|answer_mode|requested_facet/i,
+      item.text,
+    );
+    if (item.slot) {
+      const slots = turn.debug.turnMeaning.dynamic_slots as Record<string, unknown> | null;
+      assert.ok(slots?.[item.slot], `${item.text} should populate ${item.slot}`);
+    }
+    const trace = turn.debug.relationalDynamicTrace as {
+      relational_dynamic_handler_eligible?: boolean;
+      answer_contract_validation_result?: { ok: boolean; reason: string } | null;
+    } | null;
+    assert.equal(trace?.relational_dynamic_handler_eligible, true, item.text);
+    assert.equal(trace?.answer_contract_validation_result?.ok, true, item.text);
+  }
 });
 
 test("ui harness meta complaint keeps the original missed smalltalk question live", () => {
@@ -2870,6 +3069,7 @@ function assertSemanticGoldenTurn(
       continuity_attachment: turn.debug.turnMeaning.continuity_attachment as never,
       question_shape: turn.debug.turnMeaning.question_shape as never,
       requested_facet: turn.debug.turnMeaning.requested_facet as never,
+      requested_facets: turn.debug.turnMeaning.requested_facets as never,
       primary_subject: turn.debug.turnMeaning.primary_subject,
       secondary_subjects: turn.debug.turnMeaning.secondary_subjects,
       entity_set: turn.debug.turnMeaning.entity_set,
@@ -2881,8 +3081,12 @@ function assertSemanticGoldenTurn(
       current_domain_handler: turn.debug.turnMeaning.current_domain_handler as never,
       eligible_domain_handlers: turn.debug.turnMeaning.eligible_domain_handlers as never,
       rejected_domain_handlers: turn.debug.turnMeaning.rejected_domain_handlers as never,
+      dynamic_slots: turn.debug.turnMeaning.dynamic_slots as never,
       confidence: turn.debug.turnMeaning.confidence,
-      components: [],
+      components: turn.debug.turnMeaning.components as never,
+      compound_intent: turn.debug.turnMeaning.compound_intent,
+      normalization_applied: turn.debug.turnMeaning.normalization_applied,
+      normalization_reason: turn.debug.turnMeaning.normalization_reason,
       alternative_interpretations: [],
     },
     plannedMove: {
@@ -3020,6 +3224,387 @@ test("ui harness meaning golden preference application and reciprocal exchange",
       operation: "ask_follow_up",
     },
   );
+});
+
+const LIVE_AUTHORITY_FORBIDDEN_TEXT =
+  /Device command:|Keep going|concrete part|I do not have enough local context to define|Give me the domain you mean|In this game|If I win|consequence task|best three out of five|rules of this game|You will not drift|I mean slut|I mean my last point|raw repair instruction|Tool command:|device_command|answer_mode|requested_facet|content_source/i;
+
+function assertLiveAuthorityTurn(
+  turn: ReturnType<typeof applySessionPathDebugTurn>,
+  expected?: {
+    speechAct?: string | RegExp;
+    requestedFacet?: string | RegExp;
+    requestedFacets?: string[];
+    answerMode?: string | RegExp;
+    domainHandler?: string;
+    contentSource?: string;
+    semanticOwned?: boolean;
+  },
+): void {
+  assert.equal(turn.debug.finalCommittedAssistantOutputCount, 1, turn.debug.rawUserText);
+  assert.equal(turn.debug.visibleAssistantStringsShownForTurn, 1, turn.debug.rawUserText);
+  assert.equal(turn.debug.visibleTextContainsToolCommand, false, turn.debug.rawUserText);
+  assert.equal(turn.debug.answerContractValidation?.ok ?? true, true, turn.debug.answerContractValidation?.reason);
+  assert.doesNotMatch(turn.text, LIVE_AUTHORITY_FORBIDDEN_TEXT, turn.debug.rawUserText);
+  assert.notEqual(turn.debug.scaffoldSource, "game_scaffold", turn.debug.rawUserText);
+  if (expected?.speechAct instanceof RegExp) {
+    assert.match(turn.debug.turnMeaning.speech_act, expected.speechAct, turn.debug.rawUserText);
+  } else if (expected?.speechAct) {
+    assert.equal(turn.debug.turnMeaning.speech_act, expected.speechAct, turn.debug.rawUserText);
+  }
+  if (expected?.requestedFacet instanceof RegExp) {
+    assert.match(turn.debug.turnMeaning.requested_facet, expected.requestedFacet, turn.debug.rawUserText);
+  } else if (expected?.requestedFacet) {
+    assert.equal(turn.debug.turnMeaning.requested_facet, expected.requestedFacet, turn.debug.rawUserText);
+  }
+  if (expected?.requestedFacets) {
+    for (const facet of expected.requestedFacets) {
+      assert.ok(turn.debug.turnMeaning.requested_facets.includes(facet), `${turn.debug.rawUserText} missing ${facet}`);
+    }
+  }
+  if (expected?.answerMode instanceof RegExp) {
+    assert.match(turn.debug.answerIntent?.answer_mode ?? "", expected.answerMode, turn.debug.rawUserText);
+  } else if (expected?.answerMode) {
+    assert.equal(turn.debug.answerIntent?.answer_mode, expected.answerMode, turn.debug.rawUserText);
+  }
+  if (expected?.domainHandler) {
+    assert.equal(turn.debug.turnMeaning.current_domain_handler, expected.domainHandler, turn.debug.rawUserText);
+  }
+  if (expected?.contentSource) {
+    assert.equal(turn.debug.contentSource, expected.contentSource, turn.debug.rawUserText);
+    assert.equal(turn.debug.contentSourceAfterGate, expected.contentSource, turn.debug.rawUserText);
+  }
+  if (typeof expected?.semanticOwned === "boolean") {
+    assert.equal(turn.debug.semanticOwned, expected.semanticOwned, turn.debug.rawUserText);
+  }
+}
+
+test("ui harness live-route authority replay blocks legacy relational overrides", () => {
+  const state = createSemanticGoldenState("live-authority-relational-replay");
+
+  const hi = applySessionPathDebugTurn(state, "hi");
+  assertLiveAuthorityTurn(hi, {
+    speechAct: "greeting",
+    semanticOwned: true,
+  });
+
+  const roleProposal = applySessionPathDebugTurn(state, "i want to be your submissive");
+  assertLiveAuthorityTurn(roleProposal, {
+    speechAct: "role_proposal",
+    requestedFacet: "role_negotiation",
+    answerMode: "role_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.equal(roleProposal.debug.winningSubsystem, "semantic_planner");
+
+  const roleGuidance = applySessionPathDebugTurn(state, "what can my role be?");
+  assertLiveAuthorityTurn(roleGuidance, {
+    speechAct: "role_proposal",
+    requestedFacet: "role_negotiation",
+    answerMode: "role_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(roleGuidance.text, /role|submissive|dynamic|service/i);
+
+  const serviceDirection = applySessionPathDebugTurn(state, "what can i do to serve you?");
+  assertLiveAuthorityTurn(serviceDirection, {
+    speechAct: "request_for_direction",
+    requestedFacet: "service_direction",
+    answerMode: "service_instruction",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(serviceDirection.text, /start|choose|rule|check|tell me|next/i);
+
+  const broadEquipment = applySessionPathDebugTurn(
+    state,
+    "i have toys and things that i can use to serve better as well",
+  );
+  assertLiveAuthorityTurn(broadEquipment, {
+    speechAct: /user_equipment_disclosure|user_capability_disclosure/,
+    requestedFacet: "equipment_disclosure",
+    answerMode: "equipment_acknowledgement",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(broadEquipment.text, /toys|things|equipment|limits|include/i);
+
+  const equipmentList = applySessionPathDebugTurn(
+    state,
+    "i have a chastity cage, butt plug, restraints, dildos",
+  );
+  assertLiveAuthorityTurn(equipmentList, {
+    speechAct: "user_equipment_disclosure",
+    requestedFacet: "equipment_disclosure",
+    answerMode: "equipment_acknowledgement",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  const equipmentSlots = equipmentList.debug.turnMeaning.dynamic_slots as {
+    disclosed_objects?: string[];
+    disclosed_object?: string | null;
+  };
+  assert.deepEqual(equipmentSlots.disclosed_objects, [
+    "chastity cage",
+    "butt plug",
+    "restraints",
+    "dildos",
+  ]);
+  assert.match(equipmentList.text, /chastity cage|butt plug|restraints|dildos|equipment/i);
+  assert.match(equipmentList.text, /will not pretend|cannot|can't|from here|limits/i);
+  assert.doesNotMatch(equipmentList.text, /\bforce\b|\bput\b|\binspect now\b/i);
+
+  const clarification = applySessionPathDebugTurn(state, "what do you mean?");
+  assertLiveAuthorityTurn(clarification, {
+    semanticOwned: true,
+  });
+  assert.doesNotMatch(clarification.text, /^I mean (slut|pet|mistress|good girl|good boy)\.?$/i);
+  assert.match(clarification.text, /equipment|protocol|use|dynamic|limits|mean/i);
+
+  const approval = applySessionPathDebugTurn(state, "i want to earn your approval");
+  assertLiveAuthorityTurn(approval, {
+    speechAct: /service_preference_disclosure|user_preference_disclosure/,
+    requestedFacet: /service_preference|user_preference|expectations/,
+    answerMode: /focused_dynamic_followup|expectation_response|service_instruction/,
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(approval.text, /approval|earn|standard|task|clean|report/i);
+
+  const application = applySessionPathDebugTurn(
+    state,
+    "you should tell me mistress how you want them used",
+  );
+  assertLiveAuthorityTurn(application, {
+    speechAct: "dynamic_application_request",
+    requestedFacet: "dynamic_application",
+    answerMode: "dynamic_application_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(application.text, /use|equipment|limits|choose|start|dynamic/i);
+  assert.doesNotMatch(application.text, /rules of this game|You will not drift|Stay still/i);
+});
+
+test("ui harness live-route compound continuation replay stays attached to relational plans", () => {
+  const state = createSemanticGoldenState("live-compound-continuation-relational-replay");
+
+  const hi = applySessionPathDebugTurn(state, "hi");
+  assertLiveAuthorityTurn(hi, { speechAct: "greeting", semanticOwned: true });
+
+  const roleProposal = applySessionPathDebugTurn(state, "i want to be your submissive");
+  assertLiveAuthorityTurn(roleProposal, {
+    speechAct: "role_proposal",
+    requestedFacet: "role_negotiation",
+    answerMode: "role_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+
+  const roleGuidance = applySessionPathDebugTurn(state, "what can my role be?");
+  assertLiveAuthorityTurn(roleGuidance, {
+    speechAct: "role_proposal",
+    requestedFacet: "role_negotiation",
+    answerMode: "role_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(roleGuidance.text, /role options|role|submissive|service submissive|recommendation/i);
+  assert.doesNotMatch(roleGuidance.text, /Let's establish a few rules|rules for our dynamic/i);
+
+  const roleContinuation = applySessionPathDebugTurn(state, "yes please mistress, explain it");
+  assertLiveAuthorityTurn(roleContinuation, {
+    speechAct: "clarification",
+    requestedFacet: "role_negotiation",
+    answerMode: "role_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.equal(roleContinuation.debug.continuationAttachedToPlanId, "semantic_planner:relational_dynamic_answer:role_negotiation");
+  assert.match(roleContinuation.debug.continuationAttachmentReason ?? "", /immediate_prior_answer:role_negotiation/);
+  assert.equal(roleContinuation.debug.staleScaffoldRejected, true);
+  assert.match(roleContinuation.text, /role|submissive|recommendation|choose|limits/i);
+  assert.doesNotMatch(roleContinuation.text, /three phases|best three out of five|score|round/i);
+
+  const serviceNow = applySessionPathDebugTurn(state, "what things can i do to serve you now?");
+  assertLiveAuthorityTurn(serviceNow, {
+    speechAct: "request_for_direction",
+    requestedFacet: "service_direction",
+    answerMode: "service_instruction",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(serviceNow.text, /three-line check-in|one limit|service lane|rules|tasks|permission|approval/i);
+
+  const broadEquipment = applySessionPathDebugTurn(
+    state,
+    "i have toys and things that i can use to server better as well",
+  );
+  assertLiveAuthorityTurn(broadEquipment, {
+    speechAct: "user_equipment_disclosure",
+    requestedFacet: "equipment_disclosure",
+    answerMode: "equipment_acknowledgement",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.equal(broadEquipment.debug.turnMeaning.normalization_applied, true);
+  assert.match(broadEquipment.debug.turnMeaning.normalization_reason ?? "", /server better -> serve better/);
+  assert.deepEqual((broadEquipment.debug.turnMeaning.dynamic_slots as { disclosed_objects?: string[] }).disclosed_objects, [
+    "toys",
+    "things",
+  ]);
+  assert.match(broadEquipment.text, /toys|things|equipment|dynamic|limits|permission/i);
+
+  const compound = applySessionPathDebugTurn(
+    state,
+    "i have a chastity cage and butt plug, would you like me to use them?",
+  );
+  assertLiveAuthorityTurn(compound, {
+    speechAct: "user_equipment_disclosure",
+    requestedFacet: "equipment_disclosure",
+    requestedFacets: ["equipment_disclosure", "dynamic_application", "invitation_response"],
+    answerMode: "dynamic_application_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.equal(compound.debug.turnMeaning.compound_intent, true);
+  assert.deepEqual((compound.debug.turnMeaning.dynamic_slots as { disclosed_objects?: string[] }).disclosed_objects, [
+    "chastity cage",
+    "butt plug",
+  ]);
+  assert.equal((compound.debug.turnMeaning.dynamic_slots as { proposal_target?: string }).proposal_target, "use_in_dynamic");
+  assert.match(compound.text, /yes|conditionally|chastity cage|butt plug|limits|protocol|physically control/i);
+  assert.doesNotMatch(compound.text, /\byou have\b[^.?!]{0,140}\bwould you like\b/i);
+
+  const application = applySessionPathDebugTurn(
+    state,
+    "you should tell me mistress how you want them used",
+  );
+  assertLiveAuthorityTurn(application, {
+    speechAct: "dynamic_application_request",
+    requestedFacet: "dynamic_application",
+    answerMode: "dynamic_application_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(application.text, /chastity cage|butt plug|protocol|limits|choose|physically enforce|from here/i);
+  assert.doesNotMatch(application.text, /rules of this game|You will not drift|best three out of five|prompt\/answer/i);
+});
+
+test("ui harness relational contract clarification recovery replay blocks game and raw echoes", () => {
+  const state = createSemanticGoldenState("live-relational-contract-clarification-recovery");
+
+  const hi = applySessionPathDebugTurn(state, "hi");
+  assertLiveAuthorityTurn(hi, { speechAct: "greeting", semanticOwned: true });
+
+  const roleProposal = applySessionPathDebugTurn(state, "i want to be your submissive");
+  assertLiveAuthorityTurn(roleProposal, {
+    speechAct: "role_proposal",
+    requestedFacet: "role_negotiation",
+    answerMode: "role_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+
+  const roleGuidance = applySessionPathDebugTurn(state, "what can my role be?");
+  assertLiveAuthorityTurn(roleGuidance, {
+    speechAct: "role_proposal",
+    requestedFacet: "role_negotiation",
+    answerMode: "role_response",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(roleGuidance.text, /role options|submissive|service submissive|pet|recommendation/i);
+  assert.doesNotMatch(roleGuidance.text, /In this game|If I win|consequence task|score|round/i);
+
+  const service = applySessionPathDebugTurn(state, "what can i do to serve you now?");
+  assertLiveAuthorityTurn(service, {
+    speechAct: "request_for_direction",
+    requestedFacet: "service_direction",
+    answerMode: "service_instruction",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.match(service.text, /three-line check-in|one limit|service lane|rules|tasks|permission|approval/i);
+
+  const compound = applySessionPathDebugTurn(
+    state,
+    "I want to do tasks, have my boundaries pushed, have anal training and my limit is scat",
+  );
+  assertLiveAuthorityTurn(compound, {
+    speechAct: "compound_relational_disclosure",
+    requestedFacet: "compound_relational_disclosure",
+    answerMode: "focused_dynamic_followup",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  const compoundSlots = compound.debug.turnMeaning.dynamic_slots as {
+    desired_service_lanes?: string[];
+    intensity_preferences?: string[];
+    training_goals?: string[];
+    hard_limits?: string[];
+    disclosed_objects?: string[];
+  };
+  assert.deepEqual(compoundSlots.desired_service_lanes, ["tasks"]);
+  assert.deepEqual(compoundSlots.intensity_preferences, ["boundaries pushed"]);
+  assert.deepEqual(compoundSlots.training_goals, ["anal training"]);
+  assert.deepEqual(compoundSlots.hard_limits, ["scat"]);
+  assert.deepEqual(compoundSlots.disclosed_objects, []);
+  assert.equal(compound.debug.equipmentDisclosureDetected, false);
+  assert.equal(compound.debug.equipmentRejectionReason, "relational_goals_are_not_equipment");
+  assert.match(compound.text, /tasks|anal training|scat|off-limits|Bounded start/i);
+  assert.doesNotMatch(compound.text, /^\s*you have\b/i);
+  assert.doesNotMatch(compound.text, /\bequipment\b/i);
+
+  const whatMean = applySessionPathDebugTurn(state, "what do you mean?");
+  assertLiveAuthorityTurn(whatMean, {
+    speechAct: "user_confusion",
+    requestedFacet: "clarification_recovery",
+    answerMode: "clarification_explanation",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.equal(whatMean.debug.clarificationRecoveryUsed, true);
+  assert.equal(
+    whatMean.debug.clarificationAttachedToAskId,
+    "semantic_planner:relational_dynamic_answer:compound_relational_disclosure",
+  );
+  assert.match(whatMean.text, /plain language|service lane|training goal|off-limits|You can answer like this/i);
+  assert.doesNotMatch(whatMean.text, /I mean my last point|Keep going|concrete part/i);
+
+  const dontUnderstand = applySessionPathDebugTurn(state, "i dont understand what you are asking for");
+  assertLiveAuthorityTurn(dontUnderstand, {
+    speechAct: "user_confusion",
+    requestedFacet: "clarification_recovery",
+    answerMode: "clarification_explanation",
+    domainHandler: "relational_dynamics",
+    contentSource: "relational_dynamic_model",
+    semanticOwned: true,
+  });
+  assert.equal(dontUnderstand.debug.clarificationRecoveryUsed, true);
+  assert.match(dontUnderstand.text, /plain language|I need|You can answer like this|role|limit|service lane|item|meaning/i);
+  assert.doesNotMatch(dontUnderstand.text, /Keep going|concrete part|I mean my last point/i);
 });
 
 test("ui harness meaning golden definitions pronouns and openers", () => {

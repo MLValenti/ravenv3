@@ -620,6 +620,7 @@ export async function maybeHandleSessionReplayDeterministicBypass(
 
   const gated = applyResponseGate({
     text: deterministicCandidate ?? sceneFallback,
+    candidateSource: deterministicCandidateSource,
     userText: input.lastUserMessage.content,
     dialogueAct: effectiveSceneAct,
     lastAssistantText: lastAssistantOutput,

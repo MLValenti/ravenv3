@@ -63,6 +63,7 @@ import {
 
 export type ResponseGateInput = {
   text: string;
+  candidateSource?: string | null;
   userText: string;
   dialogueAct?: DialogueRouteAct;
   lastAssistantText: string | null;
@@ -153,6 +154,11 @@ const INTERNAL_PHRASE_PATTERNS = [
 
 const FINAL_VISIBLE_SCRUB_PATTERNS = [
   ...INTERNAL_PHRASE_PATTERNS,
+  /\bdevice command\s*:/i,
+  /\btool command\s*:/i,
+  /\brules of this game\b/i,
+  /\byou will not drift\b/i,
+  /^\s*i mean\s+(?:slut|pet|mistress|good girl|good boy)\s*\.?$/i,
   /\bresponse strategy\s*:/i,
   /\brequired move\s*:/i,
   /\bturn plan\s*:/i,
@@ -300,12 +306,119 @@ export function scrubVisibleInternalLeakText(text: string): {
   };
 }
 
+function containsVisibleToolCommand(text: string): boolean {
+  return (
+    /\b(?:device|tool)\s+command\s*:/i.test(text) ||
+    /\{\s*"type"\s*:\s*"device_command"/i.test(text) ||
+    /\btype\s*:\s*device_command\b/i.test(text)
+  );
+}
+
+function finalVisibleBarrierResult(input: {
+  text: string;
+  userText?: string | null;
+  requestedFacet: string;
+  requestedFacets?: string[];
+  domainHandler?: string | null;
+  sceneState: SceneState;
+}): { ok: boolean; reason: string } {
+  const normalized = normalize(input.text);
+  const normalizedUser = normalize(input.userText ?? "");
+  const requestedFacets = new Set([input.requestedFacet, ...(input.requestedFacets ?? [])]);
+  if (!normalized) {
+    return { ok: false, reason: "empty_visible_text" };
+  }
+  if (
+    normalizedUser &&
+    normalized.toLowerCase().startsWith(normalizedUser.toLowerCase()) &&
+    normalized.length > normalizedUser.length + 8
+  ) {
+    return { ok: false, reason: "raw_user_text_echo_prefix" };
+  }
+  if (containsVisibleToolCommand(normalized)) {
+    return { ok: false, reason: "visible_tool_or_device_command" };
+  }
+  if (/\b(raw repair instruction|repair instruction|repair turn|scaffold instruction)\b/i.test(normalized)) {
+    return { ok: false, reason: "visible_repair_or_scaffold_instruction" };
+  }
+  if (
+    /\bI do not have enough local context to define\b|\bGive me the domain you mean\b/i.test(
+      normalized,
+    ) &&
+    input.requestedFacet !== "definition"
+  ) {
+    return { ok: false, reason: "definition_fallback_outside_definition" };
+  }
+  const containsGameScaffoldLanguage =
+    input.domainHandler === "relational_dynamics"
+      ? /\bin this game\b|\brules of this game\b|\bif i win\b|\bif you win\b|\bwin\b|\blose\b|\bbest (?:three out of five|of)\b|\bconsequence task\b|\bscor(?:e|ing)\b|\bcurrent move\b|\bfirst prompt\b|\bprompt\s*\/?\s*answer\b|\bround\b|\bYou will not drift\b/i.test(
+          normalized,
+        )
+      : /\bin this game\b|\brules of this game\b|\bbest three out of five\b|\bconsequence task\b|\bscor(?:e|ing)\b|\bcurrent move\b|\bfirst prompt\b|\bprompt\s*\/?\s*answer\b|\bround\b|\bYou will not drift\b/i.test(
+          normalized,
+        );
+  const gameVisibleAllowed =
+    input.domainHandler !== "relational_dynamics" &&
+    (requestedFacets.has("continuation") ||
+      input.sceneState.interaction_mode === "game" ||
+      input.sceneState.topic_type === "game_execution" ||
+      input.sceneState.topic_type === "game_setup" ||
+      input.sceneState.topic_type === "reward_window");
+  if (containsGameScaffoldLanguage && !gameVisibleAllowed) {
+    return { ok: false, reason: "game_scaffold_outside_game" };
+  }
+  if (/\byou have\b[^.?!]{0,140}\bwould you like\b/i.test(normalized)) {
+    return { ok: false, reason: "template_echo_equipment_invitation" };
+  }
+  if (
+    requestedFacets.has("compound_relational_disclosure") &&
+    /\byou have\b[^.?!]{0,180}\b(?:tasks?|boundar(?:y|ies)|training|limits?|scat)\b/i.test(normalized)
+  ) {
+    return { ok: false, reason: "raw_goal_disclosure_echoed_as_equipment" };
+  }
+  if (/\{\{[^}]+\}\}|\[[a-z_]+:[^\]]+\]/i.test(normalized)) {
+    return { ok: false, reason: "malformed_template" };
+  }
+  if (/^\s*I mean\s+(?:slut|pet|mistress|good girl|good boy)\s*\.?\s*$/i.test(normalized)) {
+    return { ok: false, reason: "style_only_clarification" };
+  }
+  if (/\bKeep going\b|\bStay with the concrete part\b/i.test(normalized)) {
+    return { ok: false, reason: "legacy_continuation_filler" };
+  }
+  if (requestedFacets.has("clarification_recovery") && /\bconcrete part\b|\bI mean my last point\b/i.test(normalized)) {
+    return { ok: false, reason: "weak_clarification_recovery" };
+  }
+  return { ok: true, reason: "final_visible_barrier_passed" };
+}
+
 function resolveContinuityTopic(input: ResponseGateInput): string | null {
   const turnPlanThread = input.turnPlan?.activeThread;
   if (turnPlanThread && turnPlanThread !== "none") {
     return turnPlanThread;
   }
   return input.sceneState.agreed_goal || null;
+}
+
+function inferPreviousSemanticPlanId(text: string | null | undefined): string | null {
+  const normalized = normalize(text ?? "");
+  if (!normalized) {
+    return null;
+  }
+  if (/\b(role|roles|submissive|service submissive|pet|servant|mistress\/submissive)\b/i.test(normalized)) {
+    return "semantic_planner:relational_dynamic_answer:role_negotiation";
+  }
+  if (/\b(chastity cage|butt plug|restraints?|dildos?|collar|leash|cuffs?|rope|toy|toys|gear|equipment)\b/i.test(normalized)) {
+    return /\b(use|used|protocol|incorporate|choose one item|report before and after)\b/i.test(normalized)
+      ? "semantic_planner:relational_dynamic_answer:dynamic_application"
+      : "semantic_planner:relational_dynamic_answer:equipment_disclosure";
+  }
+  if (/\b(check-in|service lane|serve|service|rules|tasks|permission|approval|accountability)\b/i.test(normalized)) {
+    return "semantic_planner:relational_dynamic_answer:service_direction";
+  }
+  if (/\b(kink|favorite|preference|like|enjoy)\b/i.test(normalized)) {
+    return "semantic_planner:assistant_preference_answer";
+  }
+  return null;
 }
 
 function containsIdentityLeak(text: string): boolean {
@@ -807,6 +920,7 @@ function isSemanticPlannerOwnedMove(plannedMove: PlannedMove): boolean {
     plannedMove.content_key === "assistant_preference_revision" ||
     plannedMove.content_key === "user_preference_application" ||
     plannedMove.content_key === "raven_invitation_answer" ||
+    plannedMove.content_key === "relational_dynamic_answer" ||
     plannedMove.content_key === "reciprocal_user_probe" ||
     plannedMove.content_key === "definition_answer" ||
     plannedMove.content_key === "factual_answer" ||
@@ -1794,6 +1908,15 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   });
   const turnMeaning = canonicalTurnState.turn_meaning;
   const plannedMove = canonicalTurnState.planned_move;
+  const previousSemanticPlanId = inferPreviousSemanticPlanId(input.lastAssistantText);
+  const continuationAttachedToPlanId =
+    turnMeaning.continuity_attachment === "immediate_prior_answer" ||
+    (turnMeaning.continuity_attachment === "active_thread" && turnMeaning.current_domain_handler === "relational_dynamics")
+      ? previousSemanticPlanId
+      : null;
+  const continuationAttachmentReason = continuationAttachedToPlanId
+    ? `${turnMeaning.continuity_attachment}:${turnMeaning.requested_facet}`
+    : null;
   const traceDecision = (
     oldText: string,
     newText: string,
@@ -1817,7 +1940,44 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   const finalizeCurrentResult = (): ResponseGateResult => {
     const answerPlan = planDomainAnswer({ turnMeaning, plannedMove });
     let visibleLintResult: { ok: boolean; reason: string } | null = null;
-    if (isSemanticPlannerOwnedMove(plannedMove)) {
+    const semanticOwnedMove = isSemanticPlannerOwnedMove(plannedMove);
+    const hasStructuredVisibleContract =
+      answerPlan.content_source === "raven_preference_model" ||
+      answerPlan.content_source === "raven_embodiment_model" ||
+      answerPlan.content_source === "relational_dynamic_model" ||
+      answerPlan.content_source === "local_definitions";
+    const candidateSource = input.candidateSource ?? "unknown";
+    const isLegacyCandidateSource =
+      /scaffold|fallback|weak|deterministic|game|repair|turn_plan/i.test(candidateSource);
+    if (semanticOwnedMove && hasStructuredVisibleContract) {
+      const barrierBeforeContract = finalVisibleBarrierResult({
+        text,
+        userText: input.userText,
+        requestedFacet: turnMeaning.requested_facet,
+        requestedFacets: turnMeaning.requested_facets,
+        domainHandler: turnMeaning.current_domain_handler,
+        sceneState: input.sceneState,
+      });
+      const shouldRealizeFromPlan =
+        !barrierBeforeContract.ok ||
+        (
+          plannedMove.content_key === "relational_dynamic_answer" &&
+          isLegacyCandidateSource
+        );
+      if (shouldRealizeFromPlan) {
+        const groundedReply = realizeValidatedDomainAnswer(answerPlan);
+        if (groundedReply && normalize(groundedReply) !== normalize(text)) {
+          const oldText = text;
+          text = groundedReply;
+          forced = true;
+          reason = !barrierBeforeContract.ok
+            ? `final_visible_barrier_${barrierBeforeContract.reason}`
+            : "semantic_authority_realized_from_plan";
+          traceDecision(oldText, text, reason, "semanticAuthorityRealizer");
+        }
+      }
+    }
+    if (semanticOwnedMove) {
       const contractBeforeLint = validateAnswerContract(answerPlan, normalize(text));
       const userTextHasSpecialSelfDisclosure =
         /\bfavou?rite\s+(?:colou?r|thing to talk about)|\b(?:like|enjoy)\s+talking\s+about\b/i.test(
@@ -1838,20 +1998,14 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         }
       }
     }
-    const hasStructuredVisibleContract =
-      answerPlan.content_source === "raven_preference_model" ||
-      answerPlan.content_source === "raven_embodiment_model" ||
-      answerPlan.content_source === "local_definitions";
-    if (isSemanticPlannerOwnedMove(plannedMove) && hasStructuredVisibleContract) {
+    if (semanticOwnedMove && hasStructuredVisibleContract) {
       const lint = lintVisibleResponse(normalize(text), answerPlan.answer_intent);
       visibleLintResult = lint;
       if (!lint.ok) {
         const oldText = text;
-        const semanticRepair = buildHumanQuestionFallback(input.userText, input.toneProfile ?? "neutral", {
-          previousAssistantText: input.lastAssistantText,
-          currentTopic: continuityTopic,
-          inventory: input.inventory ?? undefined,
-        });
+        const semanticRepair =
+          realizeValidatedDomainAnswer(answerPlan) ??
+          buildVisibleContractFallback(answerPlan.answer_intent, turnMeaning.required_referent);
         const repairedLint = lintVisibleResponse(semanticRepair, answerPlan.answer_intent);
         text = repairedLint.ok
           ? semanticRepair
@@ -1862,6 +2016,68 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         visibleLintResult = lintVisibleResponse(normalize(text), answerPlan.answer_intent);
       }
     }
+    const finalBarrier = finalVisibleBarrierResult({
+      text,
+      userText: input.userText,
+      requestedFacet: turnMeaning.requested_facet,
+      requestedFacets: turnMeaning.requested_facets,
+      domainHandler: turnMeaning.current_domain_handler,
+      sceneState: input.sceneState,
+    });
+    if (!finalBarrier.ok) {
+      const oldText = text;
+      if (semanticOwnedMove) {
+        text =
+          finalBarrier.reason === "style_only_clarification" && isShortClarificationTurn(input.userText)
+            ? buildShortClarificationReply({
+                userText: input.userText,
+                interactionMode: input.sceneState.interaction_mode,
+                topicType: input.sceneState.topic_type,
+                lastAssistantText: input.lastAssistantText,
+                lastUserText:
+                  input.sessionMemory?.last_user_answer?.value ??
+                  input.sessionMemory?.last_user_question?.value ??
+                  null,
+                lastUserAnswer: input.sessionMemory?.last_user_answer?.value ?? null,
+                currentTopic: continuityTopic,
+              })
+            : realizeValidatedDomainAnswer(answerPlan) ??
+              buildVisibleContractFallback(answerPlan.answer_intent, turnMeaning.required_referent);
+        reason = `final_visible_barrier_${finalBarrier.reason}`;
+        traceDecision(oldText, text, reason, "semanticFinalVisibleBarrier");
+      } else if (
+        (finalBarrier.reason === "legacy_continuation_filler" ||
+          finalBarrier.reason === "style_only_clarification") &&
+        isShortClarificationTurn(input.userText)
+      ) {
+        text = buildShortClarificationReply({
+          userText: input.userText,
+          interactionMode: input.sceneState.interaction_mode,
+          topicType: input.sceneState.topic_type,
+          lastAssistantText: input.lastAssistantText,
+          lastUserText:
+            input.sessionMemory?.last_user_answer?.value ??
+            input.sessionMemory?.last_user_question?.value ??
+            null,
+          lastUserAnswer: input.sessionMemory?.last_user_answer?.value ?? null,
+          currentTopic: continuityTopic,
+        });
+        reason = "weak_clarification_anchor";
+        traceDecision(oldText, text, reason, "buildShortClarificationReply");
+      } else {
+        const scrubbed = scrubVisibleInternalLeakText(text);
+        text = scrubbed.blocked
+          ? buildHumanQuestionFallback(input.userText, input.toneProfile ?? "neutral", {
+              previousAssistantText: input.lastAssistantText,
+              currentTopic: continuityTopic,
+              inventory: input.inventory ?? undefined,
+            })
+          : scrubbed.text;
+        reason = `final_visible_barrier_${finalBarrier.reason}`;
+        traceDecision(oldText, text, reason, "finalVisibleBarrier");
+      }
+      forced = true;
+    }
     const finalOutput = normalize(text);
     const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
     const classifiedWinningSourceFamily = classifyWinningSourceFamily(
@@ -1870,11 +2086,13 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       finalMatchesRaw,
     );
     const semanticRepairOwned =
-      isSemanticPlannerOwnedMove(plannedMove) &&
+      semanticOwnedMove &&
       (reason.startsWith("semantic_contract_repair_") ||
-        reason.startsWith("visible_output_lint_"));
+        reason.startsWith("visible_output_lint_") ||
+        reason.startsWith("final_visible_barrier_") ||
+        reason === "semantic_authority_realized_from_plan");
     const winningSourceFamily =
-      isSemanticPlannerOwnedMove(plannedMove) && (!forced || semanticRepairOwned)
+      semanticOwnedMove && (!forced || semanticRepairOwned)
         ? "semantic_planner"
         : classifiedWinningSourceFamily;
     const answerContractValidation = validateAnswerContract(answerPlan, finalOutput);
@@ -1883,12 +2101,35 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       plannedMove,
       winningSubsystem: winningSourceFamily,
       contentSource: answerPlan.content_source,
+      contentSourceBeforeGate: candidateSource,
       styleWrapperApplied: false,
       guardIntervention: forced,
+      gateReplacedOutput: replacementChain.length > 0 || !finalMatchesRaw,
+      replacementSource:
+        replacementChain[replacementChain.length - 1]?.sourcePath ??
+        (finalMatchesRaw ? null : winningSourceFamily),
+      scaffoldSource: /scaffold|game/i.test(candidateSource) ? candidateSource : null,
+      deviceCommandChannelUsed: /\bdevice_action|device-channel|session\.action\.request\b/i.test(candidateSource),
+      visibleTextContainsToolCommand: containsVisibleToolCommand(finalOutput),
+      finalVisibleSource: winningSourceFamily,
       commitOwnerId: input.commitOwnerId ?? null,
+      previousSemanticPlanId,
+      continuationAttachedToPlanId,
+      continuationAttachmentReason,
+      staleScaffoldRejected:
+        Boolean(continuationAttachedToPlanId) &&
+        (replacementChain.some((entry) => /scaffold|game/i.test(entry.sourcePath)) ||
+          /scaffold|game/i.test(candidateSource)),
+      staleGameScaffoldRejected:
+        replacementChain.some((entry) => /game_scaffold|game_scaffold_outside_game|best three out of five|consequence task|scoring|round/i.test(`${entry.reason} ${entry.oldText} ${entry.sourcePath}`)) ||
+        /game_scaffold/i.test(candidateSource),
+      rawEchoLintRejected:
+        replacementChain.some((entry) =>
+          /raw_user_text_echo_prefix|template_echo|raw_goal_disclosure_echoed_as_equipment/i.test(entry.reason),
+        ),
       legacyOverrideAttempted:
         replacementChain.length > 0 ||
-        (isSemanticPlannerOwnedMove(plannedMove) && classifiedWinningSourceFamily !== "raw_model"),
+        (semanticOwnedMove && classifiedWinningSourceFamily !== "raw_model"),
       answerContractValidation,
       visibleLintResult,
       answerIntent: answerPlan.answer_intent,

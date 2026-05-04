@@ -317,6 +317,7 @@ function buildFailureMapsForScenario(
     );
     const responseGate = applyResponseGate({
       text: selectedCandidateText,
+      candidateSource: selectedDeterministicCandidateSource,
       userText: turn.user,
       dialogueAct: reduced.route.act,
       lastAssistantText: previousAssistantText,

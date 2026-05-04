@@ -1384,6 +1384,7 @@ async function replayConversationScenarioSynthetic(
 
     const responseGate = applyResponseGate({
       text: selectedCandidate.text,
+      candidateSource: selectedCandidate.sourceFunction,
       userText: turn.user,
       dialogueAct: reduced.route.act,
       lastAssistantText: state.outputs[state.outputs.length - 1] ?? null,

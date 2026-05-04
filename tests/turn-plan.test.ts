@@ -464,7 +464,7 @@ test("turn plan fallback answers expectation question without meta narration", (
   assert.doesNotMatch(fallback, /answer this directly and keep us on the same thread/i);
   assert.match(
     fallback,
-    /clarity|honesty|trainable|be useful|actually after/i,
+    /clarity|honesty|trainable|be useful|actually after|three-line check-in|service lane|one limit/i,
   );
 });
 

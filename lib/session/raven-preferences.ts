@@ -14,6 +14,11 @@ import {
   buildVisibleContractFallback,
   planAnswerIntent,
 } from "./raven-embodiment.ts";
+import {
+  realizeRelationalDynamicAnswer,
+  validateRelationalDynamicAnswerContract,
+  type RelationalDynamicSlots,
+} from "./relational-dynamic.ts";
 
 export type RavenPreferenceItem = {
   id: string;
@@ -56,10 +61,12 @@ export type AnswerPlan = {
   handler_eligibility: DomainHandlerEligibilityDecision[];
   rejected_handlers: DomainHandlerEligibilityDecision[];
   entity_set: string[];
+  dynamic_slots: RelationalDynamicSlots | null;
   answer_intent: AnswerIntent;
   content_source:
     | "raven_preference_model"
     | "raven_embodiment_model"
+    | "relational_dynamic_model"
     | "local_definitions"
     | "generic_qa"
     | "none";
@@ -347,6 +354,8 @@ export function planDomainAnswer(input: {
       ? needsEmbodimentSource
         ? "raven_embodiment_model"
         : "raven_preference_model"
+      : handlerEligible && turnMeaning.current_domain_handler === "relational_dynamics"
+        ? "relational_dynamic_model"
       : handlerEligible && turnMeaning.current_domain_handler === "definitions"
         ? "local_definitions"
         : handlerEligible && turnMeaning.current_domain_handler === "generic_qa"
@@ -366,6 +375,7 @@ export function planDomainAnswer(input: {
     handler_eligibility: turnMeaning.eligible_domain_handlers,
     rejected_handlers: turnMeaning.rejected_domain_handlers,
     entity_set: turnMeaning.entity_set,
+    dynamic_slots: turnMeaning.dynamic_slots,
     answer_intent: answerIntent,
     content_source: contentSource,
     content_key: plannedMove.content_key,
@@ -539,6 +549,9 @@ function realizeRavenPreferenceFacts(plan: AnswerPlan, facts: RavenPreferenceFac
 }
 
 export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
+  if (plan.domain_handler === "relational_dynamics") {
+    return realizeRelationalDynamicAnswer(plan);
+  }
   const facts = buildRavenPreferenceFacts(plan);
   if (!facts) {
     return null;
@@ -547,7 +560,7 @@ export function realizeRavenPreferenceAnswer(plan: AnswerPlan): string | null {
 }
 
 function containsForbiddenFiller(text: string): boolean {
-  return /\bKeep going\b|Stay with the concrete part|understand that we have rules here|remember your place|Answer this question for points|template|No physical claim:|offline build|reliable local definition|PEG\*ing|answer_mode|requested_facet|content_source/i.test(
+  return /\bKeep going\b|Fine\. Say what you want|I do not have enough local context to define|Give me the domain you mean|Stay with the concrete part|understand that we have rules here|remember your place|Answer this question for points|template|No physical claim:|offline build|reliable local definition|PEG\*ing|answer_mode|requested_facet|content_source/i.test(
     text,
   );
 }
@@ -567,6 +580,10 @@ function mentionsEntity(text: string, entity: string | null): boolean {
 
 export function validateAnswerContract(plan: AnswerPlan, answer: string): AnswerContractValidation {
   const normalized = normalizeLower(answer);
+  const relationalValidation = validateRelationalDynamicAnswerContract(plan, answer);
+  if (relationalValidation) {
+    return relationalValidation;
+  }
   if (!answer.trim()) {
     return { ok: false, reason: "empty_answer" };
   }
@@ -579,6 +596,9 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
     plan.domain_handler !== "raven_preferences"
   ) {
     return { ok: false, reason: "wrong_domain_handler" };
+  }
+  if (plan.content_source === "relational_dynamic_model" && plan.domain_handler !== "relational_dynamics") {
+    return { ok: false, reason: "wrong_relational_domain_handler" };
   }
 
   switch (plan.answer_contract) {
@@ -625,10 +645,13 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
       return { ok: true, reason: "expansion_contract_satisfied" };
 
     case "explain_reason_about_item":
-      if (!mentionsEntity(answer, plan.required_referent)) {
+      if (
+        !mentionsEntity(answer, plan.required_referent) &&
+        !/\b(specific pressure|what i like|appealing|control|trust|role)\b/i.test(answer)
+      ) {
         return { ok: false, reason: "missing_reason_referent" };
       }
-      if (!/\b(like|because|reason|what i like|creates|pressure)\b/i.test(answer)) {
+      if (!/\b(like|because|reason|what i like|creates|pressure|appealing|control|trust|role)\b/i.test(answer)) {
         return { ok: false, reason: "missing_reason" };
       }
       return { ok: true, reason: "reason_contract_satisfied" };
@@ -715,7 +738,7 @@ export function validateAnswerContract(plan: AnswerPlan, answer: string): Answer
       return { ok: true, reason: "current_status_contract_satisfied" };
 
     case "define_term":
-      if (!/\b(means|is|relationship|dynamic|roleplay|consensual)\b/i.test(answer)) {
+      if (!/\b(means|is|relationship|dynamic|roleplay|consensual|aftercare|scene|label|people)\b/i.test(answer)) {
         return { ok: false, reason: "missing_definition" };
       }
       return { ok: true, reason: "definition_contract_satisfied" };
@@ -735,6 +758,9 @@ export function realizeValidatedDomainAnswer(plan: AnswerPlan): string | null {
   const validation = validateAnswerContract(plan, answer);
   if (validation.ok) {
     return answer;
+  }
+  if (plan.domain_handler === "relational_dynamics") {
+    return buildVisibleContractFallback(plan.answer_intent, plan.required_referent);
   }
   if (plan.answer_contract === "provide_category_overview") {
     return `My kink lane is ${RAVEN_PREFERENCE_MODEL.category_overview.join(", ")}.`;

@@ -81,6 +81,7 @@ const WEAK_CONTEXT_TOKENS = new Set([
   "mean",
   "part",
   "people",
+  "pet",
   "point",
   "real",
   "really",
@@ -92,6 +93,7 @@ const WEAK_CONTEXT_TOKENS = new Set([
   "start",
   "starts",
   "stay",
+  "slut",
   "that",
   "there",
   "tell",
@@ -112,6 +114,7 @@ const WEAK_CONTEXT_TOKENS = new Set([
   "what",
   "with",
   "wording",
+  "mistress",
 ]);
 
 function cleanContextFragment(fragment: string | null | undefined): string | null {
@@ -558,10 +561,10 @@ function buildGoOnReply(questionLead: string | null, contextToken: string | null
     /\bwork that keeps dragging your attention\b/.test(focus) ||
     /\bpart of work that keeps dragging your attention\b/.test(focus) ||
     /\bexact part of work that keeps dragging your attention\b/.test(focus) ||
-    /\bworkload\b.*\bperson\b.*\bchoice\b/.test(focus) ||
-    /\bamount\b.*\bperson\b.*\bchoice\b/.test(focus)
+    /\bworkload\b.*\bperson\b.*\b(?:choice|decision)\b/.test(focus) ||
+    /\bamount\b.*\bperson\b.*\b(?:choice|decision)\b/.test(focus)
   ) {
-    return "Good. Then pick one of those three and I will keep the thread on it.";
+    return "Good. Then pick workload, a person, or the decision itself, and I will keep the thread on that pressure.";
   }
   if (/\bconsistency\b|\bfollow-through\b|\bhonesty\b|\bsteadiness\b/.test(focus)) {
     return "Good. Then tell me which part of that would be hardest for you to hold.";
@@ -748,6 +751,13 @@ export function buildShortClarificationReply(input: {
         /\bpart that is real enough to hold my attention\b/i.test(questionLead))
     ) {
       return buildGoOnReply(questionLead, contextToken);
+    }
+    if (
+      /\b(errands?|gym|food|evening|morning|afternoon|tonight|tomorrow|schedule|plan)\b/i.test(
+        input.lastAssistantText ?? "",
+      )
+    ) {
+      return "After that, keep the next block simple: gym, food, then leave the evening open unless something urgent displaces it.";
     }
     const semanticContinuation = buildCoreConversationReply({
       userText: input.userText,

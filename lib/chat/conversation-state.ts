@@ -13,6 +13,13 @@ import {
   normalizeInteractionMode,
   type InteractionMode,
 } from "../session/interaction-mode.ts";
+import {
+  applyRelationalDynamicStateUpdate,
+  classifyRelationalDynamicTurn,
+  createRelationalDynamicState,
+  normalizeRelationalDynamicState,
+  type RelationalDynamicState,
+} from "../session/relational-dynamic.ts";
 import { detectRepairTurnKind, resolveRepairTurn } from "./repair-turn.ts";
 import {
   extractHighSignalTokens,
@@ -132,6 +139,7 @@ export type ConversationStateSnapshot = {
   last_user_stated_topic: string;
   repair_context: string;
   relational_continuity: RelationalContinuityState;
+  relational_dynamic: RelationalDynamicState;
   rolling_summary: StructuredRollingSummary;
   recent_window: ConversationTurn[];
   updated_at: number;
@@ -833,6 +841,14 @@ function deriveActiveThread(input: {
   ) {
     return "what you want to know about me";
   }
+  const relationalDynamic = classifyRelationalDynamicTurn({
+    text: input.text,
+    previousAssistantText: input.previousAssistantMessage,
+    currentTopic: input.state?.active_topic,
+  });
+  if (relationalDynamic.eligible) {
+    return relationalDynamic.primary_subject ?? "relational dynamic";
+  }
   if (isAssistantServiceQuestion(input.text)) {
     return "what you can do for me";
   }
@@ -1384,6 +1400,14 @@ function inferMode(input: {
     return "relational_chat";
   }
   if (
+    classifyRelationalDynamicTurn({
+      text: normalized,
+      previousAssistantText: input.previousAssistantMessage,
+    }).eligible
+  ) {
+    return "relational_chat";
+  }
+  if (
     input.routeAct === "user_answer" &&
     input.previousAssistantMessage &&
     isRelationalServiceQuestionContext(input.previousAssistantMessage) &&
@@ -1545,6 +1569,7 @@ export function createConversationStateSnapshot(
     last_user_stated_topic: "none",
     repair_context: "none",
     relational_continuity: createRelationalContinuityState(),
+    relational_dynamic: createRelationalDynamicState(),
     rolling_summary: createStructuredRollingSummary(),
     recent_window: [],
     updated_at: Date.now(),
@@ -1631,6 +1656,7 @@ export function normalizeConversationStateSnapshot(
     repair_context:
       typeof raw.repair_context === "string" ? normalize(raw.repair_context) || "none" : "none",
     relational_continuity: normalizeRelationalContinuityState(raw.relational_continuity),
+    relational_dynamic: normalizeRelationalDynamicState(raw.relational_dynamic),
     rolling_summary:
       typeof raw.rolling_summary === "string"
         ? {
@@ -1681,6 +1707,16 @@ export function noteConversationUserTurn(
       .reverse()
       .find((entry) => entry.role === "assistant")
       ?.content ?? null;
+  const relationalDynamicInterpretation = classifyRelationalDynamicTurn({
+    text,
+    previousAssistantText: previousAssistantMessage,
+    previousUserText:
+      [...state.recent_window]
+        .reverse()
+        .find((entry) => entry.role === "user")
+        ?.content ?? null,
+    currentTopic: state.active_topic,
+  });
   const currentMode = inferMode({
     userIntent: input.userIntent,
     routeAct: input.routeAct ?? null,
@@ -1783,6 +1819,10 @@ export function noteConversationUserTurn(
       user_response_energy: userEnergy,
       should_press_soften_observe_challenge_reward_or_hold: relationalMove,
     },
+    relational_dynamic: applyRelationalDynamicStateUpdate(
+      normalizeRelationalDynamicState(state.relational_dynamic),
+      relationalDynamicInterpretation,
+    ),
     recent_window: appendRecentWindow(state.recent_window, { role: "user", content: text }),
     updated_at: input.nowMs,
   };
@@ -1899,6 +1939,7 @@ export function noteConversationAssistantTurn(
 export function buildConversationStateBlock(state: ConversationStateSnapshot): string {
   const summary = buildRollingSummary(state);
   const relational = normalizeRelationalContinuityState(state.relational_continuity);
+  const dynamic = normalizeRelationalDynamicState(state.relational_dynamic);
   return [
     "Conversation state:",
     `Active topic: ${state.active_topic || "none"}`,
@@ -1936,6 +1977,17 @@ export function buildConversationStateBlock(state: ConversationStateSnapshot): s
     `- User response energy: ${relational.user_response_energy}`,
     `- Next move preference: ${relational.should_press_soften_observe_challenge_reward_or_hold}`,
     `- Raven identity notes: ${relational.what_raven_has_implicitly_established_about_herself.join(" | ") || "none"}`,
+    "Relational dynamic:",
+    `- Proposed user role: ${dynamic.proposed_user_role ?? "none"}`,
+    `- Proposed Raven role: ${dynamic.proposed_raven_role ?? "none"}`,
+    `- Accepted dynamic: ${dynamic.accepted_dynamic_yes_no_unknown}`,
+    `- Active dynamic topic: ${dynamic.active_dynamic_topic ?? "none"}`,
+    `- Known user interests: ${dynamic.known_user_interests.join(" | ") || "none"}`,
+    `- Known user equipment: ${dynamic.known_user_equipment.join(" | ") || "none"}`,
+    `- Known service preferences: ${dynamic.known_user_service_preferences.join(" | ") || "none"}`,
+    `- Known expectations: ${dynamic.known_user_expectations.join(" | ") || "none"}`,
+    `- Pending dynamic question: ${dynamic.pending_dynamic_question ?? "none"}`,
+    `- Boundaries discussed: ${dynamic.boundaries_discussed_yes_no}`,
     "Structured summary:",
     `- Active topic: ${summary.active_topic || "none"}`,
     `- Recent topic history: ${summary.recent_topic_history.join(" | ") || "none"}`,

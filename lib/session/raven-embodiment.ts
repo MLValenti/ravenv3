@@ -9,7 +9,17 @@ export type AnswerMode =
   | "invitation_response"
   | "proposal_response"
   | "boundary_response"
-  | "concept_explanation";
+  | "concept_explanation"
+  | "role_response"
+  | "service_instruction"
+  | "focused_dynamic_followup"
+  | "protocol_suggestion"
+  | "expectation_response"
+  | "equipment_acknowledgement"
+  | "dynamic_application_response"
+  | "boundary_clarification"
+  | "clarification_explanation"
+  | "safety_framed_answer";
 
 export type EmbodimentContext =
   | "actual_disembodied"
@@ -45,6 +55,7 @@ export type AnswerIntent = {
     | "hypothetical_embodied_stance"
     | "remote_control_capability"
     | "invitation_boundary"
+    | "relational_dynamic_guidance"
     | "concept_definition"
     | "generic_answer";
   required_answer_slots: string[];
@@ -117,8 +128,35 @@ function contractForMode(
     "semantic planner",
     "semantic_planner",
     "repair text",
+    "I do not have enough local context to define",
+    "Give me the domain you mean",
+    "Fine. Say what you want.",
   ];
   switch (answerMode) {
+    case "role_response":
+    case "service_instruction":
+    case "focused_dynamic_followup":
+    case "protocol_suggestion":
+    case "expectation_response":
+    case "equipment_acknowledgement":
+    case "dynamic_application_response":
+    case "boundary_clarification":
+    case "clarification_explanation":
+    case "safety_framed_answer":
+      return {
+        answer_mode: answerMode,
+        must_address_referent: mustAddressReferent,
+        requires_boundary:
+          answerMode === "role_response" ||
+          answerMode === "equipment_acknowledgement" ||
+          answerMode === "dynamic_application_response" ||
+          answerMode === "boundary_clarification" ||
+          answerMode === "clarification_explanation" ||
+          answerMode === "safety_framed_answer",
+        required_slots: requiredSlots,
+        must_include_any: ["limits", "boundary", "rule", "start", "dynamic", "check-in"],
+        must_not_include: internalText,
+      };
     case "tool_or_inventory":
       return {
         answer_mode: answerMode,
@@ -213,6 +251,50 @@ export function planAnswerIntent(input: {
   } else if (turnMeaning.requested_facet === "invitation_response") {
     answer_mode = "invitation_response";
     primary_claim_type = "invitation_boundary";
+  } else if (turnMeaning.requested_facet === "role_negotiation") {
+    answer_mode = "role_response";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (
+    turnMeaning.requested_facet === "service_initiation" ||
+    turnMeaning.requested_facet === "service_direction"
+  ) {
+    answer_mode = "service_instruction";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "protocol_setup") {
+    answer_mode = "protocol_suggestion";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "expectations") {
+    answer_mode = "expectation_response";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "clarification_recovery") {
+    answer_mode = "clarification_explanation";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "compound_relational_disclosure") {
+    answer_mode = "focused_dynamic_followup";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.answer_contract === "compound_equipment_application") {
+    answer_mode = "dynamic_application_response";
+    primary_claim_type = "relational_dynamic_guidance";
+    embodiment_context = "actual_disembodied";
+  } else if (turnMeaning.requested_facet === "equipment_disclosure") {
+    answer_mode = "equipment_acknowledgement";
+    primary_claim_type = "relational_dynamic_guidance";
+    embodiment_context = "actual_disembodied";
+  } else if (turnMeaning.requested_facet === "dynamic_application") {
+    answer_mode = "dynamic_application_response";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "ambiguous_boundary_topic") {
+    answer_mode = "boundary_clarification";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "safety_or_limits_discussion") {
+    answer_mode = "safety_framed_answer";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (
+    turnMeaning.requested_facet === "service_preference" ||
+    turnMeaning.requested_facet === "user_preference"
+  ) {
+    answer_mode = "focused_dynamic_followup";
+    primary_claim_type = "relational_dynamic_guidance";
   } else if (turnMeaning.subject_domain !== "assistant_preferences") {
     answer_mode = "actual_capability";
     primary_claim_type = "generic_answer";
@@ -250,6 +332,13 @@ export function lintVisibleResponse(
   ) {
     return { ok: false, reason: "forbidden_filler" };
   }
+  if (
+    /\bFine\. Say what you want\b|I do not have enough local context to define|Give me the domain you mean/i.test(
+      text,
+    )
+  ) {
+    return { ok: false, reason: "forbidden_filler" };
+  }
   if (/\{\{[^}]+\}\}|\[[a-z_]+:[^\]]+\]/i.test(text)) {
     return { ok: false, reason: "template_fragment" };
   }
@@ -271,6 +360,30 @@ export function buildVisibleContractFallback(
       return "I cannot physically control a toy from here unless a real connected-device integration exists and you deliberately enable it. I can help shape the remote-control dynamic, limits, commands, and stop conditions.";
     case "procedural_preference":
       return `For ${subject}, my preference would be stable, controlled, and negotiated around comfort, pace, and communication. The position matters less than whether it keeps control clear and consent intact.`;
+    case "abstract_preference":
+      return "My kink lane is control and power exchange, restraint and bondage, obedience with agency, service that proves attention, toys used with purpose, patient training, and negotiated edge.";
+    case "concept_explanation":
+      return `${subject} is a relationship or scene concept: the useful answer is what it means, when it applies, and what people actually need around it.`;
+    case "role_response":
+      return `We can discuss that role dynamic, but it starts with limits, consent, and one concrete rule before I treat it as real. Name the role and the first boundary.`;
+    case "service_instruction":
+      return "Start with one clean check-in: name a limit, name the service style you want, and tell me what you can report back on today.";
+    case "focused_dynamic_followup":
+      return `Noted. I can fold ${subject} into the dynamic, but I need one focused answer first: is it about control, reassurance, pressure, or accountability?`;
+    case "protocol_suggestion":
+      return `For ${subject}, use a simple protocol: ask before escalation, report completion plainly, and keep a clear stop phrase.`;
+    case "expectation_response":
+      return `For ${subject}, I would expect clear limits, honest check-ins, and follow-through on small instructions before escalation.`;
+    case "equipment_acknowledgement":
+      return `Noted: ${subject}. I cannot physically control or inspect it from here, but we can define what it means in the dynamic and what limits apply.`;
+    case "dynamic_application_response":
+      return `We can incorporate ${subject} by defining its role, limits, check-ins, and reporting. I can shape the protocol, not physically enforce it from here.`;
+    case "boundary_clarification":
+      return `${subject} is ambiguous, so I would clarify the meaning before answering: private vulnerability, conversational visibility, or real-world public exposure?`;
+    case "clarification_explanation":
+      return `In plain language, I need the missing pieces so the dynamic is clear and bounded. You can answer with your role, one hard limit, and the service lane you want to start with.`;
+    case "safety_framed_answer":
+      return `For ${subject}, start with boundaries: what is allowed, what is off-limits, what stops the scene, and what stays private.`;
     default:
       return "I can answer that directly, but I need to keep the reply grounded in what I can actually claim.";
   }

@@ -895,6 +895,86 @@ test("response gate preserves coherent relational service answers", () => {
   assert.match(result.text, /verbal obedience|follow-through/i);
 });
 
+test("response gate re-realizes semantic-owned relational turns over legacy device text", () => {
+  const result = applyResponseGate({
+    text: "Device command: stop all devices.",
+    userText: "i want to be your submissive",
+    dialogueAct: "user_answer",
+    lastAssistantText: "Hi. What are you bringing me today?",
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+    candidateSource: "scene_scaffold",
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.semanticTrace.semantic_owned, true);
+  assert.equal(result.semanticTrace.winning_subsystem, "semantic_planner");
+  assert.equal(result.semanticTrace.content_source, "relational_dynamic_model");
+  assert.equal(result.semanticTrace.content_source_after_gate, "relational_dynamic_model");
+  assert.equal(result.semanticTrace.gate_replaced_output, true);
+  assert.equal(result.semanticTrace.visible_text_contains_tool_command, false);
+  assert.doesNotMatch(result.text, /Device command:|device_command|Tool command:/i);
+  assert.match(result.text, /submissive|dynamic|next/i);
+});
+
+test("response gate re-realizes semantic-owned relational turns over game scaffold text", () => {
+  const result = applyResponseGate({
+    text: "Listen, slut. Stay still while I explain the rules of this game. You will not drift.",
+    userText: "you should tell me mistress how you want them used",
+    dialogueAct: "user_answer",
+    lastAssistantText: "You have a chastity cage, butt plug, restraints, and dildos.",
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+    candidateSource: "game_scaffold",
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.semanticTrace.semantic_owned, true);
+  assert.equal(result.semanticTrace.turn_meaning.current_domain_handler, "relational_dynamics");
+  assert.equal(result.semanticTrace.winning_subsystem, "semantic_planner");
+  assert.equal(result.semanticTrace.content_source_after_gate, "relational_dynamic_model");
+  assert.doesNotMatch(result.text, /rules of this game|You will not drift|Stay still/i);
+  assert.match(result.text, /use|equipment|dynamic|limits|choose|start/i);
+});
+
+test("response gate blocks definition fallback on semantic-owned relational role guidance", () => {
+  const result = applyResponseGate({
+    text: "I do not have enough local context to define can my role be cleanly. Give me the domain you mean.",
+    userText: "what can my role be?",
+    dialogueAct: "user_question",
+    lastAssistantText: "You said you wanted to be my submissive.",
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+    candidateSource: "definition_fallback",
+  });
+
+  assert.equal(result.forced, true);
+  assert.equal(result.semanticTrace.semantic_owned, true);
+  assert.equal(result.semanticTrace.winning_subsystem, "semantic_planner");
+  assert.equal(result.semanticTrace.turn_meaning.requested_facet, "role_negotiation");
+  assert.equal(result.semanticTrace.content_source_after_gate, "relational_dynamic_model");
+  assert.doesNotMatch(result.text, /I do not have enough local context|Give me the domain/i);
+  assert.match(result.text, /role|submissive|dynamic|choose|start/i);
+});
+
+test("response gate blocks style-only clarification answers", () => {
+  const result = applyResponseGate({
+    text: "I mean slut.",
+    userText: "what do you mean?",
+    dialogueAct: "short_follow_up",
+    lastAssistantText:
+      "I can fold that equipment into a protocol, but I cannot physically control it from here.",
+    sceneState: createSceneState(),
+    commitmentState: createCommitmentState(),
+    candidateSource: "repair_turn",
+  });
+
+  assert.equal(result.forced, true);
+  assert.doesNotMatch(result.text, /^I mean slut\.?$/i);
+  assert.doesNotMatch(result.text, /\bslut\b/i);
+  assert.match(result.text, /equipment|protocol|control|physically|mean/i);
+});
+
 test("response gate rewrites relational directive-request role reversal into an actual directive", () => {
   const conversationState = {
     ...createConversationStateSnapshot("response-gate-service-directive"),

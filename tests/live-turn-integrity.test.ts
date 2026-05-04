@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  prepareAssistantOutputChannels,
   sanitizeSessionVisibleAssistantText,
   shouldAcceptAssistantTurnOwnership,
   shouldPreferServerTurnContract,
@@ -112,4 +113,36 @@ test("visible assistant text sanitizer removes scaffold and planner leakage", ()
   assert.equal(sanitized.blocked, false);
   assert.equal(sanitized.changed, true);
   assert.equal(sanitized.text, "I mean hesitation under pressure.");
+});
+
+test("assistant output channel split keeps device commands out of visible chat", () => {
+  const output = prepareAssistantOutputChannels(
+    [
+      "Stopping the device now. Stay with the breath you can actually control.",
+      "```json",
+      '{ "type":"device_command","command":"stop_all","params":{} }',
+      "```",
+    ].join("\n"),
+  );
+
+  assert.equal(output.actionParsed.ok, true);
+  assert.equal(output.device_actions.length, 1);
+  assert.equal(output.device_actions[0]?.command, "stop_all");
+  assert.equal(output.debug_trace.device_command_channel_used, true);
+  assert.match(output.debug_trace.device_action_display_text, /Device command: stop all devices/i);
+  assert.equal(output.visible_reply, "Stopping the device now. Stay with the breath you can actually control.");
+  assert.equal(output.debug_trace.visible_text_contains_tool_command, false);
+  assert.doesNotMatch(output.visible_reply, /Device command:|device_command|Tool command:/i);
+});
+
+test("assistant output channel split treats action-only text as device-channel only", () => {
+  const output = prepareAssistantOutputChannels(
+    '{ "type":"device_command","command":"stop_all","params":{} }',
+  );
+
+  assert.equal(output.actionParsed.ok, true);
+  assert.equal(output.device_actions.length, 1);
+  assert.equal(output.visible_reply, "");
+  assert.equal(output.hasRenderableText, true);
+  assert.equal(output.debug_trace.visible_text_contains_tool_command, false);
 });

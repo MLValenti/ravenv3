@@ -859,6 +859,11 @@ type LocalDefinitionEntry = {
 
 const LOCAL_TERM_DEFINITIONS: LocalDefinitionEntry[] = [
   {
+    term: "aftercare",
+    definition:
+      "Aftercare is what happens after intensity drops: check in, settle the body, and make sure people feel safe, grounded, and actually cared for once the scene ends.",
+  },
+  {
     term: "female-led relationship",
     aliases: ["female led relationship"],
     definition:
@@ -987,6 +992,8 @@ export function realizeSemanticContent(
       }
       return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
     case "raven_invitation_answer":
+      return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
+    case "relational_dynamic_answer":
       return answerRavenPreferenceQuestion({ userText: question, turnMeaning, plannedMove });
     case "assistant_preference_elaboration":
       return elaborateRavenPreference({ userText: question, turnMeaning, plannedMove });
@@ -1192,6 +1199,17 @@ export function buildHumanQuestionFallback(
   if (/^\s*tell me more about you\s*$/i.test(normalize(question))) {
     return withDominantPrefix(buildRelationalTurnBack(), tone);
   }
+  if (isShortClarificationTurn(question)) {
+    return withDominantPrefix(
+      buildShortClarificationReply({
+        userText: question,
+        interactionMode: "question_answering",
+        lastAssistantText: context?.previousAssistantText ?? null,
+        currentTopic: context?.currentTopic ?? null,
+      }),
+      tone,
+    );
+  }
   const semanticReply = buildSemanticPlannedReply(question, tone, context);
   if (semanticReply) {
     return semanticReply;
@@ -1308,17 +1326,6 @@ export function buildHumanQuestionFallback(
   });
   if (conversationReply && !isLikelyQuestionText(question)) {
     return withDominantPrefix(conversationReply, tone);
-  }
-  if (isShortClarificationTurn(question)) {
-    return withDominantPrefix(
-      buildShortClarificationReply({
-        userText: question,
-        interactionMode: "question_answering",
-        lastAssistantText: context?.previousAssistantText ?? null,
-        currentTopic: context?.currentTopic ?? null,
-      }),
-      tone,
-    );
   }
   if (!isLikelyQuestionText(question)) {
     return withDominantPrefix(buildOpenChatNudge(), tone);

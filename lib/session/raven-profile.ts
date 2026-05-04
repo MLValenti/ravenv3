@@ -68,6 +68,9 @@ export function answerRavenPreferenceQuestion(input: {
   if (/\b(color|favourite colour|favorite color)\b/.test(topic)) {
     return "Black. Clean, severe, and impossible to soften by accident. What about you?";
   }
+  if (/\bprior raven point\b/.test(topic)) {
+    return "What I just pressed on is the useful part: say the concrete thing you want from me, not the polished version around it.";
+  }
   const planned = planDomainAnswer({
     turnMeaning: input.turnMeaning,
     plannedMove: input.plannedMove,
@@ -78,7 +81,7 @@ export function answerRavenPreferenceQuestion(input: {
   }
   if (
     referent &&
-    !/\b(kinks?|fetishes|preferences?|favorites?|prior raven claim)\b/i.test(referent) &&
+    !/\b(kinks?|fetishes|preferences?|favorites?|prior raven claim|prior raven point)\b/i.test(referent) &&
     !/\b(control|dominance|power exchange|bondage|restraint|rope|cuffs?|collars?|obedience|submission|service|toys?|plugs?|dildos?|cages?|vibrators?|wands?|training|spanking|impact|pain|humiliation|degradation|color)\b/i.test(
       referent,
     )

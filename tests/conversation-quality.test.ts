@@ -408,7 +408,7 @@ test("answer_question fallback stays human for open ended questions outside hard
   assert.equal(shaped.noop, false);
   assert.match(
     shaped.text,
-    /clarity|honesty|trainable|be useful|actually after/i,
+    /clarity|honesty|trainable|be useful|actually after|three-line check-in|service lane|one limit/i,
   );
   assert.doesNotMatch(shaped.text, /answering now/i);
   assert.doesNotMatch(shaped.text, /keep us on the same thread/i);

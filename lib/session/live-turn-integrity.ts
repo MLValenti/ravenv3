@@ -1,4 +1,10 @@
 import type { DialogueRouteAct } from "../dialogue/router.ts";
+import {
+  formatDeviceActionForDisplay,
+  parseDeviceActionRequest,
+  stripActionJsonBlock,
+  type DeviceActionRequest,
+} from "./action-request.ts";
 import type { InteractionMode } from "./interaction-mode.ts";
 import { scrubVisibleInternalLeakText } from "./response-gate.ts";
 import type { SceneTopicType } from "./scene-state.ts";
@@ -87,6 +93,51 @@ export function sanitizeSessionVisibleAssistantText(text: string): {
   blocked: boolean;
 } {
   return scrubVisibleInternalLeakText(text);
+}
+
+export type PreparedAssistantOutputChannels = {
+  actionParsed: ReturnType<typeof parseDeviceActionRequest>;
+  visible_reply: string;
+  device_actions: DeviceActionRequest[];
+  debug_trace: {
+    raw_visible_reply: string;
+    visible_text_contains_tool_command: boolean;
+    visible_scrubbed: boolean;
+    visible_blocked: boolean;
+    device_command_channel_used: boolean;
+    device_action_display_text: string;
+  };
+  hasRenderableText: boolean;
+};
+
+export function prepareAssistantOutputChannels(text: string): PreparedAssistantOutputChannels {
+  const actionParsed = parseDeviceActionRequest(text);
+  const strippedText = stripActionJsonBlock(text);
+  const rawVisibleReply = strippedText || (actionParsed.ok ? "" : text.trim());
+  const scrubbedVisible = rawVisibleReply
+    ? sanitizeSessionVisibleAssistantText(rawVisibleReply)
+    : { text: "", changed: false, blocked: false };
+  const deviceActions = actionParsed.ok ? [actionParsed.request] : [];
+  const deviceActionDisplayText = actionParsed.ok
+    ? formatDeviceActionForDisplay(actionParsed.request)
+    : "";
+  return {
+    actionParsed,
+    visible_reply: scrubbedVisible.text,
+    device_actions: deviceActions,
+    debug_trace: {
+      raw_visible_reply: rawVisibleReply,
+      visible_text_contains_tool_command:
+        /\bDevice command:|\bTool command:|"\s*type\s*"\s*:\s*"device_command"/i.test(
+          scrubbedVisible.text,
+        ),
+      visible_scrubbed: scrubbedVisible.changed,
+      visible_blocked: scrubbedVisible.blocked,
+      device_command_channel_used: deviceActions.length > 0,
+      device_action_display_text: deviceActionDisplayText,
+    },
+    hasRenderableText: Boolean(scrubbedVisible.text || deviceActions.length > 0),
+  };
 }
 
 function isThreadScopedContinuationCue(text: string): boolean {
