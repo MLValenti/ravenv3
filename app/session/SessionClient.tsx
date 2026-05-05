@@ -257,6 +257,7 @@ import {
   projectTurnGateUi,
   reduceBeginAssistantRequest,
   reduceAssistantEmission,
+  reduceActiveInteractionState,
   reduceFinishAssistantRequest,
   reduceRegisterAssistantFinalize,
   reduceUserTurn,
@@ -265,6 +266,19 @@ import {
   selectHasVisibleAssistantCommit,
   type SessionStateContract,
 } from "@/lib/session/session-state-contract";
+import {
+  createActiveInteractionState,
+  createActiveInteractionStateOwner,
+  normalizeActiveInteractionState,
+  normalizeActiveInteractionStateOwner,
+  shouldAcceptActiveInteractionStateUpdate,
+  type ActiveInteractionState,
+  type ActiveInteractionStateOwner,
+} from "@/lib/session/active-interaction";
+import {
+  normalizePreviousResponseBriefSummary,
+  type PreviousResponseBriefSummary,
+} from "@/lib/session/response-brief";
 import {
   runVerification,
   shouldRequestUserConfirmation,
@@ -422,6 +436,11 @@ type AssistantTraceMeta = {
   rawGameStartDetected?: boolean;
   rawGameStartQuestionPresent?: boolean;
   finalGameStartQuestionPresent?: boolean;
+  activeInteractionAfter?: ActiveInteractionState | null;
+  previousResponseBrief?: PreviousResponseBriefSummary | null;
+  activeStateOwner?: ActiveInteractionStateOwner | null;
+  statePersistence?: Record<string, unknown> | null;
+  semanticTrace?: Record<string, unknown> | null;
 };
 
 type SessionTurnDebugEntry = {
@@ -457,6 +476,15 @@ function mapAssistantReplySourceToTurnResponseFamily(
 type PreparedConversationNode = {
   node: ConversationNode;
   trace: Omit<AssistantTraceMeta, "sessionId" | "sourceUserMessageId" | "stepId" | "startedAtMs" | "turnIdEstimate" | "requestId">;
+};
+
+type AssistantResponseStatePayload = {
+  text: string;
+  activeInteraction: ActiveInteractionState | null;
+  previousResponseBrief: PreviousResponseBriefSummary | null;
+  activeStateOwner: ActiveInteractionStateOwner | null;
+  statePersistence?: Record<string, unknown> | null;
+  semanticTrace?: Record<string, unknown> | null;
 };
 
 type ConversationNode =
@@ -587,6 +615,8 @@ const SESSION_CHAT_NOOP_SENTINEL = "__RAVEN_CHAT_NOOP__";
 const SESSION_DEBUG_STORAGE_KEY = "raven.session.debug";
 const VISION_DEBUG_STORAGE_KEY = "raven.session.vision.debug";
 const CONVERSATION_STATE_STORAGE_KEY = "raven.session.conversation-state.current";
+const ACTIVE_INTERACTION_STORAGE_KEY = "raven.session.active-interaction.current";
+const PREVIOUS_RESPONSE_BRIEF_STORAGE_KEY = "raven.session.previous-response-brief.current";
 const SESSION_RESUME_STORAGE_KEY = "raven.session.resume";
 const SESSION_REVIEW_STORAGE_KEY = "raven.session.review";
 const MAX_ASSISTANT_WORDS = 180;
@@ -1904,6 +1934,9 @@ export default function SessionPage() {
   const sessionInventoryStorageReadyRef = useRef(false);
   const proactiveInventoryTaskIssuedRef = useRef(false);
   const conversationStateRef = useRef<ConversationStateSnapshot>(createConversationStateSnapshot());
+  const activeInteractionRef = useRef<ActiveInteractionState>(createActiveInteractionState());
+  const activeInteractionOwnerRef = useRef<ActiveInteractionStateOwner | null>(null);
+  const previousResponseBriefRef = useRef<PreviousResponseBriefSummary | null>(null);
 
   const consentReady = consent !== null;
   const statusSummary = useMemo(() => `${dynamicStepCount} steps`, [dynamicStepCount]);
@@ -1981,6 +2014,7 @@ export default function SessionPage() {
       workingMemory: workingMemoryRef.current,
       sessionTopic: sessionTopicRef.current,
       assistantRuntime: assistantRuntimeRef.current,
+      activeInteraction: activeInteractionRef.current,
     };
   }
 
@@ -1989,6 +2023,8 @@ export default function SessionPage() {
     workingMemoryRef.current = next.workingMemory;
     sessionTopicRef.current = next.sessionTopic;
     assistantRuntimeRef.current = next.assistantRuntime;
+    activeInteractionRef.current =
+      normalizeActiveInteractionState(next.activeInteraction) ?? createActiveInteractionState();
     const projected = projectTurnGateUi(next.turnGate);
     setAwaitingUser(projected.awaitingUser);
     setLastUserMessageId(projected.lastUserMessageId);
@@ -2057,6 +2093,80 @@ export default function SessionPage() {
   function syncConversationState(next: ConversationStateSnapshot) {
     conversationStateRef.current = next;
     setConversationDebugState(next);
+  }
+
+  function syncActiveInteractionState(
+    next: ActiveInteractionState | null | undefined,
+    owner?: ActiveInteractionStateOwner | null,
+  ) {
+    const normalized = normalizeActiveInteractionState(next) ?? createActiveInteractionState();
+    activeInteractionRef.current = normalized;
+    activeInteractionOwnerRef.current = owner
+      ? normalizeActiveInteractionStateOwner(owner)
+      : activeInteractionOwnerRef.current;
+    applyContractState(reduceActiveInteractionState(currentContractState(), normalized));
+  }
+
+  function commitActiveInteractionFromTrace(
+    traceMeta: AssistantTraceMeta | null | undefined,
+    anchorUserMessageId: number,
+  ) {
+    const incoming = normalizeActiveInteractionState(traceMeta?.activeInteractionAfter);
+    if (!incoming) {
+      return;
+    }
+    const owner = traceMeta?.activeStateOwner
+      ? normalizeActiveInteractionStateOwner(traceMeta.activeStateOwner)
+      : createActiveInteractionStateOwner({
+        requestId: traceMeta?.requestId ?? null,
+        turnId: traceMeta?.serverTurnId ?? null,
+        userMessageId: anchorUserMessageId,
+        assistantTurnId: traceMeta?.stepId ?? null,
+        committedAtMs: now(),
+      });
+    const decision = shouldAcceptActiveInteractionStateUpdate({
+      current: activeInteractionRef.current,
+      incoming,
+      currentOwner: activeInteractionOwnerRef.current,
+      incomingOwner: {
+        ...owner,
+        user_message_id: owner.user_message_id ?? anchorUserMessageId,
+        committed_at_ms: owner.committed_at_ms ?? now(),
+      },
+    });
+    pushTurnTrace("turn.active_interaction.persistence", {
+      request_id: traceMeta?.requestId ?? "none",
+      session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
+      user_message_id: anchorUserMessageId,
+      accepted: decision.accept,
+      reason: decision.reason,
+      active_interaction_before_request_client:
+        activeInteractionRef.current.active_interaction_id ?? "none",
+      active_interaction_returned_to_client: incoming.active_interaction_id ?? "none",
+      active_interaction_accepted_by_client: decision.accept,
+      active_interaction_rejected_by_client_reason: decision.accept ? null : decision.reason,
+      state_persistence_payload: traceMeta?.statePersistence ?? null,
+      semantic_state_chain: traceMeta?.semanticTrace ?? null,
+      previous_response_brief_received_by_client: Boolean(traceMeta?.previousResponseBrief),
+      last_assistant_instruction_received_by_client: Boolean(incoming.last_assistant_instruction),
+      incoming_interaction_id: incoming.active_interaction_id ?? "none",
+      current_interaction_id: activeInteractionRef.current.active_interaction_id ?? "none",
+      state_persisted_to_client: decision.accept,
+      stale_active_state_update_blocked: !decision.accept,
+      at_ms: now(),
+    });
+    if (!decision.accept) {
+      return;
+    }
+    const committedOwner = {
+      ...owner,
+      user_message_id: owner.user_message_id ?? anchorUserMessageId,
+      committed_at_ms: owner.committed_at_ms ?? now(),
+    };
+    syncActiveInteractionState(incoming, committedOwner);
+    previousResponseBriefRef.current =
+      normalizePreviousResponseBriefSummary(traceMeta?.previousResponseBrief) ??
+      previousResponseBriefRef.current;
   }
 
   useEffect(() => {
@@ -3675,6 +3785,7 @@ export default function SessionPage() {
         anchorUserMessageId,
       });
     if (committed) {
+      commitActiveInteractionFromTrace(effectiveTrace, anchorUserMessageId);
       updateSessionTurnLog(anchorUserMessageId, (entry) =>
         entry
           ? {
@@ -3766,6 +3877,7 @@ export default function SessionPage() {
       anchorUserMessageId,
     });
     if (recovered) {
+      commitActiveInteractionFromTrace(traceMeta, anchorUserMessageId);
       updateSessionTurnLog(anchorUserMessageId, (entry) =>
         entry
           ? {
@@ -4158,11 +4270,11 @@ export default function SessionPage() {
     }
   }
 
-  async function readStreamedAssistantText(
+  async function readStreamedAssistantPayload(
     response: Response,
     requestId: string,
     sourceUserMessageId: number,
-  ): Promise<string> {
+  ): Promise<AssistantResponseStatePayload> {
     const finalizeGuard = registerManagedAssistantFinalize(requestId);
     if (!finalizeGuard.allow) {
       pushTurnTrace("turn.stream.duplicate_finalize_blocked", {
@@ -4172,7 +4284,12 @@ export default function SessionPage() {
         reason: finalizeGuard.reason,
         at_ms: now(),
       });
-      return SESSION_CHAT_NOOP_SENTINEL;
+      return {
+        text: SESSION_CHAT_NOOP_SENTINEL,
+        activeInteraction: null,
+        previousResponseBrief: null,
+        activeStateOwner: null,
+      };
     }
     if (!response.body) {
       pushTurnTrace("turn.model.response_payload", {
@@ -4185,7 +4302,12 @@ export default function SessionPage() {
         parse_status: "missing_body",
         at_ms: now(),
       });
-      return "";
+      return {
+        text: "",
+        activeInteraction: null,
+        previousResponseBrief: null,
+        activeStateOwner: null,
+      };
     }
 
     const reader = response.body.getReader();
@@ -4193,6 +4315,30 @@ export default function SessionPage() {
     let buffer = "";
     let fullText = "";
     let rawPayload = "";
+    let activeInteraction: ActiveInteractionState | null = null;
+    let previousResponseBrief: PreviousResponseBriefSummary | null = null;
+    let activeStateOwner: ActiveInteractionStateOwner | null = null;
+    let statePersistence: Record<string, unknown> | null = null;
+    let semanticTrace: Record<string, unknown> | null = null;
+
+    const ingestParsedPayload = (parsed: { response?: unknown; activeInteraction?: unknown; previousResponseBrief?: unknown; activeStateOwner?: unknown; statePersistence?: unknown; semanticTrace?: unknown }) => {
+      if (typeof parsed.response === "string") {
+        fullText += parsed.response;
+      }
+      activeInteraction = normalizeActiveInteractionState(parsed.activeInteraction) ?? activeInteraction;
+      previousResponseBrief =
+        normalizePreviousResponseBriefSummary(parsed.previousResponseBrief) ??
+        previousResponseBrief;
+      if (parsed.activeStateOwner !== undefined) {
+        activeStateOwner = normalizeActiveInteractionStateOwner(parsed.activeStateOwner);
+      }
+      if (parsed.statePersistence && typeof parsed.statePersistence === "object") {
+        statePersistence = parsed.statePersistence as Record<string, unknown>;
+      }
+      if (parsed.semanticTrace && typeof parsed.semanticTrace === "object") {
+        semanticTrace = parsed.semanticTrace as Record<string, unknown>;
+      }
+    };
 
     while (true) {
       const { done, value } = await reader.read();
@@ -4212,10 +4358,14 @@ export default function SessionPage() {
           continue;
         }
         try {
-          const parsed = JSON.parse(trimmed) as { response?: unknown };
-          if (typeof parsed.response === "string") {
-            fullText += parsed.response;
-          }
+          ingestParsedPayload(JSON.parse(trimmed) as {
+            response?: unknown;
+            activeInteraction?: unknown;
+            previousResponseBrief?: unknown;
+            activeStateOwner?: unknown;
+            statePersistence?: unknown;
+            semanticTrace?: unknown;
+          });
         } catch {
           // ignore malformed chunks
         }
@@ -4225,10 +4375,14 @@ export default function SessionPage() {
     if (buffer.trim()) {
       rawPayload += buffer;
       try {
-        const parsed = JSON.parse(buffer) as { response?: unknown };
-        if (typeof parsed.response === "string") {
-          fullText += parsed.response;
-        }
+        ingestParsedPayload(JSON.parse(buffer) as {
+          response?: unknown;
+          activeInteraction?: unknown;
+          previousResponseBrief?: unknown;
+          activeStateOwner?: unknown;
+          statePersistence?: unknown;
+          semanticTrace?: unknown;
+        });
       } catch {
         // ignore malformed tail chunk
       }
@@ -4245,7 +4399,14 @@ export default function SessionPage() {
       at_ms: now(),
     });
 
-    return fullText.trim();
+    return {
+      text: fullText.trim(),
+      activeInteraction,
+      previousResponseBrief,
+      activeStateOwner,
+      statePersistence,
+      semanticTrace,
+    };
   }
 
   async function generateSessionRespondText(
@@ -4353,6 +4514,9 @@ export default function SessionPage() {
         memoryAutoSave,
         memoryText: userText,
         conversationState: conversationStateRef.current,
+        activeInteraction: activeInteractionRef.current,
+        previousResponseBrief: previousResponseBriefRef.current,
+        activeStateOwner: activeInteractionOwnerRef.current,
         workingMemory: workingMemoryRef.current,
         awaitingUser,
         userAnswered: intent === "user_answer",
@@ -4490,7 +4654,8 @@ export default function SessionPage() {
       };
     }
 
-    const text = await readStreamedAssistantText(response, requestId, sourceUserMessageId);
+    const responsePayload = await readStreamedAssistantPayload(response, requestId, sourceUserMessageId);
+    const text = responsePayload.text;
     finishManagedAssistantRequest("model", sourceUserMessageId, requestId);
     if (text === SESSION_CHAT_NOOP_SENTINEL) {
       return {
@@ -4513,6 +4678,11 @@ export default function SessionPage() {
             ? "deterministic_scene"
             : "model",
           outputGeneratorCount: 1,
+          activeInteractionAfter: responsePayload.activeInteraction,
+          previousResponseBrief: responsePayload.previousResponseBrief,
+          activeStateOwner: responsePayload.activeStateOwner,
+          statePersistence: responsePayload.statePersistence,
+          semanticTrace: responsePayload.semanticTrace,
           rawGameStartDetected,
           rawGameStartQuestionPresent,
           finalGameStartQuestionPresent,
@@ -4557,6 +4727,11 @@ export default function SessionPage() {
           ? "deterministic_scene"
           : "model",
         outputGeneratorCount: 1,
+        activeInteractionAfter: responsePayload.activeInteraction,
+        previousResponseBrief: responsePayload.previousResponseBrief,
+        activeStateOwner: responsePayload.activeStateOwner,
+        statePersistence: responsePayload.statePersistence,
+        semanticTrace: responsePayload.semanticTrace,
         rawGameStartDetected,
         rawGameStartQuestionPresent,
         finalGameStartQuestionPresent,
@@ -5098,6 +5273,8 @@ export default function SessionPage() {
         : commitmentRef.current,
       sessionMemory: nextMemory,
       inventory: sessionInventory,
+      previousResponseBrief: previousResponseBriefRef.current,
+      activeInteraction: activeInteractionRef.current,
       observationTrust: evaluateObservationTrust(latestObservationRef.current, now()),
       commitOwnerId: pendingTurn.requestId,
     });
@@ -5293,8 +5470,40 @@ export default function SessionPage() {
             serverTurnId: null,
             finalOutputSource: finalized.finalOutputSource,
             outputGeneratorCount: availableFamilies.length > 0 ? availableFamilies.length : 1,
+            activeInteractionAfter: responseGate.semanticTrace.active_interaction_after,
+            previousResponseBrief:
+              normalizePreviousResponseBriefSummary(
+                responseGate.semanticTrace.persisted_response_brief_summary,
+              ) ?? null,
+            activeStateOwner: createActiveInteractionStateOwner({
+              requestId: pendingTurn.requestId,
+              turnId: String(pendingTurn.messageId),
+              userMessageId: pendingTurn.messageId,
+              assistantTurnId: `respond-${pendingTurn.messageId}-${stepIndex}`,
+            }),
           }
-        : (generated?.trace ?? {
+        : (generated
+            ? {
+                ...generated.trace,
+                activeInteractionAfter:
+                  generated.trace.activeInteractionAfter ??
+                  responseGate.semanticTrace.active_interaction_after,
+                previousResponseBrief:
+                  generated.trace.previousResponseBrief ??
+                  normalizePreviousResponseBriefSummary(
+                    responseGate.semanticTrace.persisted_response_brief_summary,
+                  ) ??
+                  null,
+                activeStateOwner:
+                  generated.trace.activeStateOwner ??
+                  createActiveInteractionStateOwner({
+                    requestId: pendingTurn.requestId,
+                    turnId: String(pendingTurn.messageId),
+                    userMessageId: pendingTurn.messageId,
+                    assistantTurnId: `respond-${pendingTurn.messageId}-${stepIndex}`,
+                  }),
+              }
+            : {
             source: "model",
             modelRan: true,
             deterministicRail: null,
@@ -5304,6 +5513,17 @@ export default function SessionPage() {
             serverTurnId: null,
             finalOutputSource: finalized.finalOutputSource,
             outputGeneratorCount: availableFamilies.length > 0 ? availableFamilies.length : 1,
+            activeInteractionAfter: responseGate.semanticTrace.active_interaction_after,
+            previousResponseBrief:
+              normalizePreviousResponseBriefSummary(
+                responseGate.semanticTrace.persisted_response_brief_summary,
+              ) ?? null,
+            activeStateOwner: createActiveInteractionStateOwner({
+              requestId: pendingTurn.requestId,
+              turnId: String(pendingTurn.messageId),
+              userMessageId: pendingTurn.messageId,
+              assistantTurnId: `respond-${pendingTurn.messageId}-${stepIndex}`,
+            }),
           }),
     };
   }
@@ -6278,6 +6498,9 @@ export default function SessionPage() {
                 serverTurnId: prepared.trace.serverTurnId,
                 finalOutputSource: prepared.trace.finalOutputSource,
                 outputGeneratorCount: prepared.trace.outputGeneratorCount,
+                activeInteractionAfter: prepared.trace.activeInteractionAfter ?? null,
+                previousResponseBrief: prepared.trace.previousResponseBrief ?? null,
+                activeStateOwner: prepared.trace.activeStateOwner ?? null,
               }
             : null;
         }
@@ -7156,12 +7379,28 @@ export default function SessionPage() {
         setLastSessionMetrics(savedReview.metrics);
       }
       let parsedConversationState: unknown = null;
+      let parsedActiveInteraction: unknown = null;
+      let parsedPreviousResponseBrief: unknown = null;
       try {
         parsedConversationState = JSON.parse(
           window.localStorage.getItem(CONVERSATION_STATE_STORAGE_KEY) ?? "null",
         );
       } catch {
         parsedConversationState = null;
+      }
+      try {
+        parsedActiveInteraction = JSON.parse(
+          window.localStorage.getItem(ACTIVE_INTERACTION_STORAGE_KEY) ?? "null",
+        );
+      } catch {
+        parsedActiveInteraction = null;
+      }
+      try {
+        parsedPreviousResponseBrief = JSON.parse(
+          window.localStorage.getItem(PREVIOUS_RESPONSE_BRIEF_STORAGE_KEY) ?? "null",
+        );
+      } catch {
+        parsedPreviousResponseBrief = null;
       }
       if (parsedConversationState) {
         const restoredConversationState =
@@ -7174,6 +7413,12 @@ export default function SessionPage() {
       } else {
         syncConversationState(createConversationStateSnapshot(turnGateRef.current.sessionId));
       }
+      syncActiveInteractionState(
+        normalizeActiveInteractionState(parsedActiveInteraction) ?? createActiveInteractionState(),
+        null,
+      );
+      previousResponseBriefRef.current =
+        normalizePreviousResponseBriefSummary(parsedPreviousResponseBrief);
       void refreshDevicesPanel().catch(() => undefined);
     }, 0);
 
@@ -7220,6 +7465,17 @@ export default function SessionPage() {
       JSON.stringify(conversationDebugState),
     );
   }, [conversationDebugState]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      ACTIVE_INTERACTION_STORAGE_KEY,
+      JSON.stringify(activeInteractionRef.current),
+    );
+    window.localStorage.setItem(
+      PREVIOUS_RESPONSE_BRIEF_STORAGE_KEY,
+      JSON.stringify(previousResponseBriefRef.current),
+    );
+  });
 
   useEffect(() => {
     if (!sessionInventoryStorageReadyRef.current) {

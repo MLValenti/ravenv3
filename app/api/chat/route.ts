@@ -162,6 +162,25 @@ import {
 import {
   generateLlmSemanticCandidates,
 } from "@/lib/session/semantic-candidate-generator";
+import {
+  createActiveInteractionStateOwner,
+  normalizeActiveInteractionState,
+  routeTurnWithActiveInteraction,
+  updateActiveInteractionState,
+  type ActiveInteractionState,
+  type ActiveInteractionStateOwner,
+} from "@/lib/session/active-interaction";
+import {
+  buildResponseBrief,
+  normalizePreviousResponseBriefSummary,
+  realizeResponseFromBrief,
+  summarizeResponseBrief,
+  validateReplyAgainstBrief,
+  type PreviousResponseBriefSummary,
+} from "@/lib/session/response-brief";
+import {
+  planDomainAnswer,
+} from "@/lib/session/raven-preferences";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -200,9 +219,33 @@ type ChatRequestBody = {
   memoryText?: unknown;
   inventory?: unknown;
   conversationState?: unknown;
+  activeInteraction?: unknown;
+  previousResponseBrief?: unknown;
+  activeStateOwner?: unknown;
   workingMemory?: unknown;
   verificationSummary?: unknown;
   debugRawModel?: unknown;
+};
+
+type ChatResponseStatePayload = {
+  activeInteraction?: ActiveInteractionState | null;
+  previousResponseBrief?: PreviousResponseBriefSummary | null;
+  activeStateOwner?: ActiveInteractionStateOwner | null;
+  statePersistence?: {
+    state_returned_to_server: boolean;
+    state_returned_to_client: boolean;
+    previous_instruction_id: string | null;
+    active_interaction_before_id: string | null;
+    active_interaction_after_id: string | null;
+    active_state_created_this_turn?: boolean;
+    active_state_creation_reason?: string | null;
+    previous_response_brief_created_this_turn?: boolean;
+    previous_response_brief_sent_to_server?: boolean;
+    previous_response_brief_received_by_server?: boolean;
+    last_assistant_instruction_created_this_turn?: boolean;
+    last_assistant_instruction_sent_to_server?: boolean;
+  };
+  semanticTrace?: unknown;
 };
 
 type ChatTraceHeadersInput = {
@@ -271,6 +314,29 @@ function toSafeTraceId(value: unknown, fallback: string): string {
   return trimmed.replace(/[^a-zA-Z0-9._:-]/g, "-").slice(0, 120) || fallback;
 }
 
+function substantiveSimilarity(a: string | null | undefined, b: string | null | undefined): number {
+  const words = (value: string | null | undefined) =>
+    new Set(
+      (value ?? "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((word) => word.length > 4),
+    );
+  const left = words(a);
+  const right = words(b);
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+  let overlap = 0;
+  for (const word of left) {
+    if (right.has(word)) overlap += 1;
+  }
+  return overlap / Math.max(1, Math.min(left.size, right.size));
+}
+
 function buildChatTraceHeaders(input: ChatTraceHeadersInput): Record<string, string> {
   return {
     "x-raven-request-id": input.requestId,
@@ -285,8 +351,9 @@ function buildChatTraceHeaders(input: ChatTraceHeadersInput): Record<string, str
 function createStaticAssistantNdjsonResponse(
   text: string,
   extraHeaders: Record<string, string> = {},
+  statePayload: ChatResponseStatePayload = {},
 ) {
-  const encoded = `${JSON.stringify({ response: text, done: true })}\n`;
+  const encoded = `${JSON.stringify({ response: text, done: true, ...statePayload })}\n`;
   return new Response(encoded, {
     status: 200,
     headers: {
@@ -295,6 +362,51 @@ function createStaticAssistantNdjsonResponse(
       ...extraHeaders,
     },
   });
+}
+
+function buildChatResponseStatePayload(input: {
+  activeInteractionBefore: ActiveInteractionState | null;
+  activeInteractionAfter: ActiveInteractionState | null;
+  previousResponseBrief: PreviousResponseBriefSummary | null;
+  owner: ActiveInteractionStateOwner;
+  semanticTrace?: unknown;
+}): ChatResponseStatePayload {
+  return {
+    activeInteraction: input.activeInteractionAfter,
+    previousResponseBrief: input.previousResponseBrief,
+    activeStateOwner: input.owner,
+    statePersistence: {
+      state_returned_to_server: Boolean(input.activeInteractionBefore?.active_interaction_id),
+      state_returned_to_client: true,
+      previous_instruction_id:
+        input.activeInteractionBefore?.last_assistant_instruction?.instruction_id ?? null,
+      active_interaction_before_id: input.activeInteractionBefore?.active_interaction_id ?? null,
+      active_interaction_after_id: input.activeInteractionAfter?.active_interaction_id ?? null,
+      active_state_created_this_turn: Boolean(
+        !input.activeInteractionBefore?.active_interaction_id &&
+          input.activeInteractionAfter?.active_interaction_id,
+      ),
+      active_state_creation_reason:
+        !input.activeInteractionBefore?.active_interaction_id &&
+        input.activeInteractionAfter?.active_interaction_id
+          ? "active_interaction_after_created"
+          : null,
+      previous_response_brief_created_this_turn: Boolean(input.previousResponseBrief),
+      previous_response_brief_sent_to_server: Boolean(
+        input.activeInteractionBefore?.previous_response_brief_id,
+      ),
+      previous_response_brief_received_by_server: Boolean(
+        input.activeInteractionBefore?.previous_response_brief_id,
+      ),
+      last_assistant_instruction_created_this_turn: Boolean(
+        input.activeInteractionAfter?.last_assistant_instruction?.instruction_id,
+      ),
+      last_assistant_instruction_sent_to_server: Boolean(
+        input.activeInteractionBefore?.last_assistant_instruction?.instruction_id,
+      ),
+    },
+    semanticTrace: input.semanticTrace,
+  };
 }
 
 function encodeHeaderList(values: string[]): string {
@@ -1220,6 +1332,10 @@ export async function POST(request: Request) {
           classifyUserIntent: turnInterpretation.classifyUserIntentForState,
           classifyRouteAct: turnInterpretation.classifyRouteActForState,
         });
+  const activeInteractionBefore =
+    normalizeActiveInteractionState(payload.activeInteraction) ?? null;
+  const previousResponseBrief =
+    normalizePreviousResponseBriefSummary(payload.previousResponseBrief);
   let liveTurnDiagnosticRecord = buildServerTurnDiagnosticRecord({
     requestId,
     turnId,
@@ -1319,6 +1435,7 @@ export async function POST(request: Request) {
         : null,
     llmSemanticCandidates: semanticCandidateResult.candidates,
     llmSemanticRejectedCandidates: semanticCandidateResult.rejected,
+    activeInteraction: activeInteractionBefore,
   });
   const turnMeaning = canonicalTurnState.turn_meaning;
   const semanticMove = canonicalTurnState.planned_move;
@@ -1635,6 +1752,8 @@ export async function POST(request: Request) {
     workingMemory,
     lastAssistantOutput: conversationState.lastAssistantOutput,
     conversationStateSnapshot,
+    activeInteraction: activeInteractionBefore,
+    previousResponseBrief,
     toneProfile,
     turnPlan,
     requestId,
@@ -2052,6 +2171,91 @@ export async function POST(request: Request) {
   } else {
     baseResponseHeaders["x-raven-final-leak-scrub"] = "pass";
   }
+  const answerPlan = planDomainAnswer({ turnMeaning, plannedMove: semanticMove });
+  const responseBrief = buildResponseBrief({
+    turnMeaning,
+    plannedMove: semanticMove,
+    answerIntent: answerPlan.answer_intent,
+    previousBrief: previousResponseBrief,
+    activeInteraction: activeInteractionBefore,
+    sourceTurnId: requestId,
+  });
+  let responseBriefValidation = validateReplyAgainstBrief(finalAssistantText, responseBrief);
+  const modelPathNeedsBriefRepair =
+    turnMeaning.current_domain_handler === "relational_dynamics" &&
+    (!responseBriefValidation.ok ||
+      /\bKeep going\b|\bStay with the concrete part\b|\bconcrete part of open\b|\bcurrent checkpoint\b|\brock\s+paper\s+scissors\b/i.test(
+        finalAssistantText,
+      ));
+  if (modelPathNeedsBriefRepair) {
+    const briefRepair = realizeResponseFromBrief({
+      brief: responseBrief,
+      llmCandidate: finalAssistantText,
+    });
+    finalAssistantText = briefRepair.text;
+    finalOutputSource = briefRepair.content_realizer;
+    responseBriefValidation = briefRepair.validation_result;
+    baseResponseHeaders["x-raven-response-brief-repair"] =
+      responseBriefValidation.ok ? "repaired" : `failed:${responseBriefValidation.reason}`;
+  } else {
+    baseResponseHeaders["x-raven-response-brief-repair"] = "pass";
+  }
+  const repeatedAnswerSimilarity = substantiveSimilarity(
+    finalAssistantText,
+    previousAssistantText(messages),
+  );
+  let repeatedAnswerDetected = false;
+  let repetitionRepairUsed = false;
+  if (
+    turnMeaning.current_domain_handler === "relational_dynamics" &&
+    turnMeaning.dynamic_slots?.state_delta_type &&
+    repeatedAnswerSimilarity >= 0.58
+  ) {
+    repeatedAnswerDetected = true;
+    const repaired = realizeResponseFromBrief({
+      brief: {
+        ...responseBrief,
+        required_novelty_reason:
+          responseBrief.required_novelty_reason ??
+          `Do not repeat the previous answer. Address the new user delta: ${turnMeaning.dynamic_slots.state_delta_summary ?? "new state"}.`,
+        must_address: Array.from(
+          new Set([
+            ...responseBrief.must_address,
+            "revised answer",
+            "experience level",
+          ]),
+        ),
+      },
+    });
+    finalAssistantText = repaired.text;
+    finalOutputSource = repaired.content_realizer;
+    responseBriefValidation = repaired.validation_result;
+    repetitionRepairUsed = true;
+    baseResponseHeaders["x-raven-repetition-repair"] = "state-delta";
+  } else {
+    baseResponseHeaders["x-raven-repetition-repair"] = "pass";
+  }
+  const activeInteractionUpdate = updateActiveInteractionState({
+    before: activeInteractionBefore,
+    turnMeaning,
+    responseBrief,
+    assistantText: finalAssistantText,
+    turnId: requestId,
+  });
+  const activeInteractionAfter =
+    normalizeActiveInteractionState(activeInteractionUpdate.after) ?? activeInteractionBefore;
+  const previousResponseBriefAfter = summarizeResponseBrief(responseBrief, finalAssistantText);
+  const activeInteractionRouting = routeTurnWithActiveInteraction({
+    text: lastUserMessage?.content ?? "",
+    activeInteraction: activeInteractionBefore,
+    previousResponseBriefPresent: Boolean(previousResponseBrief),
+  });
+  const activeStateOwner = createActiveInteractionStateOwner({
+    requestId,
+    turnId,
+    userMessageId: Number.isFinite(Number(turnId)) ? Number(turnId) : null,
+    assistantTurnId: null,
+  });
   const finalGameStartInspection = inspectGameStartContract(
     finalAssistantText,
     rawGameStartInspection.templateId,
@@ -2164,5 +2368,93 @@ export async function POST(request: Request) {
           "x-raven-task-id": createdTaskId,
         }
       : {}),
-  });
+  }, buildChatResponseStatePayload({
+    activeInteractionBefore,
+    activeInteractionAfter,
+    previousResponseBrief: previousResponseBriefAfter,
+    owner: activeStateOwner,
+    semanticTrace: {
+      active_interaction_before: activeInteractionBefore,
+      active_interaction_after: activeInteractionAfter,
+      active_interaction_transition: activeInteractionUpdate.transition,
+      active_state_created_this_turn: Boolean(
+        !activeInteractionBefore?.active_interaction_id &&
+          activeInteractionAfter?.active_interaction_id,
+      ),
+      active_state_creation_reason:
+        !activeInteractionBefore?.active_interaction_id &&
+        activeInteractionAfter?.active_interaction_id
+          ? activeInteractionUpdate.transition.reason
+          : null,
+      active_interaction_before_request_client: activeInteractionBefore,
+      active_interaction_sent_to_server: activeInteractionBefore,
+      active_interaction_received_by_server: activeInteractionBefore,
+      active_interaction_before_routing: activeInteractionBefore,
+      active_interaction_after_response_gate: activeInteractionAfter,
+      active_interaction_returned_to_client: activeInteractionAfter,
+      active_interaction_accepted_by_client: true,
+      active_interaction_rejected_by_client_reason: null,
+      previous_instruction_id:
+        activeInteractionBefore?.last_assistant_instruction?.instruction_id ?? null,
+      attached_instruction_id: activeInteractionUpdate.attached_instruction_id,
+      previous_response_brief_created_this_turn: Boolean(previousResponseBriefAfter),
+      previous_response_brief_sent_to_server: Boolean(previousResponseBrief),
+      previous_response_brief_received_by_server: Boolean(previousResponseBrief),
+      previous_response_brief_used_in_routing:
+        activeInteractionRouting.previous_response_brief_used,
+      last_assistant_instruction_created_this_turn: Boolean(
+        activeInteractionUpdate.attached_instruction_id,
+      ),
+      last_assistant_instruction_sent_to_server: Boolean(
+        activeInteractionBefore?.last_assistant_instruction,
+      ),
+      last_assistant_instruction_used_for_followup: Boolean(
+        turnMeaning.requested_facet === "clarification_recovery" ||
+          turnMeaning.requested_facet.startsWith("active_") ||
+          activeInteractionBefore?.last_assistant_instruction,
+      ),
+      repeated_answer_detected: repeatedAnswerDetected,
+      repeated_answer_similarity: repeatedAnswerSimilarity,
+      repetition_repair_used: repetitionRepairUsed,
+      state_delta_detected: Boolean(turnMeaning.dynamic_slots?.state_delta_type),
+      state_delta_type: turnMeaning.dynamic_slots?.state_delta_type ?? null,
+      active_state_delta_applied: Boolean(
+        turnMeaning.dynamic_slots?.state_delta_type && activeInteractionAfter,
+      ),
+      new_slots_added: turnMeaning.dynamic_slots?.new_slots_added ?? [],
+      pending_unaddressed_slots:
+        turnMeaning.dynamic_slots?.pending_unaddressed_slots ??
+        activeInteractionAfter?.pending_unaddressed_slots ??
+        [],
+      last_answer_signature: activeInteractionAfter?.last_answer_signature ?? null,
+      meta_feedback_detected:
+        turnMeaning.speech_act === "meta_feedback" ||
+        turnMeaning.speech_act === "complaint_about_response" ||
+        turnMeaning.dynamic_slots?.state_delta_type === "meta_feedback",
+      internal_instruction_summary_rendered: /\bfollow\s+Choose\b|\bChoose a role frame\b/i.test(
+        finalAssistantText,
+      ),
+      instruction_renderable_field_used: !/\bfollow\s+Choose\b|\bChoose a role frame\b/i.test(
+        finalAssistantText,
+      ),
+      response_brief: responseBrief,
+      response_brief_id: responseBrief.brief_id,
+      state_returned_to_server: Boolean(activeInteractionBefore?.active_interaction_id),
+      state_persisted_to_client: true,
+      active_interaction_route_considered:
+        activeInteractionRouting.active_interaction_route_considered,
+      active_interaction_continuity_score:
+        activeInteractionRouting.active_interaction_continuity_score,
+      topic_shift_score: activeInteractionRouting.topic_shift_score,
+      candidate_routes: activeInteractionRouting.candidate_routes,
+      chosen_route: activeInteractionRouting.chosen_route,
+      rejected_routes: activeInteractionRouting.rejected_routes,
+      rejected_game_reason: activeInteractionRouting.rejected_game_reason,
+      rejected_generic_task_reason: activeInteractionRouting.rejected_generic_task_reason,
+      rejected_definition_reason: activeInteractionRouting.rejected_definition_reason,
+      conversation_mode_overridden_by_active_interaction:
+        activeInteractionRouting.conversation_mode_overridden_by_active_interaction,
+      previous_response_brief_used: activeInteractionRouting.previous_response_brief_used,
+    },
+  }));
 }

@@ -19,6 +19,12 @@ export type AnswerMode =
   | "dynamic_application_response"
   | "boundary_clarification"
   | "clarification_explanation"
+  | "revise"
+  | "bounded_guidance"
+  | "service_task_instruction"
+  | "next_step_instruction"
+  | "progress_acknowledgement"
+  | "readiness_continuation"
   | "safety_framed_answer";
 
 export type EmbodimentContext =
@@ -142,6 +148,12 @@ function contractForMode(
     case "dynamic_application_response":
     case "boundary_clarification":
     case "clarification_explanation":
+    case "revise":
+    case "bounded_guidance":
+    case "service_task_instruction":
+    case "next_step_instruction":
+    case "progress_acknowledgement":
+    case "readiness_continuation":
     case "safety_framed_answer":
       return {
         answer_mode: answerMode,
@@ -269,6 +281,39 @@ export function planAnswerIntent(input: {
   } else if (turnMeaning.requested_facet === "clarification_recovery") {
     answer_mode = "clarification_explanation";
     primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "correction_to_prior_plan") {
+    answer_mode = "revise";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "service_task") {
+    answer_mode = "service_task_instruction";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "training_guidance") {
+    answer_mode = "bounded_guidance";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "active_next_step") {
+    answer_mode = "next_step_instruction";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "active_progress_report") {
+    answer_mode = "progress_acknowledgement";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "active_readiness_confirmation") {
+    answer_mode = "readiness_continuation";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "active_step_confusion") {
+    answer_mode = "clarification_explanation";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (
+    turnMeaning.requested_facet === "pause_or_stop" ||
+    turnMeaning.requested_facet === "boundary_update"
+  ) {
+    answer_mode = "safety_framed_answer";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "correction_to_active_interaction") {
+    answer_mode = "revise";
+    primary_claim_type = "relational_dynamic_guidance";
+  } else if (turnMeaning.requested_facet === "response_correction") {
+    answer_mode = "revise";
+    primary_claim_type = "relational_dynamic_guidance";
   } else if (turnMeaning.requested_facet === "compound_relational_disclosure") {
     answer_mode = "focused_dynamic_followup";
     primary_claim_type = "relational_dynamic_guidance";
@@ -382,6 +427,12 @@ export function buildVisibleContractFallback(
       return `${subject} is ambiguous, so I would clarify the meaning before answering: private vulnerability, conversational visibility, or real-world public exposure?`;
     case "clarification_explanation":
       return `In plain language, I need the missing pieces so the dynamic is clear and bounded. You can answer with your role, one hard limit, and the service lane you want to start with.`;
+    case "revise":
+      return "You're right: drop the prior frame and make it a non-game task. Do one bounded useful action, then report what you did and one limit I should keep respecting.";
+    case "service_task_instruction":
+      return "Do one bounded service task now: choose a useful action you can finish in ten minutes, complete it cleanly, then report what you did and whether you stayed inside your limits.";
+    case "bounded_guidance":
+      return `For ${subject}, keep it gradual and bounded: start from your current comfortable baseline, move one small step at a time, stop at pain or anything that feels wrong, and name limits before escalation.`;
     case "safety_framed_answer":
       return `For ${subject}, start with boundaries: what is allowed, what is off-limits, what stops the scene, and what stays private.`;
     default:

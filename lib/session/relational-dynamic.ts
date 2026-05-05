@@ -25,12 +25,16 @@ export type RelationalDynamicFacet =
   | "equipment_disclosure"
   | "compound_relational_disclosure"
   | "clarification_recovery"
+  | "correction_to_prior_plan"
+  | "service_task"
+  | "training_guidance"
   | "dynamic_application"
   | "ambiguous_boundary_topic"
   | "safety_or_limits_discussion";
 
 export type RelationalDynamicAnswerContract =
   | RelationalDynamicFacet
+  | "correct_prior_plan"
   | "compound_equipment_application"
   | "answer_invitation_or_boundary";
 
@@ -53,6 +57,12 @@ export type RelationalDynamicSlots = {
   desired_service_lanes: string[];
   intensity_preferences: string[];
   training_goals: string[];
+  experience_level: string | null;
+  state_delta_type: string | null;
+  state_delta_summary: string | null;
+  new_slots_added: string[];
+  pending_unaddressed_slots: string[];
+  meta_feedback: string | null;
   hard_limits: string[];
   boundary_preferences: string[];
   dynamic_goals: string[];
@@ -68,6 +78,32 @@ export type RelationalDynamicSlots = {
   invitation_or_proposal: boolean;
   boundary_or_safety_needed: boolean;
   follow_up_needed: boolean;
+  active_interaction_id: string | null;
+  active_interaction_type: string | null;
+  active_status: string | null;
+  current_step_id: string | null;
+  current_step_summary: string | null;
+  expected_user_response_type: string | null;
+  next_step_policy: string | null;
+  progress_report: string | null;
+  safety_review_required: boolean;
+  current_task_lane: string | null;
+  daily_task_requested: boolean;
+  protocol_rules: string[];
+  previous_response_brief_id: string | null;
+  active_interaction_routing: {
+    active_interaction_route_considered: boolean;
+    active_interaction_continuity_score: number;
+    topic_shift_score: number;
+    candidate_routes: Array<{ route: string; eligible: boolean; reason: string }>;
+    chosen_route: string;
+    rejected_routes: Array<{ route: string; reason: string }>;
+    rejected_game_reason: string | null;
+    rejected_generic_task_reason: string | null;
+    rejected_definition_reason: string | null;
+    conversation_mode_overridden_by_active_interaction: boolean;
+    previous_response_brief_used: boolean;
+  } | null;
 };
 
 export type RelationalDynamicInterpretation = {
@@ -85,6 +121,9 @@ export type RelationalDynamicInterpretation = {
     | "dynamic_application_response"
     | "boundary_clarification"
     | "clarification_explanation"
+    | "revise"
+    | "bounded_guidance"
+    | "service_task_instruction"
     | "safety_framed_answer"
     | null;
   primary_subject: string | null;
@@ -106,6 +145,13 @@ export type RelationalDynamicState = {
   known_user_expectations: string[];
   pending_dynamic_question: string | null;
   boundaries_discussed_yes_no: "yes" | "no";
+  previous_response_brief_id: string | null;
+  previous_reply_goal: string | null;
+  previous_required_slots: string[];
+  previous_plain_language_summary: string | null;
+  previous_example_user_response: string | null;
+  previous_domain_handler: string | null;
+  previous_answer_mode: string | null;
 };
 
 export type RelationalDynamicTrace = {
@@ -146,6 +192,12 @@ export const EMPTY_RELATIONAL_DYNAMIC_SLOTS: RelationalDynamicSlots = {
   desired_service_lanes: [],
   intensity_preferences: [],
   training_goals: [],
+  experience_level: null,
+  state_delta_type: null,
+  state_delta_summary: null,
+  new_slots_added: [],
+  pending_unaddressed_slots: [],
+  meta_feedback: null,
   hard_limits: [],
   boundary_preferences: [],
   dynamic_goals: [],
@@ -161,6 +213,20 @@ export const EMPTY_RELATIONAL_DYNAMIC_SLOTS: RelationalDynamicSlots = {
   invitation_or_proposal: false,
   boundary_or_safety_needed: false,
   follow_up_needed: false,
+  active_interaction_id: null,
+  active_interaction_type: null,
+  active_status: null,
+  current_step_id: null,
+  current_step_summary: null,
+  expected_user_response_type: null,
+  next_step_policy: null,
+  progress_report: null,
+  safety_review_required: false,
+  current_task_lane: null,
+  daily_task_requested: false,
+  protocol_rules: [],
+  previous_response_brief_id: null,
+  active_interaction_routing: null,
 };
 
 export const RELATIONAL_DYNAMIC_MODEL = {
@@ -243,6 +309,12 @@ function isDynamicRoleSlot(value: string | null | undefined): boolean {
 
 function hasRelationalDynamicMarker(text: string | null | undefined): boolean {
   return /\b(dynamic|mistress|submissive|slave|pet|owned|ownership|serve|service|obedien(?:ce|t)|rules?|tasks?|structure|protocol|permission|chastity|denial|exposure|collar|cuffs?|rope|plug|toy|gear|limits?|boundar(?:y|ies)|control|approval|strict|told what to do|accountability|correction|guidance)\b/i.test(
+    normalizeLower(text),
+  );
+}
+
+function hasServiceTaskDynamicContext(text: string | null | undefined): boolean {
+  return /\b(dynamic|mistress|submissive|slave|pet|owned|ownership|serve|service|obedien(?:ce|t)|permission|approval|protocol|rules?|service\s+lane|service\s+task)\b/i.test(
     normalizeLower(text),
   );
 }
@@ -483,6 +555,62 @@ function hasUseInvitation(normalized: string): boolean {
   );
 }
 
+function isCorrectionAwayFromGame(normalized: string): boolean {
+  return /\b(?:not\s+a\s+game|task\s+not\s+a\s+game|stop\s+making\s+it\s+a\s+game|i\s+mean\s+(?:a\s+)?(?:service\s+)?task|give\s+me\s+a\s+task\s+instead|a\s+task\s+instead)\b/i.test(
+    normalized,
+  );
+}
+
+function extractTrainingSubject(normalized: string, contextText: string): string | null {
+  if (/\banal\b/i.test(normalized) && /\bchastity\b/i.test(normalized)) {
+    return "anal training, chastity training";
+  }
+  if (/\bchastity\b/i.test(normalized) && /\btraining|trained|train\b/i.test(normalized)) {
+    return "chastity training";
+  }
+  const direct =
+    normalized.match(/\b(?:anal\s+train(?:ing)?|anal\s+training)\b/i)?.[0] ??
+    normalized.match(/\btake\s+(?:bigger\s+)?dildos?\b/i)?.[0] ??
+    normalized.match(/\bwork\s+up\s+to\s+[^?.!,]{2,80}\b/i)?.[0] ??
+    normalized.match(/\bhelp\s+with\s+([^?.!,]{2,80}\btraining\b)/i)?.[1] ??
+    normalized.match(/\bapproach\s+([^?.!,]{2,80}\btraining\b)/i)?.[1] ??
+    null;
+  const cleanedDirect = cleanSlot(direct);
+  if (cleanedDirect) {
+    return /\btake\b/i.test(cleanedDirect) ? "taking bigger dildos" : cleanedDirect;
+  }
+  if (/\bwhy\s+can'?t\s+we\s+start\s+now\b/i.test(normalized) && /\banal|training|dildos?\b/i.test(contextText)) {
+    return "anal training";
+  }
+  return null;
+}
+
+function isTrainingGuidanceTurn(normalized: string, contextText: string): boolean {
+  if (
+    /\bwhat\s+kind\s+of\s+[^?.!]{0,40}\btraining\s+could\s+we\s+do\s+today\b/i.test(normalized) ||
+    /\bgive\s+me\s+[^?.!]{0,40}\btraining\b/i.test(normalized)
+  ) {
+    return false;
+  }
+  return Boolean(extractTrainingSubject(normalized, contextText)) ||
+    /\bwhat\s+things\s+can\s+we\s+do\s+to\s+help\s+with\b[^?.!]{0,80}\btraining\b/i.test(normalized) ||
+    /\bwhat\s+would\s+help\s+with\s+(?:that\s+)?training\b/i.test(normalized) ||
+    /\bhow\s+(?:do|can|would)\s+we\s+(?:approach|work\s+up\s+to|help\s+with)\b[^?.!]{0,80}\btraining\b/i.test(normalized) ||
+    (/^(?:how|tell me how)\??$/i.test(normalized) && /\banal|training|dildos?\b/i.test(contextText));
+}
+
+function isServiceTaskRequest(normalized: string, context: boolean): boolean {
+  if (/\b(?:for\s+)?\d+\s*(?:minutes?|mins?|hours?|hrs?)\b|\b(?:minute|hour)\b/i.test(normalized)) {
+    return false;
+  }
+  return (
+    (context && /\bi\s+want\s+to\s+do\s+tasks?\b/i.test(normalized)) ||
+    (context && /\b(?:give\s+me\s+(?:a\s+)?(?:daily\s+|service\s+)?task|what\s+(?:should\s+my\s+daily\s+task\s+be|task\s+should\s+i\s+do)|how\s+about\s+a\s+daily\s+task|something\s+to\s+do\s+for\s+you\s+today|what\s+should\s+my\s+first\s+task\s+be|what\s+should\s+i\s+do\s+for\s+you\s+every\s+day)\b/i.test(normalized)) ||
+    /\b(?:what\s+can\s+i\s+do\s+to\s+serve\s+right\s+now|what\s+would\s+be\s+useful\s+to\s+(?:you|u))\b/i.test(normalized) ||
+    /\bi\s+mean\s+service\s+task\b/i.test(normalized)
+  );
+}
+
 function component(input: {
   speech_act: RelationalDynamicSpeechAct;
   requested_facet: RelationalDynamicFacet | "invitation_response";
@@ -592,6 +720,12 @@ function dynamicAnswerMode(facet: RelationalDynamicFacet): RelationalDynamicInte
       return "protocol_suggestion";
     case "clarification_recovery":
       return "clarification_explanation";
+    case "correction_to_prior_plan":
+      return "revise";
+    case "service_task":
+      return "service_task_instruction";
+    case "training_guidance":
+      return "bounded_guidance";
     case "equipment_disclosure":
       return "equipment_acknowledgement";
     case "dynamic_application":
@@ -676,6 +810,18 @@ export function classifyRelationalDynamicTurn(input: {
     };
   }
   const context = hasDynamicContext({ normalized, ...input });
+  const priorDynamicContext = hasDynamicContext({
+    normalized: "",
+    previousAssistantText: input.previousAssistantText,
+    previousUserText: input.previousUserText,
+    currentTopic: input.currentTopic,
+  });
+  const priorServiceTaskContext = hasServiceTaskDynamicContext(
+    `${input.previousAssistantText ?? ""} ${input.previousUserText ?? ""} ${input.currentTopic ?? ""}`,
+  );
+  const contextText = normalizeLower(
+    `${input.previousAssistantText ?? ""} ${input.previousUserText ?? ""} ${input.currentTopic ?? ""}`,
+  );
   if (
     /\bwhat\s+if\s+i\s+(?:use|used|wear|wore|add|added)\b[^?.!]{0,120}\binstead\b/i.test(normalized) &&
     !hasExplicitRelationalDynamicIntent(normalized)
@@ -696,7 +842,10 @@ export function classifyRelationalDynamicTurn(input: {
   }
   if (
     hasActiveTrainingContext(`${input.previousAssistantText ?? ""} ${input.currentTopic ?? ""}`) &&
-    !hasExplicitRelationalDynamicIntent(normalized)
+    !hasExplicitRelationalDynamicIntent(normalized) &&
+    !isTrainingGuidanceTurn(normalized, contextText) &&
+    !isServiceTaskRequest(normalized, priorServiceTaskContext) &&
+    !isCorrectionAwayFromGame(normalized)
   ) {
     return {
       eligible: false,
@@ -712,8 +861,35 @@ export function classifyRelationalDynamicTurn(input: {
       reason: "active_training_context_without_explicit_relational_dynamic_intent",
     };
   }
+  if (isCorrectionAwayFromGame(normalized)) {
+    return interpretation({
+      speech_act: "service_request",
+      requested_facet: "correction_to_prior_plan",
+      answer_contract: "correct_prior_plan",
+      answer_mode: "revise",
+      primary_subject: "task instead of game",
+      entity_set: ["task", "game"],
+      slots: {
+        requested_direction: "replace prior game framing with a non-game service task",
+        service_style: "tasks",
+        desired_service_lanes: ["tasks"],
+        boundary_or_safety_needed: true,
+      },
+      confidence: 0.92,
+      reason: "user corrected prior game framing and requested task lane",
+    });
+  }
   const compoundDisclosure = extractCompoundRelationalDisclosure(normalized);
-  if (compoundDisclosure) {
+  if (
+    compoundDisclosure &&
+    (
+      compoundDisclosure.desired_service_lanes.length > 0 ||
+      compoundDisclosure.intensity_preferences.length > 0 ||
+      compoundDisclosure.hard_limits.length > 0 ||
+      compoundDisclosure.boundary_preferences.length > 0 ||
+      compoundDisclosure.dynamic_goals.length > compoundDisclosure.training_goals.length
+    )
+  ) {
     const subject = unique([
       ...compoundDisclosure.desired_service_lanes,
       ...compoundDisclosure.intensity_preferences,
@@ -766,6 +942,55 @@ export function classifyRelationalDynamicTurn(input: {
       ],
       confidence: 0.9,
       reason: "compound relational disclosure with service goals training and limits",
+    });
+  }
+  if (isTrainingGuidanceTurn(normalized, contextText)) {
+    const subject = extractTrainingSubject(normalized, contextText) ?? "anal training";
+    const trainingGoals = unique([
+      /\banal\b/i.test(normalized) ? "anal training" : null,
+      /\bchastity\b/i.test(normalized) ? "chastity training" : null,
+      ...subject.split(/\s*,\s*/).filter(Boolean),
+    ]);
+    return interpretation({
+      speech_act: /\?$|^(?:how|why|what)\b/i.test(normalized)
+        ? "request_for_direction"
+        : "user_preference_disclosure",
+      requested_facet: "training_guidance",
+      answer_contract: "training_guidance",
+      answer_mode: "bounded_guidance",
+      primary_subject: subject,
+      entity_set: unique([subject, "training", ...trainingGoals]),
+      slots: {
+        training_goals: trainingGoals.length > 0 ? trainingGoals : [subject],
+        dynamic_goals: ["training"],
+        requested_direction: /\b(?:how|what things|why)\b/i.test(normalized)
+          ? "training guidance"
+          : null,
+        boundary_or_safety_needed: true,
+        follow_up_needed: false,
+      },
+      confidence: 0.9,
+      reason: "training goal or guidance request in relational dynamic context",
+    });
+  }
+  if (isServiceTaskRequest(normalized, priorServiceTaskContext)) {
+    return interpretation({
+      speech_act: "service_request",
+      requested_facet: "service_task",
+      answer_contract: "service_task",
+      answer_mode: "service_task_instruction",
+      primary_subject: "service task",
+      entity_set: ["task"],
+      slots: {
+        requested_direction: "one bounded service task",
+        service_style: "tasks",
+        desired_service_lanes: ["tasks"],
+        current_task_lane: /\bdaily|every\s+day\b/i.test(normalized) ? "daily service task" : "service task",
+        daily_task_requested: /\bdaily|every\s+day\b/i.test(normalized),
+        boundary_or_safety_needed: true,
+      },
+      confidence: 0.89,
+      reason: "service task request separated from game lane",
     });
   }
   const disclosedObjects = extractObjectDisclosures(normalized);
@@ -947,10 +1172,12 @@ export function classifyRelationalDynamicTurn(input: {
   }
   if (
     /\bwhat\s+(?:do|would)\s+(?:you|u)\s+expect\b/i.test(normalized) ||
+    /\bwhat\s+(?:do|would)\s+(?:you|u)\s+want\s+from\s+(?:your\s+)?(?:submissive|slave|pet|servant)\b/i.test(normalized) ||
     /\bdo\s+(?:you|u)\s+like\s+having\s+(?:your\s+)?([^?.!,]{2,80})\b/i.test(normalized)
   ) {
     const expectation =
       extractExpectation(normalized) ??
+      cleanSlot(normalized.match(/\bwhat\s+(?:do|would)\s+(?:you|u)\s+want\s+from\s+(?:your\s+)?([^?.!,]{2,80})\b/i)?.[1]) ??
       cleanSlot(normalized.match(/\bdo\s+(?:you|u)\s+like\s+having\s+(?:your\s+)?([^?.!,]{2,80})\b/i)?.[1]);
     return interpretation({
       speech_act: "expectation_request",
@@ -1084,6 +1311,13 @@ export function createRelationalDynamicState(): RelationalDynamicState {
     known_user_expectations: [],
     pending_dynamic_question: null,
     boundaries_discussed_yes_no: "no",
+    previous_response_brief_id: null,
+    previous_reply_goal: null,
+    previous_required_slots: [],
+    previous_plain_language_summary: null,
+    previous_example_user_response: null,
+    previous_domain_handler: null,
+    previous_answer_mode: null,
   };
 }
 
@@ -1113,6 +1347,19 @@ export function normalizeRelationalDynamicState(value: unknown): RelationalDynam
     pending_dynamic_question:
       typeof raw.pending_dynamic_question === "string" ? cleanSlot(raw.pending_dynamic_question) : null,
     boundaries_discussed_yes_no: raw.boundaries_discussed_yes_no === "yes" ? "yes" : "no",
+    previous_response_brief_id:
+      typeof raw.previous_response_brief_id === "string" ? raw.previous_response_brief_id : null,
+    previous_reply_goal:
+      typeof raw.previous_reply_goal === "string" ? raw.previous_reply_goal : null,
+    previous_required_slots: list(raw.previous_required_slots),
+    previous_plain_language_summary:
+      typeof raw.previous_plain_language_summary === "string" ? raw.previous_plain_language_summary : null,
+    previous_example_user_response:
+      typeof raw.previous_example_user_response === "string" ? raw.previous_example_user_response : null,
+    previous_domain_handler:
+      typeof raw.previous_domain_handler === "string" ? raw.previous_domain_handler : null,
+    previous_answer_mode:
+      typeof raw.previous_answer_mode === "string" ? raw.previous_answer_mode : null,
   };
 }
 
@@ -1213,6 +1460,28 @@ export function realizeRelationalDynamicAnswer(plan: RelationalAnswerPlanLike): 
       return "Start with one bounded service check-in now: tell me one limit, choose one service lane (rules, tasks, permission, or approval), and name one thing you can report back on today. Then I can give you a first instruction that actually fits.";
     case "service_direction":
       return "Do this first: send a clean three-line check-in with your role, one limit I should respect, and the service lane you want now: rules, tasks, permission, or approval. That gives me enough to direct you without making the dynamic sloppy.";
+    case "correct_prior_plan":
+      return "You're right: not a game. Drop the game frame. Do this as a service task: choose one useful action you can finish in ten minutes, do it cleanly, then report what you did and one limit I should keep respecting.";
+    case "service_task":
+      return "Do one bounded service task now: set a ten-minute timer, complete one useful action you can honestly finish, then report what you did, whether you stayed inside your limits, and what you want corrected next.";
+    case "training_guidance": {
+      const training = slots.training_goals[0] ?? subject;
+      return `For ${training}, we keep it gradual and bounded: start from your current comfortable baseline, move one small step at a time, stop at pain or pressure that feels wrong, and name limits before escalation. First tell me your current baseline and one hard stop, then I can make the next step concrete.`;
+    }
+    case "active_next_step":
+      return `From the active interaction, the next bounded step is simple: stay with ${slots.current_step_summary ?? subject}, do one small safe step, then report comfort and limits before anything escalates.`;
+    case "active_progress_report":
+      return `Good, I hear the progress report. Keep it tied to the current step: ${slots.current_step_summary ?? subject}. If it becomes pain, discomfort, or uncertainty, stop and say so; otherwise report your comfort before the next instruction.`;
+    case "active_readiness_confirmation":
+      return `Since you are ready, we continue from the active interaction only. Follow ${slots.current_step_summary ?? subject} for one careful minute, stay inside your limit, then report comfort before anything changes.`;
+    case "active_step_confusion":
+      return `Plain language: the current step is ${slots.current_step_summary ?? subject}. I am asking so the active step, comfort, and limits stay clear. Example: "I am doing the current step, it feels comfortable, and pain is a stop."`;
+    case "pause_or_stop":
+      return "Paused. Stop the active interaction now and do not continue the current step unless you explicitly restart it. Your boundary is the priority.";
+    case "correction_to_active_interaction":
+      return "You're right: do not continue the rejected plan. We stay with the active interaction as a bounded service or training step, with one clear report-back before anything changes.";
+    case "boundary_update":
+      return "Boundary noted. That boundary now controls the active interaction: stop or scale down before it becomes too much, then report what changed so the next step stays inside your limits.";
     case "clarification_recovery": {
       const slotsList = slots.previous_ask_slots.length > 0 ? slots.previous_ask_slots.join(", ") : "the missing pieces";
       const summary =
@@ -1264,7 +1533,7 @@ export function validateRelationalDynamicAnswerContract(
   plan: RelationalAnswerPlanLike,
   answer: string,
 ): { ok: boolean; reason: string } | null {
-  if (!String(plan.answer_contract).match(/^(?:role_negotiation|service_initiation|service_direction|clarification_recovery|compound_relational_disclosure|expectations|protocol_setup|service_preference|user_preference|equipment_disclosure|compound_equipment_application|dynamic_application|ambiguous_boundary_topic|safety_or_limits_discussion)$/)) {
+  if (!String(plan.answer_contract).match(/^(?:role_negotiation|service_initiation|service_direction|correct_prior_plan|service_task|training_guidance|active_next_step|active_progress_report|active_readiness_confirmation|active_step_confusion|pause_or_stop|correction_to_active_interaction|boundary_update|clarification_recovery|compound_relational_disclosure|expectations|protocol_setup|service_preference|user_preference|equipment_disclosure|compound_equipment_application|dynamic_application|ambiguous_boundary_topic|safety_or_limits_discussion)$/)) {
     return null;
   }
   const text = normalizeLower(answer);
@@ -1275,6 +1544,39 @@ export function validateRelationalDynamicAnswerContract(
     return { ok: false, reason: "forbidden_relational_filler" };
   }
   switch (plan.answer_contract) {
+    case "active_next_step":
+      return /\b(active|current|same|step|next|bounded|report)\b/i.test(answer) &&
+        !/\bKeep going\b|\bgame|round|score|points?|win|lose|The game continues\b/i.test(answer)
+        ? { ok: true, reason: "active_next_step_contract_satisfied" }
+        : { ok: false, reason: "missing_active_next_step" };
+    case "active_progress_report":
+      return /\b(good|hear|noted|report|progress|current step|comfort|limit|stop|pain)\b/i.test(answer) &&
+        !/\bOpen is the part|Keep going\b/i.test(answer)
+        ? { ok: true, reason: "active_progress_report_contract_satisfied" }
+        : { ok: false, reason: "missing_progress_acknowledgement" };
+    case "active_readiness_confirmation":
+      return /\b(ready|active interaction|continue|next|step|limit|report)\b/i.test(answer) &&
+        !/\bgame|round|score|points?|win|lose|The game continues\b/i.test(answer)
+        ? { ok: true, reason: "active_readiness_contract_satisfied" }
+        : { ok: false, reason: "missing_readiness_continuation" };
+    case "active_step_confusion":
+      return /\b(plain language|current step|example|I am asking|simpler)\b/i.test(answer) &&
+        !/\bKeep going\b|\bconcrete part\b/i.test(answer)
+        ? { ok: true, reason: "active_step_confusion_contract_satisfied" }
+        : { ok: false, reason: "missing_active_step_clarification" };
+    case "pause_or_stop":
+      return /\b(paused|stop|do not continue|boundary)\b/i.test(answer)
+        ? { ok: true, reason: "pause_or_stop_contract_satisfied" }
+        : { ok: false, reason: "missing_pause_or_stop" };
+    case "correction_to_active_interaction":
+      return /\b(right|do not continue|rejected|active interaction|bounded|stay)\b/i.test(answer) &&
+        !/\bgame continues|round|score|points?|win|lose\b/i.test(answer)
+        ? { ok: true, reason: "active_correction_contract_satisfied" }
+        : { ok: false, reason: "missing_active_interaction_correction" };
+    case "boundary_update":
+      return /\b(boundary|limit|stop|scale down|inside your limits)\b/i.test(answer)
+        ? { ok: true, reason: "boundary_update_contract_satisfied" }
+        : { ok: false, reason: "missing_boundary_update" };
     case "role_negotiation":
       return /\b(role|roles|submissive|service submissive|pet|servant)\b/i.test(answer) &&
         /\b(option|options|recommend|recommendation|choose|question|which)\b/i.test(answer)
@@ -1290,6 +1592,24 @@ export function validateRelationalDynamicAnswerContract(
       )
         ? { ok: true, reason: "service_direction_contract_satisfied" }
         : { ok: false, reason: "missing_service_direction" };
+    case "correct_prior_plan":
+      return /\b(not a game|drop the game|no game|without game)\b/i.test(answer) &&
+        /\b(task|do this|report|check-in)\b/i.test(answer) &&
+        !/\bround|score|points?|win|lose|best three out of five|quick mental games?\b/i.test(answer)
+        ? { ok: true, reason: "correct_prior_plan_contract_satisfied" }
+        : { ok: false, reason: "missing_correction_to_non_game_task" };
+    case "service_task":
+      return /\b(task|do this|timer|minutes?|report|check-in)\b/i.test(answer) &&
+        /\b(limit|limits|bounded|inside|stop|boundary)\b/i.test(answer) &&
+        !/\bgame|round|score|points?|win|lose|best three out of five\b/i.test(answer)
+        ? { ok: true, reason: "service_task_contract_satisfied" }
+        : { ok: false, reason: "missing_bounded_service_task" };
+    case "training_guidance":
+      return /\b(training|baseline|gradual|pace|step|comfort|comfortable|pain|stop|limits?)\b/i.test(answer) &&
+        /\b(limit|limits|stop|pain|comfort|baseline)\b/i.test(answer) &&
+        !/\bgame|round|score|points?|win|lose|best three out of five\b/i.test(answer)
+        ? { ok: true, reason: "training_guidance_contract_satisfied" }
+        : { ok: false, reason: "missing_training_guidance" };
     case "clarification_recovery":
       return /\bplain language|I need|you can answer like this|example\b/i.test(answer) &&
         /\b(role|limit|service lane|slots?|pieces|choosing|must not cross)\b/i.test(answer) &&

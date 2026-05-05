@@ -25,6 +25,15 @@ import { buildOpenChatGreeting } from "./mode-style.ts";
 import { evaluateObservationTrust } from "./observation-trust.ts";
 import { replaySceneFromMessages } from "./replay-route-state.ts";
 import { applyResponseGate } from "./response-gate.ts";
+import type { ActiveInteractionState } from "./active-interaction.ts";
+import {
+  createActiveInteractionStateOwner,
+  type ActiveInteractionStateOwner,
+} from "./active-interaction.ts";
+import {
+  normalizePreviousResponseBriefSummary,
+  type PreviousResponseBriefSummary,
+} from "./response-brief.ts";
 import { buildSceneScaffoldReply } from "./scene-scaffolds.ts";
 import { buildSceneFallback, type SceneState } from "./scene-state.ts";
 import {
@@ -88,6 +97,8 @@ export type SessionReplayDeterministicBypassInput = {
   workingMemory: WorkingMemory;
   lastAssistantOutput: string | null;
   conversationStateSnapshot: ConversationStateSnapshot;
+  activeInteraction?: ActiveInteractionState | null;
+  previousResponseBrief?: PreviousResponseBriefSummary | null;
   toneProfile: ToneProfile;
   turnPlan: TurnPlan;
   requestId: string;
@@ -110,6 +121,19 @@ export type SessionReplayDeterministicBypassInput = {
   createStaticAssistantNdjsonResponse: (
     text: string,
     extraHeaders?: Record<string, string>,
+    statePayload?: {
+      activeInteraction?: ActiveInteractionState | null;
+      previousResponseBrief?: PreviousResponseBriefSummary | null;
+      activeStateOwner?: ActiveInteractionStateOwner | null;
+      statePersistence?: {
+        state_returned_to_server: boolean;
+        state_returned_to_client: boolean;
+        previous_instruction_id: string | null;
+        active_interaction_before_id: string | null;
+        active_interaction_after_id: string | null;
+      };
+      semanticTrace?: unknown;
+    },
   ) => Response;
   buildChatTraceHeaders: (input: BuildChatTraceHeadersInput) => Record<string, string>;
 };
@@ -630,7 +654,10 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     commitmentState: createCommitmentState(),
     sessionMemory: null,
     inventory: normalizedInventory,
+    previousResponseBrief: input.previousResponseBrief ?? null,
+    activeInteraction: input.activeInteraction ?? null,
     observationTrust: evaluateObservationTrust(input.observations),
+    commitOwnerId: input.requestId,
   });
   const persisted = await input.maybePersistTaskFromAssistantText({
     text: gated.text,
@@ -682,6 +709,14 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     "deterministic_scene",
   );
   const repairDebugHeaders = buildRepairDebugHeaders(repairResolution);
+  const previousBrief =
+    normalizePreviousResponseBriefSummary(gated.semanticTrace.persisted_response_brief_summary);
+  const activeStateOwner = createActiveInteractionStateOwner({
+    requestId: input.requestId,
+    turnId: input.turnId,
+    userMessageId: Number.isFinite(Number(input.turnId)) ? Number(input.turnId) : null,
+    assistantTurnId: gated.semanticTrace.commit_owner_id,
+  });
   return {
     response: input.createStaticAssistantNdjsonResponse(persisted.text, {
       ...input.buildChatTraceHeaders({
@@ -707,6 +742,20 @@ export async function maybeHandleSessionReplayDeterministicBypass(
             "x-raven-task-id": persisted.createdTaskId,
           }
         : {}),
+    }, {
+      activeInteraction: gated.semanticTrace.active_interaction_after,
+      previousResponseBrief: previousBrief,
+      activeStateOwner,
+      statePersistence: {
+        state_returned_to_server: Boolean(input.activeInteraction?.active_interaction_id),
+        state_returned_to_client: true,
+        previous_instruction_id:
+          input.activeInteraction?.last_assistant_instruction?.instruction_id ?? null,
+        active_interaction_before_id: input.activeInteraction?.active_interaction_id ?? null,
+        active_interaction_after_id:
+          gated.semanticTrace.active_interaction_after?.active_interaction_id ?? null,
+      },
+      semanticTrace: gated.semanticTrace,
     }),
     sessionReplayDebugContext,
     diagnosticRecord: withReplaySceneDiagnosticContext(input.diagnosticRecord, replayed.sceneState)

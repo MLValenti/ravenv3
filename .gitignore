@@ -43,7 +43,10 @@ yarn-error.log*
 next-env.d.ts
 
 # local runtime artifacts
+raven-memory.sqlite
 *.sqlite
+*.sqlite-shm
+*.sqlite-wal
 *.sqlite-*
 *.db
 *.db-*

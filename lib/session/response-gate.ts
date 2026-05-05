@@ -57,6 +57,18 @@ import {
   validateAnswerContract,
 } from "./raven-preferences.ts";
 import {
+  buildResponseBrief,
+  realizeResponseFromBrief,
+  summarizeResponseBrief,
+  validateReplyAgainstBrief,
+  type PreviousResponseBriefSummary,
+} from "./response-brief.ts";
+import {
+  routeTurnWithActiveInteraction,
+  updateActiveInteractionState,
+  type ActiveInteractionState,
+} from "./active-interaction.ts";
+import {
   buildVisibleContractFallback,
   lintVisibleResponse,
 } from "./raven-embodiment.ts";
@@ -74,6 +86,8 @@ export type ResponseGateInput = {
   sessionMemory?: SessionMemory | null;
   inventory?: SessionInventoryItem[] | null;
   semanticCandidates?: unknown[] | null;
+  previousResponseBrief?: PreviousResponseBriefSummary | null;
+  activeInteraction?: ActiveInteractionState | null;
   observationTrust?: {
     canDescribeVisuals: boolean;
     reason: string;
@@ -222,6 +236,27 @@ function normalize(text: string): string {
   return text.trim().replace(/\s+/g, " ");
 }
 
+function substantiveSimilarity(a: string | null | undefined, b: string | null | undefined): number {
+  const words = (value: string | null | undefined) =>
+    new Set(
+      normalize(value ?? "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((word) => word.length > 4),
+    );
+  const left = words(a);
+  const right = words(b);
+  if (left.size === 0 || right.size === 0) {
+    return 0;
+  }
+  let overlap = 0;
+  for (const word of left) {
+    if (right.has(word)) overlap += 1;
+  }
+  return overlap / Math.max(1, Math.min(left.size, right.size));
+}
+
 function splitSentences(text: string): string[] {
   const matches = text
     .replace(/\s+/g, " ")
@@ -314,6 +349,38 @@ function containsVisibleToolCommand(text: string): boolean {
   );
 }
 
+const RESPONSE_BRIEF_RELATIONAL_FACETS = new Set([
+  "role_negotiation",
+  "service_initiation",
+  "service_direction",
+  "expectations",
+  "protocol_setup",
+  "service_preference",
+  "user_preference",
+  "equipment_disclosure",
+  "compound_relational_disclosure",
+  "clarification_recovery",
+  "correction_to_prior_plan",
+  "response_correction",
+  "service_task",
+  "training_guidance",
+  "active_next_step",
+  "active_progress_report",
+  "active_readiness_confirmation",
+  "active_step_confusion",
+  "pause_or_stop",
+  "correction_to_active_interaction",
+  "boundary_update",
+  "dynamic_application",
+  "compound_equipment_application",
+  "ambiguous_boundary_topic",
+  "safety_or_limits_discussion",
+]);
+
+function isResponseBriefOwnedFacet(facet: string): boolean {
+  return RESPONSE_BRIEF_RELATIONAL_FACETS.has(facet);
+}
+
 function finalVisibleBarrierResult(input: {
   text: string;
   userText?: string | null;
@@ -357,6 +424,11 @@ function finalVisibleBarrierResult(input: {
       : /\bin this game\b|\brules of this game\b|\bbest three out of five\b|\bconsequence task\b|\bscor(?:e|ing)\b|\bcurrent move\b|\bfirst prompt\b|\bprompt\s*\/?\s*answer\b|\bround\b|\bYou will not drift\b/i.test(
           normalized,
         );
+  const containsActiveRelationalGameLeak =
+    input.domainHandler === "relational_dynamics" &&
+    /\brock\s+paper\s+scissors\b|\bquick\s+games?\b|\bchosen\s+game\b|\bdispute\s+method\b|\bchoose\s+quick\b/i.test(
+      normalized,
+    );
   const gameVisibleAllowed =
     input.domainHandler !== "relational_dynamics" &&
     (requestedFacets.has("continuation") ||
@@ -364,7 +436,7 @@ function finalVisibleBarrierResult(input: {
       input.sceneState.topic_type === "game_execution" ||
       input.sceneState.topic_type === "game_setup" ||
       input.sceneState.topic_type === "reward_window");
-  if (containsGameScaffoldLanguage && !gameVisibleAllowed) {
+  if ((containsGameScaffoldLanguage || containsActiveRelationalGameLeak) && !gameVisibleAllowed) {
     return { ok: false, reason: "game_scaffold_outside_game" };
   }
   if (/\byou have\b[^.?!]{0,140}\bwould you like\b/i.test(normalized)) {
@@ -384,6 +456,12 @@ function finalVisibleBarrierResult(input: {
   }
   if (/\bKeep going\b|\bStay with the concrete part\b/i.test(normalized)) {
     return { ok: false, reason: "legacy_continuation_filler" };
+  }
+  if (/\bOpen is the part\b|\bopen is the\b/i.test(normalized)) {
+    return { ok: false, reason: "stale_phrase_fragment" };
+  }
+  if (input.domainHandler !== "game" && /\bThe game continues\b/i.test(normalized)) {
+    return { ok: false, reason: "game_continuation_outside_game" };
   }
   if (requestedFacets.has("clarification_recovery") && /\bconcrete part\b|\bI mean my last point\b/i.test(normalized)) {
     return { ok: false, reason: "weak_clarification_recovery" };
@@ -406,6 +484,12 @@ function inferPreviousSemanticPlanId(text: string | null | undefined): string | 
   }
   if (/\b(role|roles|submissive|service submissive|pet|servant|mistress\/submissive)\b/i.test(normalized)) {
     return "semantic_planner:relational_dynamic_answer:role_negotiation";
+  }
+  if (/\b(anal training|training|baseline|gradual|comfortable baseline|pain|stop|hard stop|work up)\b/i.test(normalized)) {
+    return "semantic_planner:relational_dynamic_answer:training_guidance";
+  }
+  if (/\b(non-game service task|not a game|drop the game|ten-minute task|service task)\b/i.test(normalized)) {
+    return "semantic_planner:relational_dynamic_answer:service_task";
   }
   if (/\b(chastity cage|butt plug|restraints?|dildos?|collar|leash|cuffs?|rope|toy|toys|gear|equipment)\b/i.test(normalized)) {
     return /\b(use|used|protocol|incorporate|choose one item|report before and after)\b/i.test(normalized)
@@ -1905,9 +1989,15 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       null,
     currentTopic: continuityTopic,
     llmSemanticCandidates: input.semanticCandidates ?? [],
+    activeInteraction: input.activeInteraction ?? null,
   });
   const turnMeaning = canonicalTurnState.turn_meaning;
   const plannedMove = canonicalTurnState.planned_move;
+  const activeInteractionRouting = routeTurnWithActiveInteraction({
+    text: input.userText,
+    activeInteraction: input.activeInteraction ?? null,
+    previousResponseBriefPresent: Boolean(input.previousResponseBrief),
+  });
   const previousSemanticPlanId = inferPreviousSemanticPlanId(input.lastAssistantText);
   const continuationAttachedToPlanId =
     turnMeaning.continuity_attachment === "immediate_prior_answer" ||
@@ -1939,8 +2029,48 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
   };
   const finalizeCurrentResult = (): ResponseGateResult => {
     const answerPlan = planDomainAnswer({ turnMeaning, plannedMove });
+    const responseBrief = buildResponseBrief({
+      turnMeaning,
+      plannedMove,
+      answerIntent: answerPlan.answer_intent,
+      previousBrief: input.previousResponseBrief ?? null,
+      activeInteraction: input.activeInteraction ?? null,
+      sourceTurnId: input.commitOwnerId ?? null,
+    });
+    let briefRealization = realizeResponseFromBrief({
+      brief: responseBrief,
+      llmCandidate: input.candidateSource === "raw_model" ? text : null,
+    });
+    let responseBriefValidation = validateReplyAgainstBrief(normalize(text), responseBrief);
+    let contentRealizer:
+      | "llm_brief_realizer"
+      | "deterministic_brief_fallback"
+      | null = responseBriefValidation.ok && input.candidateSource === "raw_model"
+        ? "llm_brief_realizer"
+        : null;
+    let briefReRealizationAttempts = 0;
+    const realizeFromBrief = (decisionReason: string, sourcePath: string): void => {
+      briefRealization = realizeResponseFromBrief({
+        brief: responseBrief,
+        llmCandidate: input.candidateSource === "raw_model" ? text : null,
+      });
+      responseBriefValidation = briefRealization.validation_result;
+      contentRealizer = briefRealization.content_realizer;
+      briefReRealizationAttempts += Math.max(1, briefRealization.re_realization_attempts);
+      if (normalize(briefRealization.text) !== normalize(text)) {
+        const oldText = text;
+        text = briefRealization.text;
+        forced = true;
+        reason = decisionReason;
+        traceDecision(oldText, text, decisionReason, sourcePath);
+      }
+    };
     let visibleLintResult: { ok: boolean; reason: string } | null = null;
     const semanticOwnedMove = isSemanticPlannerOwnedMove(plannedMove);
+    const briefOwnedMove =
+      semanticOwnedMove &&
+      turnMeaning.current_domain_handler === "relational_dynamics" &&
+      isResponseBriefOwnedFacet(turnMeaning.requested_facet);
     const hasStructuredVisibleContract =
       answerPlan.content_source === "raven_preference_model" ||
       answerPlan.content_source === "raven_embodiment_model" ||
@@ -1949,7 +2079,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     const candidateSource = input.candidateSource ?? "unknown";
     const isLegacyCandidateSource =
       /scaffold|fallback|weak|deterministic|game|repair|turn_plan/i.test(candidateSource);
-    if (semanticOwnedMove && hasStructuredVisibleContract) {
+    if (briefOwnedMove && hasStructuredVisibleContract) {
       const barrierBeforeContract = finalVisibleBarrierResult({
         text,
         userText: input.userText,
@@ -1965,19 +2095,22 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
           isLegacyCandidateSource
         );
       if (shouldRealizeFromPlan) {
-        const groundedReply = realizeValidatedDomainAnswer(answerPlan);
-        if (groundedReply && normalize(groundedReply) !== normalize(text)) {
-          const oldText = text;
-          text = groundedReply;
-          forced = true;
-          reason = !barrierBeforeContract.ok
+        realizeFromBrief(
+          !barrierBeforeContract.ok
             ? `final_visible_barrier_${barrierBeforeContract.reason}`
-            : "semantic_authority_realized_from_plan";
-          traceDecision(oldText, text, reason, "semanticAuthorityRealizer");
-        }
+            : "semantic_authority_realized_from_response_brief",
+          "responseBriefRealizer",
+        );
       }
     }
     if (semanticOwnedMove) {
+      responseBriefValidation = validateReplyAgainstBrief(normalize(text), responseBrief);
+      if (briefOwnedMove && !responseBriefValidation.ok) {
+        realizeFromBrief(
+          `response_brief_contract_repair_${responseBriefValidation.reason}`,
+          "responseBriefContractRepair",
+        );
+      }
       const contractBeforeLint = validateAnswerContract(answerPlan, normalize(text));
       const userTextHasSpecialSelfDisclosure =
         /\bfavou?rite\s+(?:colou?r|thing to talk about)|\b(?:like|enjoy)\s+talking\s+about\b/i.test(
@@ -1988,13 +2121,20 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         contractBeforeLint.reason !== "forbidden_filler" &&
         !userTextHasSpecialSelfDisclosure
       ) {
-        const groundedReply = realizeValidatedDomainAnswer(answerPlan);
-        if (groundedReply) {
-          const oldText = text;
-          text = groundedReply;
-          forced = true;
-          reason = `semantic_contract_repair_${contractBeforeLint.reason}`;
-          traceDecision(oldText, text, reason, "semanticContractRepair");
+        if (briefOwnedMove) {
+          realizeFromBrief(
+            `semantic_contract_repair_${contractBeforeLint.reason}`,
+            "semanticContractRepairFromBrief",
+          );
+        } else {
+          const groundedReply = realizeValidatedDomainAnswer(answerPlan);
+          if (groundedReply) {
+            const oldText = text;
+            text = groundedReply;
+            forced = true;
+            reason = `semantic_contract_repair_${contractBeforeLint.reason}`;
+            traceDecision(oldText, text, reason, "semanticContractRepair");
+          }
         }
       }
     }
@@ -2002,17 +2142,25 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       const lint = lintVisibleResponse(normalize(text), answerPlan.answer_intent);
       visibleLintResult = lint;
       if (!lint.ok) {
-        const oldText = text;
-        const semanticRepair =
-          realizeValidatedDomainAnswer(answerPlan) ??
-          buildVisibleContractFallback(answerPlan.answer_intent, turnMeaning.required_referent);
-        const repairedLint = lintVisibleResponse(semanticRepair, answerPlan.answer_intent);
-        text = repairedLint.ok
-          ? semanticRepair
-          : buildVisibleContractFallback(answerPlan.answer_intent, turnMeaning.required_referent);
-        forced = true;
-        reason = `visible_output_lint_${lint.reason}`;
-        traceDecision(oldText, text, reason, "visibleOutputLint");
+        if (briefOwnedMove) {
+          realizeFromBrief(`visible_output_lint_${lint.reason}`, "visibleOutputLintFromBrief");
+        } else {
+          const oldText = text;
+          const semanticRepair =
+            realizeValidatedDomainAnswer(answerPlan) ??
+            buildVisibleContractFallback(answerPlan.answer_intent, turnMeaning.required_referent);
+          text = semanticRepair;
+          forced = true;
+          reason = `visible_output_lint_${lint.reason}`;
+          traceDecision(oldText, text, reason, "visibleOutputLint");
+        }
+        if (!lintVisibleResponse(normalize(text), answerPlan.answer_intent).ok) {
+          const oldText = text;
+          text = buildVisibleContractFallback(answerPlan.answer_intent, turnMeaning.required_referent);
+          forced = true;
+          reason = `visible_output_lint_${lint.reason}`;
+          traceDecision(oldText, text, reason, "visibleOutputLintFallback");
+        }
         visibleLintResult = lintVisibleResponse(normalize(text), answerPlan.answer_intent);
       }
     }
@@ -2026,7 +2174,13 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     });
     if (!finalBarrier.ok) {
       const oldText = text;
-      if (semanticOwnedMove) {
+      if (briefOwnedMove) {
+        reason = `final_visible_barrier_${finalBarrier.reason}`;
+        realizeFromBrief(reason, "semanticFinalVisibleBarrierFromBrief");
+        if (normalize(oldText) !== normalize(text)) {
+          traceDecision(oldText, text, reason, "semanticFinalVisibleBarrierFromBrief");
+        }
+      } else if (semanticOwnedMove) {
         text =
           finalBarrier.reason === "style_only_clarification" && isShortClarificationTurn(input.userText)
             ? buildShortClarificationReply({
@@ -2078,7 +2232,60 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       }
       forced = true;
     }
+    if (briefOwnedMove) {
+      responseBriefValidation = validateReplyAgainstBrief(normalize(text), responseBrief);
+      if (!responseBriefValidation.ok) {
+        realizeFromBrief(
+          `final_response_brief_contract_repair_${responseBriefValidation.reason}`,
+          "finalResponseBriefContractRepair",
+        );
+      }
+    }
+    const similarity = substantiveSimilarity(text, input.lastAssistantText ?? "");
+    const newDeltaDetected = Boolean(turnMeaning.dynamic_slots?.state_delta_type);
+    let repeatedAnswerDetected = false;
+    let repetitionRepairUsed = false;
+    if (
+      briefOwnedMove &&
+      newDeltaDetected &&
+      input.lastAssistantText &&
+      similarity >= 0.58
+    ) {
+      repeatedAnswerDetected = true;
+      const oldText = text;
+      const delta = turnMeaning.dynamic_slots?.state_delta_summary ?? "new user state";
+      const deltaBrief = {
+        ...responseBrief,
+        required_novelty_reason:
+          responseBrief.required_novelty_reason ??
+          `Do not repeat the previous answer. Address the new user delta: ${delta}.`,
+        must_address: Array.from(
+          new Set([...responseBrief.must_address, "revised answer", "experience level"]),
+        ),
+      };
+      const repaired = realizeResponseFromBrief({ brief: deltaBrief });
+      text = repaired.text;
+      responseBriefValidation = repaired.validation_result;
+      contentRealizer = repaired.content_realizer;
+      briefReRealizationAttempts += Math.max(1, repaired.re_realization_attempts);
+      forced = true;
+      reason = "repetition_repair_state_delta";
+      repetitionRepairUsed = true;
+      traceDecision(oldText, text, reason, "responseBriefRepetitionRepair");
+    }
     const finalOutput = normalize(text);
+    responseBriefValidation = validateReplyAgainstBrief(finalOutput, responseBrief);
+    if (!contentRealizer && responseBriefValidation.ok && input.candidateSource === "raw_model") {
+      contentRealizer = "llm_brief_realizer";
+    }
+    const previousBriefSummary = summarizeResponseBrief(responseBrief, finalOutput);
+    const activeInteractionUpdate = updateActiveInteractionState({
+      before: input.activeInteraction ?? null,
+      turnMeaning,
+      responseBrief,
+      assistantText: finalOutput,
+      turnId: input.commitOwnerId ?? null,
+    });
     const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
     const classifiedWinningSourceFamily = classifyWinningSourceFamily(
       finalOutput,
@@ -2088,9 +2295,11 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     const semanticRepairOwned =
       semanticOwnedMove &&
       (reason.startsWith("semantic_contract_repair_") ||
+        reason.startsWith("response_brief_contract_repair_") ||
         reason.startsWith("visible_output_lint_") ||
         reason.startsWith("final_visible_barrier_") ||
-        reason === "semantic_authority_realized_from_plan");
+        reason === "semantic_authority_realized_from_plan" ||
+        reason === "semantic_authority_realized_from_response_brief");
     const winningSourceFamily =
       semanticOwnedMove && (!forced || semanticRepairOwned)
         ? "semantic_planner"
@@ -2134,6 +2343,44 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       visibleLintResult,
       answerIntent: answerPlan.answer_intent,
       semanticArbitration: canonicalTurnState.semantic_arbitration,
+      responseBriefId: responseBrief.brief_id,
+      responseBrief,
+      contentRealizer,
+      validationResult: responseBriefValidation,
+      validationFailures: responseBriefValidation.failures,
+      reRealizationAttempts: briefReRealizationAttempts,
+      repeatedAnswerDetected,
+      repeatedAnswerSimilarity: similarity,
+      repetitionRepairUsed,
+      previousResponseBriefId:
+        responseBrief.previous_substantive_ask?.previous_response_brief_id ?? null,
+      correctionTargetPlanId:
+        turnMeaning.requested_facet === "correction_to_prior_plan" ? previousSemanticPlanId : null,
+      domainOverrideBlocked:
+        semanticOwnedMove &&
+        turnMeaning.current_domain_handler !== "game" &&
+        /game|scaffold/i.test(candidateSource),
+      legacyVisibleEmitterBlocked: semanticOwnedMove && isLegacyCandidateSource && !finalMatchesRaw,
+      persistedResponseBriefSummary: previousBriefSummary,
+      activeInteractionBefore: input.activeInteraction ?? null,
+      activeInteractionAfter: activeInteractionUpdate.after,
+      activeInteractionTransition: activeInteractionUpdate.transition,
+      currentStepId: activeInteractionUpdate.after.current_step_id,
+      previousInstructionId: input.activeInteraction?.last_assistant_instruction?.instruction_id ?? null,
+      attachedInstructionId: activeInteractionUpdate.attached_instruction_id,
+      expectedUserResponseType: activeInteractionUpdate.after.awaiting_user_input_type,
+      nextStepPolicy: activeInteractionUpdate.after.next_step_policy,
+      activeInteractionRealizerUsed: contentRealizer,
+      staleFragmentRejected:
+        replacementChain.some((entry) => /stale_phrase_fragment|stale_fragment/i.test(entry.reason)) ||
+        /stale_phrase_fragment/.test(reason),
+      gameCandidateRejectedDueToInteractionType:
+        activeInteractionUpdate.after.interaction_type !== "game" &&
+        (replacementChain.some((entry) => /game|round|score|scaffold/i.test(`${entry.oldText} ${entry.reason}`)) ||
+          Boolean(activeInteractionRouting.rejected_game_reason)),
+      activeInteractionRouting,
+      internalInstructionSummaryRendered: /\bfollow\s+Choose\b|\bChoose a role frame\b/i.test(finalOutput),
+      instructionRenderableFieldUsed: !/\bfollow\s+Choose\b|\bChoose a role frame\b/i.test(finalOutput),
     });
     if (forced && replacementChain.length === 0) {
       replacementChain.push({

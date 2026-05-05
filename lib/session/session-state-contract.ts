@@ -38,12 +38,18 @@ import {
   type AssistantTurnRuntimeState,
   type AssistantVisibleTurnEntry,
 } from "./assistant-turn-guard.ts";
+import {
+  createActiveInteractionState,
+  normalizeActiveInteractionState,
+  type ActiveInteractionState,
+} from "./active-interaction.ts";
 
 export type SessionStateContract = {
   turnGate: TurnGateState;
   workingMemory: WorkingMemory;
   sessionTopic: SessionTopic | null;
   assistantRuntime: AssistantTurnRuntimeState;
+  activeInteraction: ActiveInteractionState;
 };
 
 export type UserTurnReduceResult = {
@@ -68,6 +74,7 @@ export function createSessionStateContract(sessionId?: string): SessionStateCont
     workingMemory: createWorkingMemory(),
     sessionTopic: null,
     assistantRuntime: createAssistantTurnRuntimeState(),
+    activeInteraction: createActiveInteractionState(),
   };
 }
 
@@ -142,6 +149,7 @@ export function reduceUserTurn(
         state.assistantRuntime,
         nextGate.lastUserMessageId,
       ),
+      activeInteraction: normalizeActiveInteractionState(state.activeInteraction) ?? createActiveInteractionState(),
     },
     intent,
     route,
@@ -230,6 +238,7 @@ export function reduceAssistantEmission(
     workingMemory: nextWorkingMemory,
     sessionTopic: nextWorkingMemory.session_topic,
     assistantRuntime: state.assistantRuntime,
+    activeInteraction: normalizeActiveInteractionState(state.activeInteraction) ?? createActiveInteractionState(),
   };
 }
 
@@ -252,9 +261,10 @@ export function reduceBeginAssistantRequest(
       reduced.next === state.assistantRuntime
         ? state
         : {
-            ...state,
-            assistantRuntime: reduced.next,
-          },
+          ...state,
+          assistantRuntime: reduced.next,
+          activeInteraction: normalizeActiveInteractionState(state.activeInteraction) ?? createActiveInteractionState(),
+        },
     decision: reduced.decision,
   };
 }
@@ -275,6 +285,7 @@ export function reduceFinishAssistantRequest(
       input.sourceUserMessageId,
       input.requestId,
     ),
+    activeInteraction: normalizeActiveInteractionState(state.activeInteraction) ?? createActiveInteractionState(),
   };
 }
 
@@ -288,9 +299,10 @@ export function reduceRegisterAssistantFinalize(
       reduced.next === state.assistantRuntime
         ? state
         : {
-            ...state,
-            assistantRuntime: reduced.next,
-          },
+          ...state,
+          assistantRuntime: reduced.next,
+          activeInteraction: normalizeActiveInteractionState(state.activeInteraction) ?? createActiveInteractionState(),
+        },
     decision: reduced.decision,
   };
 }
@@ -316,10 +328,21 @@ export function reduceVisibleAssistantCommit(
       reduced.next === state.assistantRuntime
         ? state
         : {
-            ...state,
-            assistantRuntime: reduced.next,
-          },
+          ...state,
+          assistantRuntime: reduced.next,
+          activeInteraction: normalizeActiveInteractionState(state.activeInteraction) ?? createActiveInteractionState(),
+        },
     decision: reduced.decision,
+  };
+}
+
+export function reduceActiveInteractionState(
+  state: SessionStateContract,
+  activeInteraction: ActiveInteractionState | null | undefined,
+): SessionStateContract {
+  return {
+    ...state,
+    activeInteraction: normalizeActiveInteractionState(activeInteraction) ?? createActiveInteractionState(),
   };
 }
 

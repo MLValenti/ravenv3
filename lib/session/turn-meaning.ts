@@ -21,6 +21,13 @@ import {
   type RelationalDynamicSlots,
   type RelationalDynamicTrace,
 } from "./relational-dynamic.ts";
+import {
+  classifyActiveInteractionTurn,
+  routeTurnWithActiveInteraction,
+  type ActiveInteractionState,
+  type ActiveInteractionTransition,
+  type ActiveInteractionRoutingDecision,
+} from "./active-interaction.ts";
 
 export type TurnSpeechAct =
   | "greeting"
@@ -49,6 +56,16 @@ export type TurnSpeechAct =
   | "dynamic_application_request"
   | "boundary_or_safety_topic"
   | "ambiguous_dynamic_topic"
+  | "next_step_request"
+  | "progress_report"
+  | "readiness_confirmation"
+  | "active_step_confusion"
+  | "continue_current_step"
+  | "pause_or_stop_request"
+  | "correction_to_active_interaction"
+  | "meta_feedback"
+  | "complaint_about_response"
+  | "boundary_update"
   | "unknown";
 
 export type TurnTarget =
@@ -134,6 +151,17 @@ export type TurnRequestedFacet =
   | "equipment_disclosure"
   | "compound_relational_disclosure"
   | "clarification_recovery"
+  | "correction_to_prior_plan"
+  | "service_task"
+  | "training_guidance"
+  | "active_next_step"
+  | "active_progress_report"
+  | "active_readiness_confirmation"
+  | "active_step_confusion"
+  | "pause_or_stop"
+  | "correction_to_active_interaction"
+  | "response_correction"
+  | "boundary_update"
   | "dynamic_application"
   | "ambiguous_boundary_topic"
   | "safety_or_limits_discussion"
@@ -172,6 +200,16 @@ export type TurnAnswerContract =
   | "equipment_disclosure"
   | "compound_relational_disclosure"
   | "clarification_recovery"
+  | "correct_prior_plan"
+  | "service_task"
+  | "training_guidance"
+  | "active_next_step"
+  | "active_progress_report"
+  | "active_readiness_confirmation"
+  | "active_step_confusion"
+  | "pause_or_stop"
+  | "correction_to_active_interaction"
+  | "boundary_update"
   | "dynamic_application"
   | "ambiguous_boundary_topic"
   | "safety_or_limits_discussion"
@@ -307,6 +345,7 @@ export type TurnMeaningInput = {
   currentTopic?: string | null;
   llmSemanticCandidates?: unknown[] | null;
   llmSemanticRejectedCandidates?: RejectedSemanticCandidate[] | null;
+  activeInteraction?: ActiveInteractionState | null;
 };
 
 export type CanonicalTurnState = {
@@ -725,6 +764,28 @@ function answerContractForFacet(facet: TurnRequestedFacet): TurnAnswerContract {
       return "compound_relational_disclosure";
     case "clarification_recovery":
       return "clarification_recovery";
+    case "correction_to_prior_plan":
+      return "correct_prior_plan";
+    case "service_task":
+      return "service_task";
+    case "training_guidance":
+      return "training_guidance";
+    case "active_next_step":
+      return "active_next_step";
+    case "active_progress_report":
+      return "active_progress_report";
+    case "active_readiness_confirmation":
+      return "active_readiness_confirmation";
+    case "active_step_confusion":
+      return "active_step_confusion";
+    case "pause_or_stop":
+      return "pause_or_stop";
+    case "correction_to_active_interaction":
+      return "correction_to_active_interaction";
+    case "response_correction":
+      return "revise_or_clarify_prior_claim";
+    case "boundary_update":
+      return "boundary_update";
     case "dynamic_application":
       return "dynamic_application";
     case "ambiguous_boundary_topic":
@@ -804,6 +865,28 @@ function slotsForFacet(facet: TurnRequestedFacet): string[] {
       ];
     case "clarification_recovery":
       return ["previous_ask_summary", "previous_ask_slots", "example_user_response"];
+    case "correction_to_prior_plan":
+      return ["prior_plan_correction", "non_game_task", "game_boundary"];
+    case "service_task":
+      return ["bounded_task", "report_back", "boundary"];
+    case "training_guidance":
+      return ["training_goal", "pacing", "comfort", "limits", "next_step"];
+    case "active_next_step":
+      return ["active_interaction_id", "current_step", "next_bounded_step"];
+    case "active_progress_report":
+      return ["active_interaction_id", "progress_report", "current_step", "safety_check"];
+    case "active_readiness_confirmation":
+      return ["active_interaction_id", "readiness", "next_bounded_step"];
+    case "active_step_confusion":
+      return ["active_interaction_id", "current_step", "plain_language_summary", "example"];
+    case "pause_or_stop":
+      return ["active_interaction_id", "stop_or_pause", "boundary"];
+    case "correction_to_active_interaction":
+      return ["active_interaction_id", "correction", "updated_interaction_type"];
+    case "response_correction":
+      return ["meta_feedback", "corrected_course", "revised_answer"];
+    case "boundary_update":
+      return ["active_interaction_id", "boundary", "safety_check"];
     case "compound_equipment_application":
       return ["disclosed_object", "invitation_answer", "dynamic_application", "capability_boundary", "bounded_next_step"];
     case "dynamic_application":
@@ -882,6 +965,16 @@ function isRelationalDynamicFacet(facet: TurnRequestedFacet): boolean {
     facet === "equipment_disclosure" ||
     facet === "compound_relational_disclosure" ||
     facet === "clarification_recovery" ||
+    facet === "correction_to_prior_plan" ||
+    facet === "service_task" ||
+    facet === "training_guidance" ||
+    facet === "active_next_step" ||
+    facet === "active_progress_report" ||
+    facet === "active_readiness_confirmation" ||
+    facet === "active_step_confusion" ||
+    facet === "pause_or_stop" ||
+    facet === "correction_to_active_interaction" ||
+    facet === "boundary_update" ||
     facet === "dynamic_application" ||
     facet === "ambiguous_boundary_topic" ||
     facet === "safety_or_limits_discussion" ||
@@ -933,7 +1026,19 @@ const HANDLER_FACETS: Record<TurnDomainHandler, TurnRequestedFacet[]> = {
     "equipment_disclosure",
     "compound_relational_disclosure",
     "clarification_recovery",
+    "correction_to_prior_plan",
+    "service_task",
+    "training_guidance",
+    "active_next_step",
+    "active_progress_report",
+    "active_readiness_confirmation",
+    "active_step_confusion",
+    "pause_or_stop",
+    "correction_to_active_interaction",
+    "response_correction",
+    "boundary_update",
     "dynamic_application",
+    "compound_equipment_application",
     "ambiguous_boundary_topic",
     "safety_or_limits_discussion",
   ],
@@ -1318,7 +1423,7 @@ function inferPreviousSubstantiveAsk(text: string | null | undefined): PreviousS
       semantic_plan_id: "semantic_planner:relational_dynamic_answer:service_direction",
     };
   }
-  if (/\bservice lane\b[\s\S]{0,160}\btraining goal\b|\bintensity level\b|\banal training frame\b/i.test(normalized)) {
+  if (/\bservice lane\b[\s\S]{0,160}\btraining goal\b|\bservice goals?\b[\s\S]{0,160}\btraining goals?\b|\bhard limits?\b[\s\S]{0,120}\bbounded starting protocol\b|\bintensity level\b|\banal training frame\b/i.test(normalized)) {
     return {
       ask_type: "compound_boundary_setup",
       ask_slots: ["service_lane", "training_goal", "hard_limit", "intensity_level"],
@@ -1489,6 +1594,135 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
   }
 
   const disclosedPreference = extractUserPreferenceDisclosure(rawText);
+
+  const activeInteractionTurn = classifyActiveInteractionTurn(normalized, input.activeInteraction ?? null);
+  if (activeInteractionTurn) {
+    const active = input.activeInteraction ?? null;
+    const activeRouting = routeTurnWithActiveInteraction({
+      text: normalized,
+      activeInteraction: active,
+      previousResponseBriefPresent: Boolean(active?.previous_response_brief_id),
+    });
+    const trainingGoals = uniqueEntities([
+      ...((active?.training_goals ?? []) as string[]),
+      /\banal\b/i.test(normalized) ? "anal training" : null,
+      /\bchastity\b/i.test(normalized) ? "chastity training" : null,
+      ...(activeInteractionTurn.requested_facet === "training_guidance"
+        ? String(activeInteractionTurn.primary_subject ?? "")
+            .split(/\s*,\s*/)
+            .filter(Boolean)
+        : []),
+    ]);
+    const protocolRules = uniqueEntities([
+      ...((active?.protocol_rules ?? []) as string[]),
+      /\bdaily\s+check[- ]?in\b/i.test(normalized) ? "daily check-in" : null,
+      /\bpermission rules?\b/i.test(normalized) ? "permission rule" : null,
+      /\bfirst rule|rule|protocol\b/i.test(normalized) ? "active protocol rule" : null,
+    ]);
+    return buildMeaning({
+      rawText,
+      normalized,
+      normalization_applied: semanticNormalization.normalization_applied,
+      normalization_reason: semanticNormalization.normalization_reason,
+      speech_act: activeInteractionTurn.speech_act,
+      target: "assistant",
+      subject_domain: "relational_exchange",
+      requested_operation: activeInteractionTurn.requested_operation,
+      referent: activeInteractionTurn.primary_subject,
+      stance: activeInteractionTurn.safety_review_required ? "curious" : "reciprocal",
+      continuity_attachment: "active_thread",
+      confidence: activeInteractionTurn.confidence,
+      question_shape:
+        activeInteractionTurn.speech_act === "active_step_confusion" ||
+        activeInteractionTurn.speech_act === "user_confusion" ||
+        activeInteractionTurn.requested_facet === "clarification_recovery"
+          ? "clarification_request"
+          : activeInteractionTurn.speech_act === "correction_to_active_interaction"
+            ? "challenge_or_correction"
+            : activeInteractionTurn.speech_act === "progress_report" ||
+                activeInteractionTurn.speech_act === "readiness_confirmation"
+              ? "statement_or_disclosure"
+              : "open_question",
+      requested_facet: activeInteractionTurn.requested_facet,
+      answer_contract: activeInteractionTurn.answer_contract,
+      required_answer_slots: slotsForFacet(activeInteractionTurn.requested_facet),
+      primary_subject: activeInteractionTurn.primary_subject,
+      entity_set: [activeInteractionTurn.primary_subject].filter(Boolean),
+      required_referent: activeInteractionTurn.primary_subject,
+      required_scope: "answer_plus_explanation",
+      current_domain_handler: "relational_dynamics",
+      dynamic_slots: {
+        ...EMPTY_RELATIONAL_DYNAMIC_SLOTS,
+        requested_direction:
+          activeInteractionTurn.requested_facet === "active_next_step"
+            ? "next step from active interaction"
+            : null,
+        previous_ask_id: active?.last_assistant_instruction?.instruction_id ?? null,
+        previous_ask_type: active?.awaiting_user_input_type ?? null,
+        previous_ask_slots: active?.last_assistant_instruction?.required_slots ?? [],
+        previous_ask_summary: active?.current_step_summary ?? null,
+        previous_ask_example: active?.last_assistant_instruction?.example_user_response ?? null,
+        clarification_recovery_used:
+          activeInteractionTurn.requested_facet === "active_step_confusion" ||
+          activeInteractionTurn.requested_facet === "clarification_recovery",
+        boundary_or_safety_needed: activeInteractionTurn.safety_review_required,
+        follow_up_needed: false,
+        active_interaction_id: active?.active_interaction_id ?? null,
+        active_interaction_type: active?.interaction_type ?? null,
+        active_status: active?.status ?? null,
+        current_step_id: active?.current_step_id ?? null,
+        current_step_summary: active?.current_step_summary ?? null,
+        expected_user_response_type: active?.awaiting_user_input_type ?? null,
+        next_step_policy: active?.next_step_policy ?? null,
+        progress_report:
+          activeInteractionTurn.speech_act === "progress_report" ||
+          activeInteractionTurn.speech_act === "continue_current_step"
+            ? rawText
+            : null,
+        safety_review_required: activeInteractionTurn.safety_review_required,
+        current_task_lane:
+          activeInteractionTurn.requested_facet === "service_task"
+            ? /\bdaily|every\s+day\b/i.test(normalized)
+              ? "daily service task"
+              : "service task"
+            : active?.current_task_lane ?? null,
+        daily_task_requested:
+          /\bdaily|every\s+day\b/i.test(normalized) ||
+          active?.daily_task_requested === true,
+        training_goals: trainingGoals,
+        protocol_rules: protocolRules,
+        previous_response_brief_id: active?.previous_response_brief_id ?? null,
+        active_interaction_routing: activeRouting,
+        desired_role: activeInteractionTurn.desired_role ?? null,
+        experience_level:
+          activeInteractionTurn.experience_level ?? active?.known_experience_level ?? null,
+        state_delta_type: activeInteractionTurn.state_delta_type ?? null,
+        state_delta_summary: activeInteractionTurn.state_delta_summary ?? null,
+        new_slots_added: activeInteractionTurn.new_slots_added ?? [],
+        pending_unaddressed_slots:
+          activeInteractionTurn.pending_unaddressed_slots ??
+          active?.pending_unaddressed_slots ??
+          [],
+        meta_feedback: activeInteractionTurn.meta_feedback ?? null,
+      },
+      components: [
+        {
+          speech_act: activeInteractionTurn.speech_act,
+          target: "assistant",
+          subject_domain: "relational_exchange",
+          requested_operation: activeInteractionTurn.requested_operation,
+          referent: activeInteractionTurn.primary_subject,
+          requested_facet: activeInteractionTurn.requested_facet,
+          answer_contract: activeInteractionTurn.answer_contract,
+          primary_subject: activeInteractionTurn.primary_subject,
+          entity_set: [activeInteractionTurn.primary_subject],
+        },
+      ],
+      alternative_interpretations: [
+        alternative("continuation", "continue", 0.28, "surface form can look like a generic continuation"),
+      ],
+    });
+  }
 
   const previousAsk = inferPreviousSubstantiveAsk(input.previousAssistantText);
   if (previousAsk && isUserConfusionRequest(normalized)) {
@@ -2252,8 +2486,14 @@ export function planSemanticResponse(turnMeaning: TurnMeaning): PlannedMove {
   if (turnMeaning.current_domain_handler === "relational_dynamics") {
     return {
       move:
-        turnMeaning.requested_facet === "service_initiation" ||
+        turnMeaning.requested_facet === "correction_to_prior_plan" ||
+        turnMeaning.requested_facet === "correction_to_active_interaction" ||
+        turnMeaning.requested_facet === "response_correction"
+          ? "revise"
+          : turnMeaning.requested_facet === "service_initiation" ||
         turnMeaning.requested_facet === "service_direction" ||
+        turnMeaning.requested_facet === "service_task" ||
+        turnMeaning.requested_facet === "training_guidance" ||
         turnMeaning.requested_facet === "protocol_setup"
           ? "answer"
           : turnMeaning.dynamic_slots?.follow_up_needed
@@ -2405,6 +2645,9 @@ function facetRequiresReferent(facet: TurnRequestedFacet): boolean {
     facet === "equipment_disclosure" ||
     facet === "compound_relational_disclosure" ||
     facet === "clarification_recovery" ||
+    facet === "correction_to_prior_plan" ||
+    facet === "service_task" ||
+    facet === "training_guidance" ||
     facet === "dynamic_application" ||
     facet === "ambiguous_boundary_topic" ||
     facet === "safety_or_limits_discussion" ||
@@ -2492,6 +2735,16 @@ function facetSpecificityRank(facet: TurnRequestedFacet): number {
     case "equipment_disclosure":
     case "compound_relational_disclosure":
     case "clarification_recovery":
+    case "correction_to_prior_plan":
+    case "service_task":
+    case "training_guidance":
+    case "active_next_step":
+    case "active_progress_report":
+    case "active_readiness_confirmation":
+    case "active_step_confusion":
+    case "pause_or_stop":
+    case "correction_to_active_interaction":
+    case "boundary_update":
     case "dynamic_application":
     case "ambiguous_boundary_topic":
     case "safety_or_limits_discussion":
@@ -2792,6 +3045,72 @@ export type SemanticTurnTrace = {
   semantic_arbitration: SemanticCandidateArbitrationTrace | null;
   required_answer_slots: string[];
   relational_dynamic_trace: RelationalDynamicTrace | null;
+  response_brief_id: string | null;
+  response_brief: unknown | null;
+  content_realizer: string | null;
+  validation_result: {
+    ok: boolean;
+    reason: string;
+    failures?: string[];
+  } | null;
+  validation_failures: string[];
+  re_realization_attempts: number;
+  previous_response_brief_id: string | null;
+  correction_target_plan_id: string | null;
+  domain_override_blocked: boolean;
+  legacy_visible_emitter_blocked: boolean;
+  persisted_response_brief_summary: unknown | null;
+  active_interaction_before: ActiveInteractionState | null;
+  active_interaction_after: ActiveInteractionState | null;
+  active_interaction_transition: ActiveInteractionTransition | null;
+  current_step_id: string | null;
+  previous_instruction_id: string | null;
+  attached_instruction_id: string | null;
+  expected_user_response_type: string | null;
+  next_step_policy: string | null;
+  active_interaction_realizer_used: string | null;
+  stale_fragment_rejected: boolean;
+  game_candidate_rejected_due_to_interaction_type: boolean;
+  active_interaction_route_considered: boolean;
+  active_interaction_continuity_score: number;
+  topic_shift_score: number;
+  candidate_routes: Array<{ route: string; eligible: boolean; reason: string }>;
+  chosen_route: string | null;
+  rejected_routes: Array<{ route: string; reason: string }>;
+  rejected_game_reason: string | null;
+  rejected_generic_task_reason: string | null;
+  rejected_definition_reason: string | null;
+  conversation_mode_overridden_by_active_interaction: boolean;
+  previous_response_brief_used: boolean;
+  active_state_created_this_turn: boolean;
+  active_state_creation_reason: string | null;
+  active_interaction_before_request_client: ActiveInteractionState | null;
+  active_interaction_sent_to_server: ActiveInteractionState | null;
+  active_interaction_received_by_server: ActiveInteractionState | null;
+  active_interaction_before_routing: ActiveInteractionState | null;
+  active_interaction_after_response_gate: ActiveInteractionState | null;
+  active_interaction_returned_to_client: ActiveInteractionState | null;
+  active_interaction_accepted_by_client: boolean;
+  active_interaction_rejected_by_client_reason: string | null;
+  previous_response_brief_created_this_turn: boolean;
+  previous_response_brief_sent_to_server: boolean;
+  previous_response_brief_received_by_server: boolean;
+  previous_response_brief_used_in_routing: boolean;
+  last_assistant_instruction_created_this_turn: boolean;
+  last_assistant_instruction_sent_to_server: boolean;
+  last_assistant_instruction_used_for_followup: boolean;
+  state_delta_detected: boolean;
+  state_delta_type: string | null;
+  active_state_delta_applied: boolean;
+  new_slots_added: string[];
+  pending_unaddressed_slots: string[];
+  last_answer_signature: string | null;
+  repeated_answer_detected: boolean;
+  repeated_answer_similarity: number;
+  repetition_repair_used: boolean;
+  meta_feedback_detected: boolean;
+  internal_instruction_summary_rendered: boolean;
+  instruction_renderable_field_used: boolean;
 };
 
 export function buildSemanticTurnTrace(input: {
@@ -2827,6 +3146,50 @@ export function buildSemanticTurnTrace(input: {
   staleScaffoldRejected?: boolean;
   staleGameScaffoldRejected?: boolean;
   rawEchoLintRejected?: boolean;
+  responseBriefId?: string | null;
+  responseBrief?: unknown | null;
+  contentRealizer?: string | null;
+  validationResult?: {
+    ok: boolean;
+    reason: string;
+    failures?: string[];
+  } | null;
+  validationFailures?: string[];
+  reRealizationAttempts?: number;
+  previousResponseBriefId?: string | null;
+  correctionTargetPlanId?: string | null;
+  domainOverrideBlocked?: boolean;
+  legacyVisibleEmitterBlocked?: boolean;
+  persistedResponseBriefSummary?: unknown | null;
+  activeInteractionBefore?: ActiveInteractionState | null;
+  activeInteractionAfter?: ActiveInteractionState | null;
+  activeInteractionTransition?: ActiveInteractionTransition | null;
+  currentStepId?: string | null;
+  previousInstructionId?: string | null;
+  attachedInstructionId?: string | null;
+  expectedUserResponseType?: string | null;
+  nextStepPolicy?: string | null;
+  activeInteractionRealizerUsed?: string | null;
+  staleFragmentRejected?: boolean;
+  gameCandidateRejectedDueToInteractionType?: boolean;
+  activeInteractionRouting?: ActiveInteractionRoutingDecision | null;
+  activeInteractionBeforeRequestClient?: ActiveInteractionState | null;
+  activeInteractionSentToServer?: ActiveInteractionState | null;
+  activeInteractionReceivedByServer?: ActiveInteractionState | null;
+  activeInteractionBeforeRouting?: ActiveInteractionState | null;
+  activeInteractionAfterResponseGate?: ActiveInteractionState | null;
+  activeInteractionReturnedToClient?: ActiveInteractionState | null;
+  activeInteractionAcceptedByClient?: boolean;
+  activeInteractionRejectedByClientReason?: string | null;
+  previousResponseBriefSentToServer?: boolean;
+  previousResponseBriefReceivedByServer?: boolean;
+  lastAssistantInstructionSentToServer?: boolean;
+  lastAssistantInstructionUsedForFollowup?: boolean;
+  repeatedAnswerDetected?: boolean;
+  repeatedAnswerSimilarity?: number;
+  repetitionRepairUsed?: boolean;
+  internalInstructionSummaryRendered?: boolean;
+  instructionRenderableFieldUsed?: boolean;
 }): SemanticTurnTrace {
   const semanticOwnedContentKeys = new Set([
     "greeting_open",
@@ -2942,5 +3305,148 @@ export function buildSemanticTurnTrace(input: {
     semantic_arbitration: input.semanticArbitration ?? null,
     required_answer_slots: input.turnMeaning.required_answer_slots,
     relational_dynamic_trace: input.relationalDynamicTrace ?? defaultRelationalTrace,
+    response_brief_id: input.responseBriefId ?? null,
+    response_brief: input.responseBrief ?? null,
+    content_realizer: input.contentRealizer ?? null,
+    validation_result: input.validationResult ?? null,
+    validation_failures: input.validationFailures ?? [],
+    re_realization_attempts: input.reRealizationAttempts ?? 0,
+    previous_response_brief_id: input.previousResponseBriefId ?? null,
+    correction_target_plan_id: input.correctionTargetPlanId ?? null,
+    domain_override_blocked: input.domainOverrideBlocked ?? false,
+    legacy_visible_emitter_blocked: input.legacyVisibleEmitterBlocked ?? false,
+    persisted_response_brief_summary: input.persistedResponseBriefSummary ?? null,
+    active_interaction_before: input.activeInteractionBefore ?? null,
+    active_interaction_after: input.activeInteractionAfter ?? null,
+    active_interaction_transition: input.activeInteractionTransition ?? null,
+    current_step_id: input.currentStepId ?? null,
+    previous_instruction_id: input.previousInstructionId ?? null,
+    attached_instruction_id: input.attachedInstructionId ?? null,
+    expected_user_response_type: input.expectedUserResponseType ?? null,
+    next_step_policy: input.nextStepPolicy ?? null,
+    active_interaction_realizer_used: input.activeInteractionRealizerUsed ?? null,
+    stale_fragment_rejected: input.staleFragmentRejected ?? false,
+    game_candidate_rejected_due_to_interaction_type:
+      input.gameCandidateRejectedDueToInteractionType ?? false,
+    active_interaction_route_considered:
+      input.activeInteractionRouting?.active_interaction_route_considered ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.active_interaction_route_considered ??
+      false,
+    active_interaction_continuity_score:
+      input.activeInteractionRouting?.active_interaction_continuity_score ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.active_interaction_continuity_score ??
+      0,
+    topic_shift_score:
+      input.activeInteractionRouting?.topic_shift_score ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.topic_shift_score ??
+      0,
+    candidate_routes:
+      input.activeInteractionRouting?.candidate_routes ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.candidate_routes ??
+      [],
+    chosen_route:
+      input.activeInteractionRouting?.chosen_route ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.chosen_route ??
+      null,
+    rejected_routes:
+      input.activeInteractionRouting?.rejected_routes ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.rejected_routes ??
+      [],
+    rejected_game_reason:
+      input.activeInteractionRouting?.rejected_game_reason ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.rejected_game_reason ??
+      null,
+    rejected_generic_task_reason:
+      input.activeInteractionRouting?.rejected_generic_task_reason ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.rejected_generic_task_reason ??
+      null,
+    rejected_definition_reason:
+      input.activeInteractionRouting?.rejected_definition_reason ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.rejected_definition_reason ??
+      null,
+    conversation_mode_overridden_by_active_interaction:
+      input.activeInteractionRouting?.conversation_mode_overridden_by_active_interaction ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.conversation_mode_overridden_by_active_interaction ??
+      false,
+    previous_response_brief_used:
+      input.activeInteractionRouting?.previous_response_brief_used ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.previous_response_brief_used ??
+      false,
+    active_state_created_this_turn: Boolean(
+      !input.activeInteractionBefore?.active_interaction_id &&
+        input.activeInteractionAfter?.active_interaction_id,
+    ),
+    active_state_creation_reason:
+      !input.activeInteractionBefore?.active_interaction_id &&
+      input.activeInteractionAfter?.active_interaction_id
+        ? input.activeInteractionTransition?.reason ?? null
+        : null,
+    active_interaction_before_request_client:
+      input.activeInteractionBeforeRequestClient ?? input.activeInteractionBefore ?? null,
+    active_interaction_sent_to_server:
+      input.activeInteractionSentToServer ?? input.activeInteractionBefore ?? null,
+    active_interaction_received_by_server:
+      input.activeInteractionReceivedByServer ?? input.activeInteractionBefore ?? null,
+    active_interaction_before_routing:
+      input.activeInteractionBeforeRouting ?? input.activeInteractionBefore ?? null,
+    active_interaction_after_response_gate:
+      input.activeInteractionAfterResponseGate ?? input.activeInteractionAfter ?? null,
+    active_interaction_returned_to_client:
+      input.activeInteractionReturnedToClient ?? input.activeInteractionAfter ?? null,
+    active_interaction_accepted_by_client: input.activeInteractionAcceptedByClient ?? true,
+    active_interaction_rejected_by_client_reason:
+      input.activeInteractionRejectedByClientReason ?? null,
+    previous_response_brief_created_this_turn: Boolean(input.persistedResponseBriefSummary),
+    previous_response_brief_sent_to_server:
+      input.previousResponseBriefSentToServer ??
+      Boolean(input.previousResponseBriefId || input.activeInteractionBefore?.previous_response_brief_id),
+    previous_response_brief_received_by_server:
+      input.previousResponseBriefReceivedByServer ??
+      Boolean(input.previousResponseBriefId || input.activeInteractionBefore?.previous_response_brief_id),
+    previous_response_brief_used_in_routing:
+      input.activeInteractionRouting?.previous_response_brief_used ??
+      input.turnMeaning.dynamic_slots?.active_interaction_routing?.previous_response_brief_used ??
+      false,
+    last_assistant_instruction_created_this_turn: Boolean(input.attachedInstructionId),
+    last_assistant_instruction_sent_to_server:
+      input.lastAssistantInstructionSentToServer ??
+      Boolean(input.activeInteractionBefore?.last_assistant_instruction),
+    last_assistant_instruction_used_for_followup:
+      input.lastAssistantInstructionUsedForFollowup ??
+      Boolean(
+        input.turnMeaning.dynamic_slots?.previous_ask_id ||
+          input.turnMeaning.requested_facet === "clarification_recovery" ||
+          input.turnMeaning.requested_facet.startsWith("active_") ||
+          input.activeInteractionRouting?.chosen_route === "relational_dynamic",
+      ),
+    state_delta_detected: Boolean(input.turnMeaning.dynamic_slots?.state_delta_type),
+    state_delta_type: input.turnMeaning.dynamic_slots?.state_delta_type ?? null,
+    active_state_delta_applied: Boolean(
+      input.turnMeaning.dynamic_slots?.state_delta_type && input.activeInteractionAfter,
+    ),
+    new_slots_added: input.turnMeaning.dynamic_slots?.new_slots_added ?? [],
+    pending_unaddressed_slots:
+      input.turnMeaning.dynamic_slots?.pending_unaddressed_slots ??
+      input.activeInteractionAfter?.pending_unaddressed_slots ??
+      [],
+    last_answer_signature: input.activeInteractionAfter?.last_answer_signature ?? null,
+    repeated_answer_detected: input.repeatedAnswerDetected ?? false,
+    repeated_answer_similarity: input.repeatedAnswerSimilarity ?? 0,
+    repetition_repair_used: input.repetitionRepairUsed ?? false,
+    meta_feedback_detected:
+      input.turnMeaning.speech_act === "meta_feedback" ||
+      input.turnMeaning.speech_act === "complaint_about_response" ||
+      input.turnMeaning.dynamic_slots?.state_delta_type === "meta_feedback",
+    internal_instruction_summary_rendered:
+      input.internalInstructionSummaryRendered ??
+      Boolean(
+        input.activeInteractionAfter?.last_answer_signature &&
+          /choose role frame|follow choose|name boundary give one next/i.test(
+            input.activeInteractionAfter.last_answer_signature,
+          ),
+      ),
+    instruction_renderable_field_used:
+      input.instructionRenderableFieldUsed ??
+      Boolean(input.turnMeaning.requested_facet.startsWith("active_") || input.turnMeaning.dynamic_slots?.state_delta_type),
   };
 }
