@@ -5,6 +5,7 @@ import {
   prepareAssistantOutputChannels,
   sanitizeSessionVisibleAssistantText,
   shouldAcceptAssistantTurnOwnership,
+  shouldRecoverSkippedAssistantRender,
   shouldPreferServerTurnContract,
 } from "../lib/session/live-turn-integrity.ts";
 
@@ -145,4 +146,32 @@ test("assistant output channel split treats action-only text as device-channel o
   assert.equal(output.visible_reply, "");
   assert.equal(output.hasRenderableText, true);
   assert.equal(output.debug_trace.visible_text_contains_tool_command, false);
+});
+
+test("recovery render stays disabled for authority-blocked appends", () => {
+  assert.equal(
+    shouldRecoverSkippedAssistantRender({
+      appendCommitted: false,
+      appendReason: "authority_blocked:authority_trace_missing",
+      hasRenderableText: true,
+      sourceUserMessageId: 3,
+      lastAssistantUserMessageId: 2,
+      visibleAssistantAlreadyCommitted: false,
+    }),
+    false,
+  );
+});
+
+test("recovery render stays disabled for planner validation errors", () => {
+  assert.equal(
+    shouldRecoverSkippedAssistantRender({
+      appendCommitted: false,
+      appendReason: "planner_validation_error:planner_step_missing_required_fields",
+      hasRenderableText: true,
+      sourceUserMessageId: 3,
+      lastAssistantUserMessageId: 2,
+      visibleAssistantAlreadyCommitted: false,
+    }),
+    false,
+  );
 });

@@ -656,6 +656,8 @@ export async function maybeHandleSessionReplayDeterministicBypass(
     inventory: normalizedInventory,
     previousResponseBrief: input.previousResponseBrief ?? null,
     activeInteraction: input.activeInteraction ?? null,
+    deterministicBypassUsed: true,
+    deterministicBypassReason: bypassDecision.reason,
     observationTrust: evaluateObservationTrust(input.observations),
     commitOwnerId: input.requestId,
   });

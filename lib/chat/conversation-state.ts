@@ -156,6 +156,7 @@ type AssistantTurnInput = {
   text: string;
   ravenIntent: string;
   nowMs: number;
+  stateEligible?: boolean;
 };
 
 const WINDOW_LIMIT = 10;
@@ -1527,6 +1528,13 @@ function extractCommitments(text: string): string[] {
     ) {
       return false;
     }
+    if (
+      /\b(?:answer my questions directly|answer my next question|proceed as planned|how can i assist you|for this, keep the answer practical|keep it bounded)\b/i.test(
+        sentence,
+      )
+    ) {
+      return false;
+    }
     return (
       /\bhere is your task\b/i.test(sentence) ||
       /\breport back\b/i.test(sentence) ||
@@ -1839,6 +1847,12 @@ export function noteConversationAssistantTurn(
   input: AssistantTurnInput,
 ): ConversationStateSnapshot {
   const text = normalize(input.text);
+  if (input.stateEligible === false) {
+    return applyConversationStateInvariants({
+      ...state,
+      updated_at: input.nowMs,
+    });
+  }
   const remainingQuestions = state.unanswered_questions.filter(
     (question) => !questionSatisfied(question, text),
   );

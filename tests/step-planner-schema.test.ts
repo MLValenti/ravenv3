@@ -53,6 +53,26 @@ test("disallowed checkType is rejected", () => {
   }
 });
 
+test("planner step missing visible fields reports missing fields instead of creating a step", () => {
+  const result = validatePlannedStep(
+    {
+      mode: "talk",
+      say: "",
+      timeoutSeconds: 12,
+      onPassSay: "",
+      onFailSay: "",
+      maxRetries: 0,
+    },
+    4,
+  );
+
+  assert.equal(result.ok, false);
+  if (!result.ok) {
+    assert.equal(result.error, "Planner step must include non-empty say, onPassSay, and onFailSay.");
+    assert.deepEqual(result.missingFields, ["say", "onPassSay", "onFailSay"]);
+  }
+});
+
 test("safe fallback step does not use pace questions", () => {
   const fallback = createSafeFallbackStep(9);
   assert.equal(fallback.mode, "talk");

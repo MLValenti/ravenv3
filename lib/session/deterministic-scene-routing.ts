@@ -162,8 +162,8 @@ export function explainBypassModelForSceneTurn(input: {
   if (input.hasDeterministicCandidate) {
     if (isHighConfidenceOpenConversationTurn) {
       return {
-        bypass: true,
-        reason: "semantic_open_conversation_planner",
+        bypass: false,
+        reason: "ordinary_conversation_blocks_deterministic_bypass",
       };
     }
     if (

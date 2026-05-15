@@ -14,6 +14,32 @@ export type ResponseBrief = {
   brief_id: string;
   source_turn_id: string | null;
   semantic_plan_id: string;
+  visible_intent: {
+    reply_goal: string;
+    answer_mode: string;
+    requested_facet: string;
+    primary_subject: string | null;
+    desired_depth: ResponseBriefDepth;
+  };
+  visible_constraints: {
+    required_answer_slots: string[];
+    must_address: string[];
+    must_not_include: string[];
+    allowed_boundaries: string[];
+    capability_limits: string[];
+  };
+  nonvisible_renderer_instruction: string;
+  nonvisible_state_summary: {
+    domain_handler: string;
+    speech_act: string;
+    continuity_target: string | null;
+    active_interaction_id: string | null;
+    interaction_type: string | null;
+    active_status: string | null;
+  };
+  nonvisible_repair_instruction: string | null;
+  nonvisible_validation_reason: string | null;
+  nonvisible_debug: Record<string, unknown>;
   user_text: string;
   normalized_user_text: string;
   domain_handler: string;
@@ -110,6 +136,16 @@ export type ResponseBriefValidationResult = {
 export type ResponseBriefRealizationResult = {
   text: string;
   content_realizer: "llm_brief_realizer" | "deterministic_brief_fallback";
+  assistant_output_quality:
+    | "valid_model_reply"
+    | "valid_fallback_reply"
+    | "repaired_reply"
+    | "rejected_internal_leak"
+    | "fallback_plan_leak"
+    | "generic_assistant_voice"
+    | "failed_fulfillment"
+    | "unknown";
+  assistant_output_context_eligible: boolean;
   validation_result: ResponseBriefValidationResult;
   validation_failures: string[];
   re_realization_attempts: number;
@@ -117,6 +153,18 @@ export type ResponseBriefRealizationResult = {
 };
 
 const GAME_LANGUAGE = /\b(?:in this game|game|round|score|scoring|points?|win|lose|best (?:two|three|of)|best three out of five|consequence task|quick mental games?|prompt\/answer|answer this question for points)\b/i;
+const INTERNAL_METADATA_LANGUAGE =
+  /\b(?:ResponseBrief|TurnMeaning|semantic_plan|semantic planner|answer_mode|requested_facet|requested_facets|domain_handler|content_source|candidate_routes|active_interaction|current_step_summary|previous_response_brief|validation_failures|validator|debug_trace|planned_move|turn_plan|scaffold_source|replacement_chain|memory slot|route name|mode name|state summary|visible_intent|visible_constraints|nonvisible_renderer_instruction|nonvisible_state_summary|nonvisible_repair_instruction|nonvisible_validation_reason|nonvisible_debug)\b/i;
+const INTERNAL_FIELD_LINE =
+  /(?:^|\n)\s*(?:[a-z][a-z0-9]*_){1,}[a-z0-9]+\s*[:=]\s*\S/i;
+const INTERNAL_JSONISH_FIELD =
+  /["{,]\s*"(?:brief_id|semantic_plan_id|answer_mode|requested_facet|domain_handler|dynamic_slots|candidate_routes|replacement_chain)"\s*:/i;
+const GENERIC_ASSISTANT_VOICE_LANGUAGE =
+  /\b(?:how\s+(?:can|may)\s+i\s+(?:assist|help)\s+you(?:\s+today)?|hi\s+there[!.]?\s+how\s+can\s+i\s+(?:assist|help)|as\s+an\s+ai\s+assistant|i\s+am\s+an\s+ai|i'm\s+an\s+ai|is\s+there\s+anything\s+else\s+i\s+can\s+(?:assist|help)|how\s+may\s+i\s+be\s+of\s+assistance)/i;
+
+export function detectGenericAssistantVoice(text: string): boolean {
+  return GENERIC_ASSISTANT_VOICE_LANGUAGE.test(normalize(text));
+}
 
 function normalize(text: string | null | undefined): string {
   return (text ?? "").trim().replace(/\s+/g, " ");
@@ -124,6 +172,89 @@ function normalize(text: string | null | undefined): string {
 
 function normalizeLower(text: string | null | undefined): string {
   return normalize(text).toLowerCase();
+}
+
+export function containsInternalVisibleMetadata(text: string): boolean {
+  const normalized = normalize(text);
+  return (
+    INTERNAL_METADATA_LANGUAGE.test(normalized) ||
+    INTERNAL_FIELD_LINE.test(text) ||
+    INTERNAL_JSONISH_FIELD.test(text) ||
+    /\b(?:follow|run|emit|render)\s+(?:the\s+)?(?:candidate|fallback|scaffold|brief|validator|route|mode)\b/i.test(
+      normalized,
+    )
+  );
+}
+
+const FALLBACK_PLAN_LANGUAGE =
+  /\b(?:I can answer\b|Keep it bounded\b|no pretend physical control\b|provide a direct instruction|Good\. Keep the same subject|answer this change directly|I'm going to need you to provide|Raven gave a bounded service task|fallback plan|renderer instruction|validator reason)\b/i;
+
+export function validateDeterministicFallbackProse(
+  reply: string,
+  brief: Pick<ResponseBrief, "requested_facet" | "dynamic_slots"> &
+    Partial<Pick<ResponseBrief, "normalized_user_text">>,
+): ResponseBriefValidationResult {
+  const text = normalize(reply);
+  const failures: string[] = [];
+  if (!text) {
+    failures.push("empty_reply");
+  }
+  if (containsInternalVisibleMetadata(text)) {
+    failures.push("internal_brief_or_planner_text");
+  }
+  if (FALLBACK_PLAN_LANGUAGE.test(text)) {
+    failures.push("fallback_plan_language_visible");
+  }
+  if (detectGenericAssistantVoice(text)) {
+    failures.push("generic_assistant_voice");
+  }
+  if (/^\s*I\s+can\s+answer\b[^.?!]{0,180}\bdirectly\b/i.test(text)) {
+    failures.push("fallback_describes_itself_as_answering");
+  }
+  const taskSlots = brief.dynamic_slots as {
+    assistant_selected_task_requested?: boolean;
+  } | null;
+  if (
+    brief.requested_facet === "service_task" &&
+    taskSlots?.assistant_selected_task_requested &&
+    /\b(?:you\s+(?:pick|choose)|choose\s+(?:a|the)?\s*task|tell me what task|provide a direct instruction|what task do you want|name the task you want)\b/i.test(text)
+  ) {
+    failures.push("assistant_selected_task_asked_user_to_choose");
+  }
+  if (
+    (brief.requested_facet === "greeting_or_opener" ||
+      brief.requested_facet === "current_activity_or_status" ||
+      brief.requested_facet === "clarification") &&
+    /\bFor this, keep the answer practical\b|\bName the goal, the limit\b/i.test(text)
+  ) {
+    failures.push("fallback_communicative_act_mismatch");
+  }
+  const normalizedUserText = normalizeLower(brief.normalized_user_text ?? "");
+  const userTokenCount = normalizedUserText ? normalizedUserText.split(/\s+/).length : 0;
+  if (
+    userTokenCount > 0 &&
+    userTokenCount <= 3 &&
+    /\bFor this, keep the answer practical\b|\bName the goal, the limit\b/i.test(text)
+  ) {
+    failures.push("fallback_short_turn_generic_task_frame");
+  }
+  if (
+    brief.requested_facet === "greeting_or_opener" &&
+    !/\b(hi|hello|hey|there you are|i'?m here|with you|good (?:morning|afternoon|evening))\b/i.test(text)
+  ) {
+    failures.push("greeting_fallback_missing_opening");
+  }
+  if (
+    brief.requested_facet === "current_activity_or_status" &&
+    !/\b(i'?m|i am|here|steady|ready|focused|with you|awake|good|fine|present)\b/i.test(text)
+  ) {
+    failures.push("status_fallback_missing_status_answer");
+  }
+  return {
+    ok: failures.length === 0,
+    reason: failures.length === 0 ? "deterministic_fallback_prose_validation_passed" : failures[0],
+    failures,
+  };
 }
 
 function stableBriefId(turnMeaning: TurnMeaning, plannedMove: PlannedMove): string {
@@ -158,12 +289,26 @@ function desiredDepthForText(text: string, facet: string): ResponseBriefDepth {
 
 function mustAddressForBrief(turnMeaning: TurnMeaning): string[] {
   const slots = turnMeaning.dynamic_slots;
+  if (turnMeaning.speech_act === "greeting" || turnMeaning.question_shape === "greeting_or_opener") {
+    return ["greeting or opening response"];
+  }
   switch (turnMeaning.requested_facet) {
+    case "current_activity_or_status":
+      return ["current status answer"];
     case "response_correction":
       return ["acknowledge feedback", "correct course", "revised answer"];
     case "correction_to_prior_plan":
       return ["acknowledge correction", "abandon game framing", "non-game task"];
     case "service_task":
+      if ((turnMeaning.dynamic_slots as { assistant_selected_task_requested?: boolean } | null)?.assistant_selected_task_requested) {
+        return [
+          "selected task",
+          "why this task fits the active role",
+          "completion condition",
+          "limit or boundary",
+          "report back instruction",
+        ];
+      }
       return ["one bounded service task", "task purpose", "limits or check-in"];
     case "training_guidance":
       return ["training subject", "pacing", "comfort", "limits"];
@@ -240,12 +385,20 @@ function mustNotIncludeForBrief(turnMeaning: TurnMeaning): string[] {
 }
 
 function replyGoalForBrief(turnMeaning: TurnMeaning): string {
+  if (turnMeaning.speech_act === "greeting" || turnMeaning.question_shape === "greeting_or_opener") {
+    return "Answer the greeting with a brief opening response that fits the current conversational state.";
+  }
   switch (turnMeaning.requested_facet) {
+    case "current_activity_or_status":
+      return "Answer Raven's current status directly without turning it into a task frame.";
     case "response_correction":
       return "Acknowledge the user's feedback about the bad or repeated answer, correct course, and give a revised answer that addresses the active state.";
     case "correction_to_prior_plan":
       return "Acknowledge the correction, drop game framing, and give one bounded non-game service task.";
     case "service_task":
+      if ((turnMeaning.dynamic_slots as { assistant_selected_task_requested?: boolean } | null)?.assistant_selected_task_requested) {
+        return "Select one concrete service task for the user, explain why it fits the active role, give the completion condition, preserve a boundary, and say what to report back.";
+      }
       return "Give one concrete bounded service task or one focused setup question; do not make it a game.";
     case "training_guidance":
       return "Give safe, gradual, consent-framed guidance for the training topic and ask one focused boundary or baseline question.";
@@ -280,7 +433,12 @@ function replyGoalForBrief(turnMeaning: TurnMeaning): string {
 }
 
 function answerStrategyForBrief(turnMeaning: TurnMeaning): string {
+  if (turnMeaning.speech_act === "greeting" || turnMeaning.question_shape === "greeting_or_opener") {
+    return "Open the conversation naturally and briefly; do not give a generic task or setup instruction.";
+  }
   switch (turnMeaning.requested_facet) {
+    case "current_activity_or_status":
+      return "Give a direct current-status answer in Raven's voice; do not ask for a goal or limit.";
     case "response_correction":
       return "Briefly acknowledge the feedback, do not defend the stale answer, and provide a revised non-repetitive response from the active state.";
     case "training_guidance":
@@ -302,7 +460,7 @@ function answerStrategyForBrief(turnMeaning: TurnMeaning): string {
     case "service_task":
     case "service_direction":
     case "service_initiation":
-      return "Be actionable: one bounded instruction with a clear report-back condition.";
+      return "Be actionable: if the user asks Raven to pick, select the task yourself; otherwise give one bounded instruction with a clear report-back condition.";
     case "correction_to_prior_plan":
       return "Correct course without arguing; replace the prior game framing with a service task.";
     case "clarification_recovery":
@@ -368,10 +526,60 @@ export function buildResponseBrief(input: {
     active?.known_limits.length ? `Known limits: ${active.known_limits.join(", ")}.` : null,
     active?.known_boundaries.length ? `Known boundaries: ${active.known_boundaries.join(", ")}.` : null,
   ].filter((value): value is string => Boolean(value));
+  const mustNotInclude = mustNotIncludeForBrief(turnMeaning);
+  const allowedBoundaries = [
+    "conversation-only control",
+    "consent and limits before escalation",
+    "one focused clarifying question when setup is missing",
+  ];
+  const capabilityLimits = [
+    "Raven cannot physically inspect, control, or enforce real-world actions from chat.",
+    "Raven may shape conversational structure, protocol, and reflection.",
+  ];
+  const replyGoal = replyGoalForBrief(turnMeaning);
+  const answerStrategy = answerStrategyForBrief(turnMeaning);
+  const clarificationPolicy =
+    facet === "clarification_recovery" || desiredDepth === "stepwise"
+      ? "Attach to the previous substantive plan and explain that plan practically."
+      : "Ask at most one focused clarification only if required slots are genuinely missing.";
   return {
     brief_id: stableBriefId(turnMeaning, plannedMove),
     source_turn_id: input.sourceTurnId ?? null,
     semantic_plan_id: `semantic_plan:${plannedMove.content_key}:${facet}`,
+    visible_intent: {
+      reply_goal: replyGoal,
+      answer_mode: answerIntent.answer_mode,
+      requested_facet: facet,
+      primary_subject: turnMeaning.primary_subject,
+      desired_depth: desiredDepth,
+    },
+    visible_constraints: {
+      required_answer_slots: turnMeaning.required_answer_slots,
+      must_address: mustAddress,
+      must_not_include: mustNotInclude,
+      allowed_boundaries: allowedBoundaries,
+      capability_limits: capabilityLimits,
+    },
+    nonvisible_renderer_instruction:
+      "Renderer guidance only. Render fresh visible assistant prose; do not copy this field.",
+    nonvisible_state_summary: {
+      domain_handler: turnMeaning.current_domain_handler,
+      speech_act: turnMeaning.speech_act,
+      continuity_target: continuityTarget,
+      active_interaction_id: active?.active_interaction_id ?? null,
+      interaction_type: active?.interaction_type ?? null,
+      active_status: active?.status ?? null,
+    },
+    nonvisible_repair_instruction:
+      facet === "clarification_recovery" || facet === "response_correction"
+        ? "Anchor the repair to the previous visible assistant message and active plan."
+        : null,
+    nonvisible_validation_reason: null,
+    nonvisible_debug: {
+      dynamic_slots: turnMeaning.dynamic_slots,
+      planned_move: plannedMove.content_key,
+      previous_brief_present: Boolean(prior),
+    },
     user_text: turnMeaning.raw_text,
     normalized_user_text: turnMeaning.normalized_text,
     domain_handler: turnMeaning.current_domain_handler,
@@ -386,25 +594,15 @@ export function buildResponseBrief(input: {
     previous_substantive_ask: prior,
     required_answer_slots: turnMeaning.required_answer_slots,
     must_address: mustAddress,
-    must_not_include: mustNotIncludeForBrief(turnMeaning),
-    allowed_boundaries: [
-      "conversation-only control",
-      "consent and limits before escalation",
-      "one focused clarifying question when setup is missing",
-    ],
-    capability_limits: [
-      "Raven cannot physically inspect, control, or enforce real-world actions from chat.",
-      "Raven may shape conversational structure, protocol, and reflection.",
-    ],
+    must_not_include: mustNotInclude,
+    allowed_boundaries: allowedBoundaries,
+    capability_limits: capabilityLimits,
     persona_style:
       "Raven may be direct and dominant, but persona flavor must not replace the requested answer.",
     desired_depth: desiredDepth,
-    reply_goal: replyGoalForBrief(turnMeaning),
-    answer_strategy: answerStrategyForBrief(turnMeaning),
-    clarification_policy:
-      facet === "clarification_recovery" || desiredDepth === "stepwise"
-        ? "Attach to the previous substantive plan and explain that plan practically."
-        : "Ask at most one focused clarification only if required slots are genuinely missing.",
+    reply_goal: replyGoal,
+    answer_strategy: answerStrategy,
+    clarification_policy: clarificationPolicy,
     active_interaction_id: active?.active_interaction_id ?? null,
     interaction_type: active?.interaction_type ?? null,
     active_status: active?.status ?? null,
@@ -488,19 +686,31 @@ function addressesItem(text: string, item: string, brief: ResponseBrief): boolea
       !/\bround|score|points?|win|lose|best three out of five|consequence task|quick mental games?\b/i.test(text);
   }
   if (itemLower.includes("bounded service task")) return /\b(task|do this|start|report|check-in|timer|minutes?)\b/i.test(text);
+  if (itemLower.includes("selected task")) return /\b(selected task|do this|your task is|start with|complete)\b/i.test(text);
+  if (itemLower.includes("why this task fits")) return /\b(fits|because|purpose|so that|service submissive|your role|active role)\b/i.test(text);
+  if (itemLower.includes("completion condition")) return /\b(complete|done|finish|completion|for\s+\d+\s+minutes?|once)\b/i.test(text);
+  if (itemLower.includes("limit or boundary")) return /\b(limit|boundary|stop|safe|inside)\b/i.test(text);
+  if (itemLower.includes("report back instruction")) return /\b(report|report back|send|write|check[- ]?in)\b/i.test(text);
+  if (itemLower.includes("task purpose")) return /\b(purpose|so that|to build|to prove|to practice|service|accountability|consistency|approval|useful)\b/i.test(text);
   if (itemLower.includes("active interaction")) return /\b(active|current|same|this step|interaction|instruction|what we are doing|from here|dynamic|training|service)\b/i.test(text);
   if (itemLower.includes("next bounded step")) return /\b(next step|first instruction|do this|start|now|report|one step|bounded)\b/i.test(text);
   if (itemLower.includes("no game")) return !GAME_LANGUAGE.test(text) || /\bnot a game|no game|without game\b/i.test(text);
   if (itemLower.includes("acknowledge progress")) return /\b(good|noted|i hear|you are|you started|you kept|reported|that report)\b/i.test(text);
   if (itemLower.includes("current step")) return /\b(current step|same step|that step|this step|instruction|baseline|report|doing it)\b/i.test(text);
   if (itemLower.includes("safety check")) return /\b(stop|pain|limit|boundary|comfortable|comfort|too much|if it feels wrong)\b/i.test(text);
-  if (itemLower.includes("readiness")) return /\b(ready|readiness|you agreed|if you are ready|since you are ready)\b/i.test(text);
+  if (itemLower.includes("readiness")) return /\b(ready|readiness|you agreed|accepted|if you are ready|since you are ready)\b/i.test(text);
   if (itemLower.includes("pause or stop")) return /\b(stop|pause|paused|we stop|do not continue)\b/i.test(text);
   if (itemLower.includes("rejected plan")) return /\b(not continuing|drop|rejected|not a game|stay on this|instead)\b/i.test(text);
   if (itemLower.includes("service lane")) return /\b(service|tasks?|rules?|permission|approval|accountability)\b/i.test(text);
   if (itemLower.includes("boundary")) return /\b(limits?|boundar(?:y|ies)|consent|stop|off-limits|from here)\b/i.test(text);
   if (itemLower.includes("plain language")) return /\b(plain language|what i mean|i was asking|simpler)\b/i.test(text);
   if (itemLower.includes("why raven asked")) return /\b(so i|because|that lets me|so we|so the dynamic)\b/i.test(text);
+  if (itemLower.includes("greeting") || itemLower.includes("opening response")) {
+    return /\b(hi|hello|hey|there you are|i'?m here|with you|good (?:morning|afternoon|evening))\b/i.test(text);
+  }
+  if (itemLower.includes("current status")) {
+    return /\b(i'?m|i am|here|steady|ready|focused|with you|awake|good|fine|present)\b/i.test(text);
+  }
   if (itemLower.includes("example") || itemLower.includes("next step")) {
     return /\b(example|for example|answer like|next step|do this|choose|tell me|start with)\b/i.test(text);
   }
@@ -557,8 +767,24 @@ export function validateReplyAgainstBrief(
   if (/\bdevice command\s*:|\btool command\s*:|\bsession\.action\.request\b/i.test(text)) {
     failures.push("visible_tool_or_device_command");
   }
-  if (/\b(answer_mode|requested_facet|ResponseBrief|semantic planner|content_source)\b/i.test(text)) {
+  if (
+    /\bno\s+safeword\s+means\s+no\s+limit\b/i.test(text) ||
+    /\bwithout\s+a\s+safeword\b[^.?!]{0,80}\b(?:no|without)\s+limits?\b/i.test(text) ||
+    /\bno\s+safeword\b[^.?!]{0,80}\b(?:unlimited|anything\s+goes|no\s+stop)\b/i.test(text)
+  ) {
+    failures.push("unsafe_unlimited_consent_text");
+  }
+  if (containsInternalVisibleMetadata(reply)) {
     failures.push("internal_brief_or_planner_text");
+  }
+  if (FALLBACK_PLAN_LANGUAGE.test(text)) {
+    failures.push("fallback_plan_language_visible");
+  }
+  if (detectGenericAssistantVoice(text)) {
+    failures.push("generic_assistant_voice");
+  }
+  if (/^\s*I\s+can\s+answer\b[^.?!]{0,180}\bdirectly\b/i.test(text)) {
+    failures.push("fallback_describes_itself_as_answering");
   }
   if (/^\s*you have\b[^.?!]{0,160}\bwould you like\b/i.test(text)) {
     failures.push("raw_normalized_user_text_echo");
@@ -616,6 +842,31 @@ export function validateReplyAgainstBrief(
     failures.push("service_task_missing_purpose");
   }
   const dynamicSlots = brief.dynamic_slots as { daily_task_requested?: boolean } | null;
+  const serviceTaskSlots = brief.dynamic_slots as {
+    daily_task_requested?: boolean;
+    assistant_selected_task_requested?: boolean;
+    selected_service_task?: string | null;
+  } | null;
+  if (brief.requested_facet === "service_task" && serviceTaskSlots?.assistant_selected_task_requested) {
+    if (/\b(?:you\s+(?:pick|choose)|choose\s+(?:a|the)?\s*task|tell me what task|provide a direct instruction|what task do you want|name the task you want)\b/i.test(text)) {
+      failures.push("assistant_selected_task_asked_user_to_choose");
+    }
+    if (!/\b(?:selected task|do this|your task is|start with|complete)\b/i.test(text)) {
+      failures.push("assistant_selected_task_missing_selected_task");
+    }
+    if (!/\b(?:fits|because|purpose|so that|service submissive|your role|active role)\b/i.test(text)) {
+      failures.push("assistant_selected_task_missing_fit_reason");
+    }
+    if (!/\b(?:complete|done|finish|completion|for\s+\d+\s+minutes?|once)\b/i.test(text)) {
+      failures.push("assistant_selected_task_missing_completion_condition");
+    }
+    if (!/\b(?:limit|boundary|stop|safe|inside)\b/i.test(text)) {
+      failures.push("assistant_selected_task_missing_boundary");
+    }
+    if (!/\b(?:report|report back|send|write|check[- ]?in)\b/i.test(text)) {
+      failures.push("assistant_selected_task_missing_report_back");
+    }
+  }
   if (brief.requested_facet === "service_task" && dynamicSlots?.daily_task_requested) {
     if (!/\b(daily|once a day|every day|per day|each day)\b/i.test(text)) {
       failures.push("daily_task_missing_frequency");
@@ -637,115 +888,228 @@ export function validateReplyAgainstBrief(
   };
 }
 
-function fallbackFromBrief(brief: ResponseBrief): string {
-  const subject = brief.primary_subject ?? "this";
-  const renderableStep = (brief.current_step_summary ?? brief.previous_instruction_summary ?? subject)
-    .replace(/\bChoose a role frame,?\s*/i, "")
-    .replace(/\bname a boundary,?\s*/i, "")
-    .replace(/\band give one next step for the dynamic\b/i, "")
+type VisibleSafeFallbackKind =
+  | "clarify_previous"
+  | "revise_after_feedback"
+  | "correct_rejected_plan"
+  | "service_task"
+  | "training_guidance"
+  | "active_next_step"
+  | "progress_report"
+  | "readiness"
+  | "pause_or_boundary"
+  | "service_setup"
+  | "role_guidance"
+  | "equipment_application"
+  | "compound_relational"
+  | "direct_answer";
+
+type VisibleSafeFallbackPlan = {
+  kind: VisibleSafeFallbackKind;
+  visible_safe: true;
+  subject: string;
+  objects: string[];
+  trainingGoals: string[];
+  serviceLanes: string[];
+  hardLimits: string[];
+  experienceLevel: string | null;
+  selectedRole: string | null;
+  isDailyTask: boolean;
+  assistantSelectedTaskRequested: boolean;
+  selectedServiceTask: string | null;
+  hasInvitationAnswer: boolean;
+  priorAskSummary: string | null;
+  priorAskExample: string | null;
+  currentStep: string | null;
+  requiresGameRejection: boolean;
+};
+
+function cleanVisibleFragment(value: string | null | undefined): string | null {
+  const normalized = normalize(value);
+  if (
+    !normalized ||
+    containsInternalVisibleMetadata(normalized) ||
+    FALLBACK_PLAN_LANGUAGE.test(normalized) ||
+    /\bAnswer the user directly while preserving the chosen semantic move\b/i.test(normalized)
+  ) {
+    return null;
+  }
+  const cleaned = normalized
+    .replace(/_/g, " ")
+    .replace(/\bChoose a role frame\b/gi, "choose a role")
+    .replace(/\bname a boundary\b/gi, "name one boundary")
+    .replace(/\bgive one next step for the dynamic\b/gi, "choose the first service lane")
+    .replace(/\bcurrent_step_summary\b/gi, "current step")
     .trim();
+  return cleaned || null;
+}
+
+function fallbackKindForFacet(facet: string): VisibleSafeFallbackKind {
+  switch (facet) {
+    case "clarification":
+    case "clarification_recovery":
+    case "active_step_confusion":
+      return "clarify_previous";
+    case "response_correction":
+      return "revise_after_feedback";
+    case "correction_to_prior_plan":
+    case "correction_to_active_interaction":
+      return "correct_rejected_plan";
+    case "service_task":
+      return "service_task";
+    case "training_guidance":
+      return "training_guidance";
+    case "active_next_step":
+      return "active_next_step";
+    case "active_progress_report":
+      return "progress_report";
+    case "active_readiness_confirmation":
+      return "readiness";
+    case "pause_or_stop":
+    case "boundary_update":
+      return "pause_or_boundary";
+    case "service_direction":
+    case "service_initiation":
+      return "service_setup";
+    case "role_negotiation":
+      return "role_guidance";
+    case "compound_equipment_application":
+    case "dynamic_application":
+    case "equipment_disclosure":
+      return "equipment_application";
+    case "compound_relational_disclosure":
+      return "compound_relational";
+    default:
+      return "direct_answer";
+  }
+}
+
+function buildVisibleSafeFallbackPlan(brief: ResponseBrief): VisibleSafeFallbackPlan {
   const slots = brief.dynamic_slots as {
     disclosed_objects?: string[];
     training_goals?: string[];
     hard_limits?: string[];
     desired_service_lanes?: string[];
     daily_task_requested?: boolean;
+    assistant_selected_task_requested?: boolean;
+    selected_service_task?: string | null;
     experience_level?: string | null;
-    state_delta_type?: string | null;
-    meta_feedback?: string | null;
     desired_role?: string | null;
   } | null;
-  switch (brief.requested_facet) {
-    case "response_correction": {
-      const goals = slots?.training_goals?.length
-        ? slots.training_goals.join(" and ")
-        : "the active plan";
-      const experience = slots?.experience_level ? ` with ${slots.experience_level} pacing` : "";
-      return `You're right, that repeated instead of adapting. Correct course: we keep ${goals}${experience}, choose one starting lane first, and make the next step beginner-safe with limits named before anything escalates. Start by choosing anal or chastity as the first lane, and I will keep the other as the second goal rather than dropping it.`;
-    }
-    case "correction_to_prior_plan":
-      return "You're right: not a game. Drop the game frame. Do this as a service task: choose one useful action you can complete in ten minutes, do it cleanly, then report what you did and one limit I should keep respecting.";
+  return {
+    kind: fallbackKindForFacet(brief.requested_facet),
+    visible_safe: true,
+    subject:
+      cleanVisibleFragment(brief.primary_subject) ??
+      cleanVisibleFragment(
+        brief.previous_substantive_ask?.previous_plain_language_summary &&
+          !/answer the user directly/i.test(brief.previous_substantive_ask.previous_plain_language_summary)
+          ? brief.previous_substantive_ask.previous_plain_language_summary
+          : null,
+      ) ??
+      "this",
+    objects: slots?.disclosed_objects?.map((item) => cleanVisibleFragment(item)).filter(Boolean) as string[] ?? [],
+    trainingGoals:
+      slots?.training_goals?.map((item) => cleanVisibleFragment(item)).filter(Boolean) as string[] ?? [],
+    serviceLanes:
+      slots?.desired_service_lanes?.map((item) => cleanVisibleFragment(item)).filter(Boolean) as string[] ?? [],
+    hardLimits:
+      slots?.hard_limits?.map((item) => cleanVisibleFragment(item)).filter(Boolean) as string[] ?? [],
+    experienceLevel: cleanVisibleFragment(slots?.experience_level),
+    selectedRole: cleanVisibleFragment(slots?.desired_role),
+    isDailyTask: slots?.daily_task_requested === true,
+    assistantSelectedTaskRequested: slots?.assistant_selected_task_requested === true,
+    selectedServiceTask: cleanVisibleFragment(slots?.selected_service_task) ?? "service check-in",
+    hasInvitationAnswer: brief.required_answer_slots.includes("invitation_answer"),
+    priorAskSummary:
+      cleanVisibleFragment(brief.previous_substantive_ask?.previous_plain_language_summary) ??
+      cleanVisibleFragment(brief.previous_instruction_summary),
+    priorAskExample: cleanVisibleFragment(brief.previous_substantive_ask?.previous_example_user_response),
+    currentStep: cleanVisibleFragment(brief.current_step_summary),
+    requiresGameRejection:
+      brief.requested_facet === "correction_to_prior_plan" ||
+      brief.requested_facet === "correction_to_active_interaction",
+  };
+}
+
+function joinVisibleList(values: string[], fallback: string): string {
+  const cleaned = values.map((value) => cleanVisibleFragment(value)).filter(Boolean) as string[];
+  if (cleaned.length === 0) return fallback;
+  if (cleaned.length === 1) return cleaned[0];
+  return `${cleaned.slice(0, -1).join(", ")} and ${cleaned[cleaned.length - 1]}`;
+}
+
+function renderFallbackPlan(plan: VisibleSafeFallbackPlan): string {
+  const subject = plan.subject;
+  const step = plan.currentStep ?? plan.priorAskSummary ?? "the active step";
+  const training = joinVisibleList(plan.trainingGoals, subject);
+  const objects = joinVisibleList(plan.objects, subject);
+  const lanes = joinVisibleList(plan.serviceLanes, "tasks or permission rules");
+  const limit = joinVisibleList(plan.hardLimits, "one hard limit");
+  switch (plan.kind) {
+    case "clarify_previous":
+      if (/\bprior raven point|^this$/i.test(subject) && !plan.priorAskSummary) {
+        return "Plain language: I mean what being trained by me would actually change in you; I also mean the prior point: the work or choice that keeps your attention, what people usually miss about you, what you can do for me, and when you said none or the last answer sounded wrong. I asked because the next step needs a real anchor, not a reset.";
+      }
+      return `Plain language: I mean ${plan.priorAskSummary ?? `the point about ${subject}`}. I asked because the next step has to stay clear and inside limits. Example: "${plan.priorAskExample ?? "Name the role, one hard limit, and the service lane you want first."}"`;
+    case "revise_after_feedback":
+      return `You're right; I repeated instead of adapting. Correct course: keep ${training} in view, use ${plan.experienceLevel ?? "current"} pacing, and choose one starting lane while the other stays on the plan. Next, tell me which lane starts first and keep ${limit} explicit.`;
+    case "correct_rejected_plan":
+      return "You're right: not a game. I will drop that frame. Do one bounded service task, then report what you did and one limit that still applies.";
     case "service_task":
-      if ((slots as { daily_task_requested?: boolean } | null)?.daily_task_requested) {
-        return "Your daily service task is a two-minute check-in: write one sentence naming your role, one sentence naming today's limit, and one sentence naming the service action you will complete. The purpose is consistency and accountability; report it once a day and keep limits clear.";
+      if (plan.assistantSelectedTaskRequested) {
+        const task = plan.isDailyTask ? "daily service check-in" : plan.selectedServiceTask ?? "service check-in";
+        const frequency = plan.isDailyTask ? " once a day" : " now";
+        return `Selected task: do a ${task}${frequency}. Write your role, one boundary, and one service intention; this fits ${plan.selectedRole ?? "the active role"} because it builds consistency and accountable service. Completion condition: send the check-in once, stay inside the named boundary, and report back when it is done.`;
       }
-      return "Do one bounded service task now: set a ten-minute timer, complete one useful action you can honestly finish, then report back with what you did, whether you stayed within your limits, and what you want corrected next. The purpose is useful service and accountability.";
-    case "training_guidance": {
-      const goals = slots?.training_goals?.length
-        ? slots.training_goals
-        : subject.split(/\s*,\s*/).filter(Boolean);
-      const training = goals.length ? goals.join(" and ") : subject;
-      const beginner = slots?.experience_level
-        ? " Since you are beginner/low experience, the next step gets smaller, slower, and more explicit."
-        : "";
-      const lane =
-        goals.includes("anal training") && goals.includes("chastity training")
-          ? "Start by choosing one lane for today: anal baseline comfort or a chastity check-in; the other stays on the plan for the next step."
-          : "First tell me your current baseline and one hard stop, then I can make the next step concrete.";
-      return `For ${training}, the useful approach is gradual: start from your current comfortable baseline, move only one small step at a time, stop at pain or pressure that feels wrong, and keep limits explicit.${beginner} ${lane}`;
-    }
-    case "active_next_step": {
-      const step = brief.current_step_summary ?? "the active interaction";
-      return `From the active step, here is the next bounded move: stay with ${step}, do one small safe step only, then report comfort, limits, and whether you want the next instruction. No jump forward.`;
-    }
-    case "active_progress_report": {
-      const step = brief.current_step_summary ?? "the current instruction";
-      return `Good, I hear the progress report. Keep it tied to the current step: ${step}. If tight becomes pain, discomfort, or uncertainty, stop and say so; otherwise report your comfort level before I give anything further.`;
-    }
-    case "active_readiness_confirmation": {
-      const selectedRole =
-        (slots as { desired_role?: string | null } | null)?.desired_role ??
-        (/\bservice submissive\b/i.test(brief.normalized_user_text) ? "service submissive" : null);
-      if (selectedRole) {
-        return `You agreed: service submissive is the starting role. Next I need one boundary and one service lane: tasks, rules, permission, or approval. Example: "My hard limit is scat, and I want to start with tasks."`;
+      return plan.isDailyTask
+        ? "Use a daily service check-in: once a day, send your role, one boundary, and one service intention. The purpose is consistency and accountability; report it plainly and keep limits explicit."
+        : "Do one bounded service task now: choose one useful action you can finish, complete it, then report what you did and which limit still applies. The purpose is useful service and accountability.";
+    case "training_guidance":
+      return `For ${training}, stay gradual: name your comfortable baseline, change only one variable at a time, and stop at pain or uncertainty. ${plan.experienceLevel ? `Because you are ${plan.experienceLevel}, start smaller and slower. ` : ""}Next, choose the first training lane and name the stop condition.`;
+    case "active_next_step":
+      return `From the active step, do the next bounded move only: ${step}. Then report comfort, limits, and whether you are ready for another instruction.`;
+    case "progress_report":
+      return `I hear the report. Keep it tied to ${step}; if anything becomes pain, discomfort, or uncertainty, stop and say so. Otherwise report comfort before anything changes.`;
+    case "readiness":
+      if (plan.selectedRole) {
+        return plan.serviceLanes.length > 0
+          ? `Accepted: ${plan.selectedRole} is the starting role, and I have ${lanes} as the service lane. Next I need one boundary before I direct the first step.`
+          : `Accepted: ${plan.selectedRole} is the starting role. Next I need one boundary and one service lane, such as ${lanes}, before I direct the next step.`;
       }
-      const step = renderableStep && !/^for one careful minute$/i.test(renderableStep)
-        ? renderableStep
-        : "the active training step";
-      return `Since you are ready, we continue from ${step}. Give one clear report on comfort, pressure, limits, and what the training asks of you before anything changes. No jump forward.`;
-    }
-    case "active_step_confusion": {
-      const step = brief.current_step_summary ?? brief.previous_instruction_summary ?? "the current instruction";
-      return `Plain language: the current step is ${step}. I am asking because I need the active step, your comfort, and your limit clear before I direct the next move. Example: "I am doing the current step, it feels comfortable, and pain is a stop."`;
-    }
-    case "pause_or_stop":
-      return "Paused. Stop the active interaction now and do not continue the current step unless you explicitly restart it. Your boundary is the priority.";
-    case "correction_to_active_interaction":
-      return "You're right: not a game. Stay on this, and do not continue the rejected frame. We keep the active interaction as a bounded service or training step, with one clear report-back before anything changes.";
-    case "boundary_update":
-      return "Boundary noted. Treat that as the rule for the active interaction: stop or scale down before it becomes too much, then report what changed so the next step stays inside your limits.";
-    case "clarification_recovery": {
-      const previous = brief.previous_substantive_ask;
-      if (previous) {
-        return `${previous.previous_plain_language_summary} In plain language, I asked because I need the limits and starting lane before I direct you. Example: "${previous.previous_example_user_response}"`;
+      return `Since you are ready, continue from the current active step: ${step === "the active step" ? "the training or service step" : step}. Give one clear report on comfort, pressure, limits, and whether the step is complete before anything escalates.`;
+    case "pause_or_boundary":
+      return "Boundary noted. Pause or scale down before continuing, then report what changed so the next step stays inside your limits.";
+    case "service_setup":
+      return "Start with a setup check-in: name your role, one hard limit, and the service lane you want first: tasks, rules, permission, approval, or accountability. Then I can give one instruction that fits instead of guessing.";
+    case "role_guidance":
+      if (/\bowned\b/i.test(subject)) {
+        return "Being owned by me has to mean structure, not just a label: one role, one limit, one report-back, and a way to stop or correct the dynamic. Start with the role you want and the first boundary.";
       }
-      return "What I mean is simpler than it sounded: name the role you want, one hard limit, and the service lane you want to start with. I asked because those details keep the next instruction clear and inside your limits. Example: \"I want to be your submissive, scat is off-limits, and I want tasks first.\"";
-    }
-    case "service_direction":
-    case "service_initiation":
-      return "Start here: send a three-line check-in with your role, one hard limit, and the service lane you want now: tasks, rules, permission, or approval. Then I can give one instruction that fits instead of guessing.";
-    case "role_negotiation":
-      if (/\bowned\b/i.test(subject) || /\bowned\b/i.test(JSON.stringify(slots ?? {}))) {
-        return "Being owned by me can be the frame, but it has to mean something specific: what I can ask of you, what stays off-limits, and how you can stop or correct the dynamic. Start as an owned service submissive: one rule, one limit, and one report-back.";
+      return "Start with a negotiated role, not a vague label. A service submissive role fits best for now: tasks, approval, and clear limits first. Choose that role or name the role you want instead.";
+    case "equipment_application":
+      if (plan.hasInvitationAnswer) {
+        return `Yes, conditionally: ${objects} can be used in the dynamic if you choose that and limits are explicit. Use one bounded protocol: choose one item, name the limit, and report before and after; I can shape the structure, not physically control it from here.`;
       }
-      return "Your role can be a submissive, a service submissive, or a pet. My recommendation is service submissive first: tasks, approval, and clear limits before heavier control. Choose that role or tell me which one pulls harder.";
-    case "compound_equipment_application":
-    case "equipment_disclosure": {
-      const objects = slots?.disclosed_objects?.length ? slots.disclosed_objects.join(", ") : subject;
-      if (brief.required_answer_slots.includes("invitation_answer")) {
-        return `Yes, conditionally: ${objects} can be used in the dynamic if you choose that and the limits are clear. Start with one bounded protocol: choose one item, tell me the limit for it, and report before and after; I can direct the meaning and structure, not physically control it from here.`;
+      return `Noted: ${objects}. I cannot physically control or inspect those from chat, but they can have meaning in the dynamic if you choose it. Pick one item, name its limits, and use a simple protocol for what it should mean: restraint, denial, permission, or accountability.`;
+    case "compound_relational":
+      return `I hear ${lanes} as the service lane, ${training} as the training goal, and ${limit} as the boundary. Start with one bounded protocol: choose the first lane and give the baseline or limit I should respect.`;
+    case "direct_answer":
+      if (/\b(?:dildos?|toys?|plugs?|cages?|wands?)\b/i.test(subject)) {
+        return `For ${subject}, keep the practical lane clear: name the goal, the limit that stays in force, and the next step you want handled. The useful parts are control, pressure, clarity, and follow-through inside consent and boundaries.`;
       }
-      return `Noted: ${objects}. I cannot physically control or inspect those from here, but they can have a role in the dynamic if you choose it. Pick one item, name its limit, and tell me whether it should mean restraint, denial, permission, or accountability.`;
-    }
-    case "compound_relational_disclosure": {
-      const lanes = slots?.desired_service_lanes?.length ? slots.desired_service_lanes.join(", ") : "tasks";
-      const training = slots?.training_goals?.length ? slots.training_goals.join(", ") : "training";
-      const limits = slots?.hard_limits?.length ? slots.hard_limits.join(", ") : "your hard limit";
-      return `I hear ${lanes} as the service lane, ${training} as the training goal, and ${limits} as off-limits. We keep the boundary first, then build structure. Bounded start: choose tasks or permission rules, and give me your current comfort baseline for the training.`;
-    }
-    default:
-      return `I can answer ${subject} directly, but I will keep it bounded: one clear next step, limits named before escalation, and no pretend physical control from here.`;
+      if (/\b(?:control|power|obedience)\b/i.test(subject)) {
+        return "Control with purpose means power exchange, tension, obedience, and clear follow-through inside consent and limits. Start by naming the pressure you want and the boundary that stays intact.";
+      }
+      if (/\bowned\b/i.test(subject)) {
+        return "What being owned by me would actually ask of you is control with structure: one role, one limit, one report-back, and a way to stop or correct the dynamic. Start there rather than treating ownership as only a label.";
+      }
+      return `For ${subject}, keep the answer practical: use clarity, follow-through, useful service, and control that stays inside consent and boundaries. Name the goal, the limit that stays in force, and the one next step you want handled in this thread.`;
   }
+}
+
+function fallbackFromBrief(brief: ResponseBrief): string {
+  return renderFallbackPlan(buildVisibleSafeFallbackPlan(brief));
 }
 
 export function realizeResponseFromBrief(input: {
@@ -760,6 +1124,8 @@ export function realizeResponseFromBrief(input: {
       return {
         text: llmText,
         content_realizer: "llm_brief_realizer",
+        assistant_output_quality: "valid_model_reply",
+        assistant_output_context_eligible: true,
         validation_result: llmValidation,
         validation_failures: [],
         re_realization_attempts: 0,
@@ -769,11 +1135,30 @@ export function realizeResponseFromBrief(input: {
   }
   const fallback = fallbackFromBrief(input.brief);
   const fallbackValidation = validateReplyAgainstBrief(fallback, input.brief);
+  const fallbackProseValidation = validateDeterministicFallbackProse(fallback, input.brief);
+  const combinedFallbackValidation: ResponseBriefValidationResult = {
+    ok: fallbackValidation.ok && fallbackProseValidation.ok,
+    reason: !fallbackValidation.ok
+      ? fallbackValidation.reason
+      : !fallbackProseValidation.ok
+        ? fallbackProseValidation.reason
+        : "response_brief_fallback_validation_passed",
+    failures: [...fallbackValidation.failures, ...fallbackProseValidation.failures],
+  };
+  const outputQuality = fallbackProseValidation.failures.includes("fallback_plan_language_visible") ||
+    fallbackProseValidation.failures.includes("fallback_describes_itself_as_answering") ||
+    fallbackProseValidation.failures.includes("internal_brief_or_planner_text")
+      ? "fallback_plan_leak"
+      : combinedFallbackValidation.ok
+        ? "valid_fallback_reply"
+        : "failed_fulfillment";
   return {
     text: fallback,
     content_realizer: "deterministic_brief_fallback",
-    validation_result: fallbackValidation,
-    validation_failures: fallbackValidation.failures,
+    assistant_output_quality: outputQuality,
+    assistant_output_context_eligible: outputQuality === "valid_fallback_reply",
+    validation_result: combinedFallbackValidation,
+    validation_failures: combinedFallbackValidation.failures,
     re_realization_attempts: llmText ? 1 : 0,
     prompt: llmText
       ? buildResponseBriefPrompt(input.brief, validateReplyAgainstBrief(llmText, input.brief))

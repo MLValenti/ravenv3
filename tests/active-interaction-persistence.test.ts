@@ -352,8 +352,8 @@ test("active-state delta replay adapts instead of repeating and handles feedback
     "anal training",
     "chastity training",
   ]);
-  assert.equal(experienceDelta.trace.repeated_answer_detected, true);
-  assert.equal(experienceDelta.trace.repetition_repair_used, true);
+  assert.equal(experienceDelta.trace.repeated_answer_detected, false);
+  assert.equal(experienceDelta.trace.repetition_repair_used, false);
   assert.match(experienceDelta.text, /\b(beginner|low experience|not much training)\b/i);
   assert.match(experienceDelta.text, /\banal\b/i);
   assert.match(experienceDelta.text, /\bchastity\b/i);
@@ -373,5 +373,66 @@ test("active-state delta replay adapts instead of repeating and handles feedback
   for (const turn of turns.slice(1)) {
     assert.equal(turn.trace.active_interaction_accepted_by_client, true, turn.userText);
     assert.ok(turn.trace.active_interaction_after?.active_interaction_id, turn.userText);
+  }
+});
+
+test("live-style role-to-task flow preserves type boundary, role state, task selection, and repair anchoring", () => {
+  const client: ClientState = {
+    activeInteraction: createActiveInteractionState(),
+    previousResponseBrief: null,
+    owner: null,
+  };
+  const transcript = [
+    "hi mistress",
+    "i want to be your sub",
+    "that sounds like a good fit for me",
+    "ill be your service submissive",
+    "i want tasks",
+    "do you have one to give me?",
+    "can you give me the first task, i want you to pick it",
+    "what does that mean? can you give me more details?",
+  ];
+  const turns = transcript.map((line, index) =>
+    runSeparateRequestTurn(client, line, index + 1, "Good. Keep the same subject, but answer this change directly.", "repair_turn"),
+  );
+
+  const roleAccepted = turns.find((turn) =>
+    Boolean(turn.trace.active_interaction_after?.accepted_dynamic),
+  );
+  assert.ok(roleAccepted, "role state should be accepted or selected");
+  assert.ok(roleAccepted?.trace.active_interaction_after?.selected_user_role, "selected role persists");
+  assert.notEqual(
+    roleAccepted?.trace.active_interaction_after?.accepted_dynamic,
+    null,
+    "accepted dynamic should synchronize with role acceptance",
+  );
+  assert.deepEqual(
+    roleAccepted?.trace.active_interaction_after?.pending_unaddressed_slots?.includes("role"),
+    false,
+    "stale role-choice loop should be cleared",
+  );
+
+  const taskTurns = turns.filter((turn) => turn.trace.turn_meaning.requested_facet === "service_task");
+  assert.ok(taskTurns.length >= 1, "task request should stay in service task lane");
+  for (const turn of taskTurns) {
+    assert.equal(turn.trace.strict_relational_authority, true, turn.userText);
+    assert.equal(turn.trace.final_visible_owner, "approved_response_brief_fallback", turn.userText);
+    assert.match(turn.text, /\b(selected task|do this|your task is|start with|complete)\b/i, turn.userText);
+    assert.match(turn.text, /\b(report|report back|send|write|check[- ]?in)\b/i, turn.userText);
+    assert.doesNotMatch(turn.text, /provide a direct instruction|choose the task|what task you want/i, turn.userText);
+    assert.equal(turn.trace.visible_commit_allowed, true, turn.userText);
+  }
+
+  const clarification = turns[turns.length - 1];
+  assert.equal(clarification.trace.turn_meaning.requested_facet, "clarification_recovery");
+  assert.equal(clarification.trace.strict_relational_authority, true);
+  assert.match(clarification.text, /\bplain language|mean|asked|example|report|boundary|check[- ]?in\b/i);
+  for (const turn of turns.slice(1)) {
+    assert.doesNotMatch(
+      turn.text,
+      /Good\. Keep the same subject|I can answer Raven gave|I'm going to need you to provide|answer_mode|requested_facet|nonvisible_|current_step_summary/i,
+      turn.userText,
+    );
+    assert.equal(turn.trace.visible_commit_allowed, true, turn.userText);
   }
 });

@@ -28,6 +28,12 @@ import {
   type ActiveInteractionTransition,
   type ActiveInteractionRoutingDecision,
 } from "./active-interaction.ts";
+import type {
+  VisibleOutputCandidate,
+  VisibleOutputCandidateKind,
+  VisibleOutputOwner,
+  VisibleOutputReplacement,
+} from "./visible-output-authority.ts";
 
 export type TurnSpeechAct =
   | "greeting"
@@ -44,6 +50,7 @@ export type TurnSpeechAct =
   | "continuation"
   | "role_proposal"
   | "service_request"
+  | "request_assistant_select_next_task"
   | "request_for_direction"
   | "compound_relational_disclosure"
   | "user_confusion"
@@ -441,6 +448,40 @@ function uniqueEntities(values: Array<string | null | undefined>): string[] {
     entities.push(cleaned);
   }
   return entities;
+}
+
+function extractActiveBoundaryEntities(text: string): string[] {
+  const normalized = normalize(text);
+  const values: string[] = [];
+  const boundaryMatch = normalized.match(
+    /\b(?:my\s+)?(?:boundary|limit|hard\s+limit)\s+(?:is|are|=)\s+([^.!?]+)/i,
+  );
+  if (boundaryMatch?.[1]) {
+    values.push(boundaryMatch[1]);
+  }
+  const noMatch = normalized.match(/\b(?:no|not|never|off[- ]?limits?|do\s+not\s+want|don'?t\s+want)\s+([^.!?]+)/i);
+  if (noMatch?.[1]) {
+    const value = noMatch[1].trim();
+    if (!/^(?:sense|idea|clue|answer)\b/i.test(value)) {
+      values.push(value);
+    }
+  }
+  return uniqueEntities(values);
+}
+
+function extractActiveServicePreferenceEntities(text: string): string[] {
+  const normalized = normalizeLower(text);
+  return uniqueEntities([
+    /\btasks?\b/.test(normalized) ? "tasks" : null,
+    /\brules?\b/.test(normalized) ? "rules" : null,
+    /\bpermission\b/.test(normalized) ? "permission" : null,
+    /\bapproval\b/.test(normalized) ? "approval" : null,
+    /\bcheck[- ]?in\b/.test(normalized) ? "check-in" : null,
+    /\baccountability\b/.test(normalized) ? "accountability" : null,
+    /\b(?:my\s+)?service\s+(?:will\s+be|is|=)\s+anal\b/.test(normalized)
+      ? "anal service"
+      : null,
+  ]);
 }
 
 function extractPreferenceEntities(text: string): string[] {
@@ -1612,6 +1653,7 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
             .split(/\s*,\s*/)
             .filter(Boolean)
         : []),
+      ...(activeInteractionTurn.training_goals ?? []),
     ]);
     const protocolRules = uniqueEntities([
       ...((active?.protocol_rules ?? []) as string[]),
@@ -1619,6 +1661,8 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
       /\bpermission rules?\b/i.test(normalized) ? "permission rule" : null,
       /\bfirst rule|rule|protocol\b/i.test(normalized) ? "active protocol rule" : null,
     ]);
+    const boundaryUpdates = extractActiveBoundaryEntities(normalized);
+    const servicePreferences = extractActiveServicePreferenceEntities(normalized);
     return buildMeaning({
       rawText,
       normalized,
@@ -1666,6 +1710,9 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
           activeInteractionTurn.requested_facet === "active_step_confusion" ||
           activeInteractionTurn.requested_facet === "clarification_recovery",
         boundary_or_safety_needed: activeInteractionTurn.safety_review_required,
+        hard_limits: boundaryUpdates,
+        boundary_preferences: boundaryUpdates,
+        desired_service_lanes: servicePreferences,
         follow_up_needed: false,
         active_interaction_id: active?.active_interaction_id ?? null,
         active_interaction_type: active?.interaction_type ?? null,
@@ -1689,21 +1736,28 @@ export function interpretTurnMeaning(input: TurnMeaningInput): TurnMeaning {
         daily_task_requested:
           /\bdaily|every\s+day\b/i.test(normalized) ||
           active?.daily_task_requested === true,
+        assistant_selected_task_requested:
+          activeInteractionTurn.assistant_selected_task_requested === true,
+        selected_service_task:
+          activeInteractionTurn.selected_service_task ?? null,
         training_goals: trainingGoals,
         protocol_rules: protocolRules,
         previous_response_brief_id: active?.previous_response_brief_id ?? null,
         active_interaction_routing: activeRouting,
         desired_role: activeInteractionTurn.desired_role ?? null,
+        role_negotiation_status: activeInteractionTurn.role_negotiation_status ?? null,
         experience_level:
           activeInteractionTurn.experience_level ?? active?.known_experience_level ?? null,
         state_delta_type: activeInteractionTurn.state_delta_type ?? null,
         state_delta_summary: activeInteractionTurn.state_delta_summary ?? null,
         new_slots_added: activeInteractionTurn.new_slots_added ?? [],
-        pending_unaddressed_slots:
+        pending_unaddressed_slots: (
           activeInteractionTurn.pending_unaddressed_slots ??
           active?.pending_unaddressed_slots ??
-          [],
+          []
+        ).filter((slot) => slot !== "service_lane" || servicePreferences.length === 0),
         meta_feedback: activeInteractionTurn.meta_feedback ?? null,
+        repair_action: activeInteractionTurn.repair_action ?? null,
       },
       components: [
         {
@@ -2980,6 +3034,11 @@ export function updateCanonicalTurnState(input: TurnMeaningInput): CanonicalTurn
 }
 
 export type SemanticTurnTrace = {
+  authority_trace_present: boolean;
+  authority_trace_version: string;
+  server_authority_sentinel: string;
+  server_commit_path: string | null;
+  client_commit_path: string | null;
   turn_meaning: TurnMeaning;
   planned_move: PlannedMove;
   semantic_owned: boolean;
@@ -3048,6 +3107,18 @@ export type SemanticTurnTrace = {
   response_brief_id: string | null;
   response_brief: unknown | null;
   content_realizer: string | null;
+  assistant_output_quality:
+    | "valid_model_reply"
+    | "valid_fallback_reply"
+    | "repaired_reply"
+    | "rejected_internal_leak"
+    | "fallback_plan_leak"
+    | "generic_assistant_voice"
+    | "failed_fulfillment"
+    | "unknown";
+  assistant_output_context_eligible: boolean;
+  assistant_output_state_eligible?: boolean;
+  request_fulfilled: boolean;
   validation_result: {
     ok: boolean;
     reason: string;
@@ -3111,9 +3182,37 @@ export type SemanticTurnTrace = {
   meta_feedback_detected: boolean;
   internal_instruction_summary_rendered: boolean;
   instruction_renderable_field_used: boolean;
+  final_visible_owner: VisibleOutputOwner;
+  candidate_kind: VisibleOutputCandidateKind;
+  candidate_visible_safe: boolean;
+  approved_response_brief_fallback_used: boolean;
+  strict_relational_authority: boolean;
+  all_visible_candidates: VisibleOutputCandidate[];
+  rejected_visible_candidates: VisibleOutputCandidate[];
+  replacement_chain: VisibleOutputReplacement[];
+  model_reply_used: boolean;
+  response_brief_used: boolean;
+  response_gate_replaced: boolean;
+  client_generated_reply_used: boolean;
+  legacy_visible_emitter_used: boolean;
+  deterministic_bypass_used: boolean;
+  deterministic_bypass_reason: string | null;
+  scene_scaffold_candidate_created: boolean;
+  scene_scaffold_candidate_used: boolean;
+  turn_plan_fallback_created: boolean;
+  turn_plan_fallback_used: boolean;
+  brief_realizer_used: boolean;
+  llm_renderer_used: boolean;
+  visible_commit_owner: VisibleOutputOwner;
+  visible_commit_allowed: boolean;
 };
 
 export function buildSemanticTurnTrace(input: {
+  authorityTracePresent?: boolean;
+  authorityTraceVersion?: string;
+  serverAuthoritySentinel?: string;
+  serverCommitPath?: string | null;
+  clientCommitPath?: string | null;
   turnMeaning: TurnMeaning;
   plannedMove: PlannedMove;
   winningSubsystem: string;
@@ -3149,6 +3248,9 @@ export function buildSemanticTurnTrace(input: {
   responseBriefId?: string | null;
   responseBrief?: unknown | null;
   contentRealizer?: string | null;
+  assistantOutputQuality?: SemanticTurnTrace["assistant_output_quality"];
+  assistantOutputContextEligible?: boolean;
+  requestFulfilled?: boolean;
   validationResult?: {
     ok: boolean;
     reason: string;
@@ -3190,6 +3292,29 @@ export function buildSemanticTurnTrace(input: {
   repetitionRepairUsed?: boolean;
   internalInstructionSummaryRendered?: boolean;
   instructionRenderableFieldUsed?: boolean;
+  finalVisibleOwner?: VisibleOutputOwner;
+  candidateKind?: VisibleOutputCandidateKind;
+  candidateVisibleSafe?: boolean;
+  approvedResponseBriefFallbackUsed?: boolean;
+  strictRelationalAuthority?: boolean;
+  allVisibleCandidates?: VisibleOutputCandidate[];
+  rejectedVisibleCandidates?: VisibleOutputCandidate[];
+  replacementChain?: VisibleOutputReplacement[];
+  modelReplyUsed?: boolean;
+  responseBriefUsed?: boolean;
+  responseGateReplaced?: boolean;
+  clientGeneratedReplyUsed?: boolean;
+  legacyVisibleEmitterUsed?: boolean;
+  deterministicBypassUsed?: boolean;
+  deterministicBypassReason?: string | null;
+  sceneScaffoldCandidateCreated?: boolean;
+  sceneScaffoldCandidateUsed?: boolean;
+  turnPlanFallbackCreated?: boolean;
+  turnPlanFallbackUsed?: boolean;
+  briefRealizerUsed?: boolean;
+  llmRendererUsed?: boolean;
+  visibleCommitOwner?: VisibleOutputOwner;
+  visibleCommitAllowed?: boolean;
 }): SemanticTurnTrace {
   const semanticOwnedContentKeys = new Set([
     "greeting_open",
@@ -3244,6 +3369,13 @@ export function buildSemanticTurnTrace(input: {
         })
       : null;
   return {
+    authority_trace_present: input.authorityTracePresent ?? true,
+    authority_trace_version:
+      input.authorityTraceVersion ?? "visible-output-authority-v2",
+    server_authority_sentinel:
+      input.serverAuthoritySentinel ?? "SERVER_AUTHORITY_COMMIT_V2",
+    server_commit_path: input.serverCommitPath ?? null,
+    client_commit_path: input.clientCommitPath ?? null,
     turn_meaning: input.turnMeaning,
     planned_move: input.plannedMove,
     semantic_owned: semanticOwned,
@@ -3308,6 +3440,12 @@ export function buildSemanticTurnTrace(input: {
     response_brief_id: input.responseBriefId ?? null,
     response_brief: input.responseBrief ?? null,
     content_realizer: input.contentRealizer ?? null,
+    assistant_output_quality: input.assistantOutputQuality ?? "unknown",
+    assistant_output_context_eligible:
+      input.assistantOutputContextEligible ?? false,
+    request_fulfilled:
+      input.requestFulfilled ??
+      Boolean(input.assistantOutputContextEligible && input.validationResult?.ok),
     validation_result: input.validationResult ?? null,
     validation_failures: input.validationFailures ?? [],
     re_realization_attempts: input.reRealizationAttempts ?? 0,
@@ -3448,5 +3586,30 @@ export function buildSemanticTurnTrace(input: {
     instruction_renderable_field_used:
       input.instructionRenderableFieldUsed ??
       Boolean(input.turnMeaning.requested_facet.startsWith("active_") || input.turnMeaning.dynamic_slots?.state_delta_type),
+    final_visible_owner: input.finalVisibleOwner ?? "hard_lock_structured_renderer",
+    candidate_kind: input.candidateKind ?? "nonvisible_fallback_plan",
+    candidate_visible_safe: input.candidateVisibleSafe ?? false,
+    approved_response_brief_fallback_used: input.approvedResponseBriefFallbackUsed ?? false,
+    strict_relational_authority: input.strictRelationalAuthority ?? false,
+    all_visible_candidates: input.allVisibleCandidates ?? [],
+    rejected_visible_candidates: input.rejectedVisibleCandidates ?? [],
+    replacement_chain: input.replacementChain ?? [],
+    model_reply_used: input.modelReplyUsed ?? false,
+    response_brief_used: input.responseBriefUsed ?? Boolean(input.responseBriefId),
+    response_gate_replaced:
+      input.responseGateReplaced ?? input.gateReplacedOutput ?? input.guardIntervention,
+    client_generated_reply_used: input.clientGeneratedReplyUsed ?? false,
+    legacy_visible_emitter_used: input.legacyVisibleEmitterUsed ?? false,
+    deterministic_bypass_used: input.deterministicBypassUsed ?? false,
+    deterministic_bypass_reason: input.deterministicBypassReason ?? null,
+    scene_scaffold_candidate_created: input.sceneScaffoldCandidateCreated ?? false,
+    scene_scaffold_candidate_used: input.sceneScaffoldCandidateUsed ?? false,
+    turn_plan_fallback_created: input.turnPlanFallbackCreated ?? false,
+    turn_plan_fallback_used: input.turnPlanFallbackUsed ?? false,
+    brief_realizer_used: input.briefRealizerUsed ?? Boolean(input.contentRealizer),
+    llm_renderer_used: input.llmRendererUsed ?? input.contentRealizer === "llm_brief_realizer",
+    visible_commit_owner:
+      input.visibleCommitOwner ?? input.finalVisibleOwner ?? "hard_lock_structured_renderer",
+    visible_commit_allowed: input.visibleCommitAllowed ?? true,
   };
 }

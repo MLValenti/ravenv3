@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { planAnswerIntent } from "../lib/session/raven-embodiment.ts";
-import { buildResponseBrief, realizeResponseFromBrief } from "../lib/session/response-brief.ts";
+import {
+  buildResponseBrief,
+  realizeResponseFromBrief,
+  validateDeterministicFallbackProse,
+  validateReplyAgainstBrief,
+} from "../lib/session/response-brief.ts";
 import { updateCanonicalTurnState } from "../lib/session/turn-meaning.ts";
 import {
   createActiveInteractionState,
@@ -46,6 +51,84 @@ function activeTrainingInteraction(): ActiveInteractionState {
     turnId: "seed-training",
   }).after;
 }
+
+function activeRoleInteraction(): ActiveInteractionState {
+  const seed = briefFor("i want to be your submissive");
+  return updateActiveInteractionState({
+    before: createActiveInteractionState(),
+    turnMeaning: seed.canonical.turn_meaning,
+    responseBrief: seed.brief,
+    assistantText:
+      "Start with a negotiated role, not a vague label. A service submissive role fits best for now: tasks, approval, and clear limits first. Choose that role or name the role you want instead.",
+    turnId: "seed-role",
+  }).after;
+}
+
+test("generic deterministic task frame is invalid for short ordinary turns", () => {
+  const genericFallback =
+    "For this, keep the answer practical: use clarity, follow-through, useful service, and control that stays inside consent and boundaries. Name the goal, the limit that stays in force, and the one next step you want handled in this thread.";
+
+  for (const text of ["hello", "miss?", "how are you?"]) {
+    const { brief } = briefFor(text);
+    const validation = validateDeterministicFallbackProse(genericFallback, brief);
+
+    assert.equal(validation.ok, false, text);
+    assert.match(validation.failures.join(" "), /fallback_communicative_act_mismatch|fallback_short_turn_generic_task_frame/, text);
+  }
+});
+
+test("Raven voice validator rejects generic assistant voice", () => {
+  const { brief } = briefFor("hello");
+  const validation = validateReplyAgainstBrief(
+    "Hi there! How can I assist you today?",
+    brief,
+  );
+
+  assert.equal(validation.ok, false);
+  assert.match(validation.failures.join(" "), /generic_assistant_voice/);
+});
+
+test("repair complaints override active protocol continuation", () => {
+  const active = activeRoleInteraction();
+  for (const text of ["that makes no sense", "what do you mean i just told you", "you did not answer"]) {
+    const { canonical, brief, realized } = briefFor(text, undefined, active);
+
+    assert.match(
+      canonical.turn_meaning.requested_facet,
+      /response_correction|clarification_recovery/,
+      text,
+    );
+    assert.notEqual(canonical.turn_meaning.requested_facet, "active_readiness_confirmation", text);
+    assert.notEqual(canonical.turn_meaning.requested_facet, "active_next_step", text);
+    assert.equal(
+      canonical.turn_meaning.dynamic_slots?.repair_action,
+      "clarify_or_repair_previous_response",
+      text,
+    );
+    assert.doesNotMatch(realized.text, /continue from the current active step|training or service step/i, text);
+    assert.match(brief.reply_goal, /feedback|explain|previous|correct|clarif/i, text);
+  }
+});
+
+test("role and service detail answer does not keep service lane missing", () => {
+  const active = activeRoleInteraction();
+  const { canonical, realized } = briefFor(
+    "role is sissy slave and my service will be anal",
+    undefined,
+    active,
+  );
+  const slots = canonical.turn_meaning.dynamic_slots as {
+    desired_role?: string | null;
+    desired_service_lanes?: string[];
+    pending_unaddressed_slots?: string[];
+  };
+
+  assert.equal(slots.desired_role, "slave");
+  assert.deepEqual(slots.desired_service_lanes, ["anal service"]);
+  assert.equal(slots.pending_unaddressed_slots?.includes("service_lane"), false);
+  assert.match(realized.text, /boundary/i);
+  assert.doesNotMatch(realized.text, /one boundary and one service lane/i);
+});
 
 test("response brief separates service tasks from games", () => {
   for (const text of [

@@ -38,6 +38,13 @@ export function shouldRecoverSkippedAssistantRender(input: {
   if (input.appendCommitted) {
     return false;
   }
+  if (
+    input.appendReason.startsWith("authority_blocked:") ||
+    input.appendReason.startsWith("server_authority_error:") ||
+    input.appendReason.startsWith("planner_validation_error:")
+  ) {
+    return false;
+  }
   if (!input.hasRenderableText) {
     return false;
   }

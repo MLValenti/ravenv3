@@ -50,6 +50,7 @@ type ValidationResult =
   | {
       ok: false;
       error: string;
+      missingFields?: Array<"say" | "onPassSay" | "onFailSay">;
     };
 
 const MAX_WORDS = 180;
@@ -276,9 +277,20 @@ export function validatePlannedStep(
   const question = sanitizeText(value.question);
 
   if (!say || !onPassSay || !onFailSay) {
+    const missingFields: Array<"say" | "onPassSay" | "onFailSay"> = [];
+    if (!say) {
+      missingFields.push("say");
+    }
+    if (!onPassSay) {
+      missingFields.push("onPassSay");
+    }
+    if (!onFailSay) {
+      missingFields.push("onFailSay");
+    }
     return {
       ok: false,
       error: "Planner step must include non-empty say, onPassSay, and onFailSay.",
+      missingFields,
     };
   }
 

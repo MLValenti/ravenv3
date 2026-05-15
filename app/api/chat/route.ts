@@ -137,10 +137,7 @@ import {
   buildSessionInventoryContextMessage,
   normalizeSessionInventory,
 } from "@/lib/session/session-inventory";
-import {
-  createSafeFallbackStep,
-  parseAndValidatePlannedStep,
-} from "@/lib/session/step-planner-schema";
+import { parseAndValidatePlannedStep } from "@/lib/session/step-planner-schema";
 import {
   buildObservationTrustGuardLine,
   evaluateObservationTrust,
@@ -172,6 +169,8 @@ import {
 } from "@/lib/session/active-interaction";
 import {
   buildResponseBrief,
+  buildResponseBriefPrompt,
+  detectGenericAssistantVoice,
   normalizePreviousResponseBriefSummary,
   realizeResponseFromBrief,
   summarizeResponseBrief,
@@ -181,6 +180,18 @@ import {
 import {
   planDomainAnswer,
 } from "@/lib/session/raven-preferences";
+import {
+  commitVisibleOutput,
+  recordVisibleCandidate,
+  selectVisibleOutputOwner,
+  visibleTextImpliesUnlimitedConsent,
+} from "@/lib/session/visible-output-authority";
+import {
+  buildServerAuthorityTrace,
+  createAuthorityErrorPayload,
+  SERVER_AUTHORITY_SENTINEL,
+  VISIBLE_OUTPUT_AUTHORITY_TRACE_VERSION,
+} from "@/lib/session/client-visible-authority";
 
 type ChatMessage = {
   role: "user" | "assistant" | "system";
@@ -287,10 +298,42 @@ const SESSION_CONVERSATION_SYSTEM_MESSAGE =
   "Session mode rules: always respond to the user's latest message. If the user asks a question, answer it directly before giving any new instruction. Use Session Memory and Observations when relevant. Ask at most one follow-up question per user message. If the topic is open and user context is still thin, use that question to learn one stable thing about the user such as a goal, preference, limit, or improvement area. Do not ignore user questions, and do not jump to a new instruction without acknowledging what the user said first. Keep responses under 180 words. Never claim visual facts that are not present in Observations. Stay in character as Raven and do not drift into generic technical guidance.";
 
 const TASK_ACTIONS_SYSTEM_MESSAGE = buildTaskActionSchemaPromptBlock();
+const PLANNER_TIMEOUT_MS = 6000;
+const MODEL_TIMEOUT_MS = 12000;
+const RENDERER_TIMEOUT_MS = 8000;
+const ROUTE_TOTAL_TIMEOUT_MS = 18000;
 
 export const runtime = "nodejs";
 const pendingForgetBySession = new Map<string, { query: string; expiresAt: number }>();
 const FORGET_CONFIRM_TTL_MS = 2 * 60 * 1000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<{ response: Response | null; timedOut: boolean; error: string | null; elapsedMs: number }> {
+  const controller = new AbortController();
+  const started = Date.now();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    return { response, timedOut: false, error: null, elapsedMs: Date.now() - started };
+  } catch (error) {
+    const name = error instanceof Error ? error.name : "";
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      response: null,
+      timedOut: name === "AbortError",
+      error: message || "fetch_failed",
+      elapsedMs: Date.now() - started,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function toSafeSessionId(value: unknown): string {
   if (typeof value !== "string") {
@@ -352,8 +395,50 @@ function createStaticAssistantNdjsonResponse(
   text: string,
   extraHeaders: Record<string, string> = {},
   statePayload: ChatResponseStatePayload = {},
+  routeDebug: Record<string, unknown> = {},
 ) {
-  const encoded = `${JSON.stringify({ response: text, done: true, ...statePayload })}\n`;
+  const authorizedPayload = authorizeStaticAssistantStatePayload(text, extraHeaders, statePayload);
+  if (!authorizedPayload.ok) {
+    logSessionRouteDebug({
+      stage: "route_authority_contract",
+      route_received_user_text: routeDebug.route_received_user_text ?? "unknown",
+      planner_strategy: routeDebug.planner_strategy ?? "none",
+      planner_step_valid: routeDebug.planner_step_valid ?? "not_applicable",
+      planner_error_category: routeDebug.planner_error_category ?? null,
+      response_brief_created: routeDebug.response_brief_created ?? false,
+      visible_authority_commit_attempted: true,
+      server_authority_sentinel_attached: false,
+      ndjson_assistant_payload_sent: false,
+      ndjson_error_payload_sent: true,
+    });
+    return createHandledAuthorityErrorNdjsonResponse({
+      errorCategory: "authority_validation_error",
+      blockedReason: authorizedPayload.reason,
+      serverCommitPath: authorizedPayload.serverCommitPath,
+      rawResponseShape: authorizedPayload.rawResponseShape,
+      routeDebug,
+    });
+  }
+  logSessionRouteDebug({
+    stage: "route_authority_contract",
+    route_received_user_text: routeDebug.route_received_user_text ?? "unknown",
+    planner_strategy: routeDebug.planner_strategy ?? "none",
+    planner_step_valid: routeDebug.planner_step_valid ?? "not_applicable",
+    planner_error_category: routeDebug.planner_error_category ?? null,
+    response_brief_created: routeDebug.response_brief_created ?? Boolean(statePayload.previousResponseBrief),
+    visible_authority_commit_attempted: Boolean(text.trim()),
+    server_authority_sentinel_attached:
+      authorizedPayload.authorityTrace.server_authority_sentinel === SERVER_AUTHORITY_SENTINEL,
+    ndjson_assistant_payload_sent: Boolean(text.trim()),
+    ndjson_error_payload_sent: false,
+  });
+  const encoded = `${JSON.stringify({
+    response: text,
+    done: true,
+    ...authorizedPayload.payload,
+    authorityTrace: authorizedPayload.authorityTrace,
+    ...authorizedPayload.authorityTrace,
+  })}\n`;
   return new Response(encoded, {
     status: 200,
     headers: {
@@ -362,6 +447,152 @@ function createStaticAssistantNdjsonResponse(
       ...extraHeaders,
     },
   });
+}
+
+function createHandledAuthorityErrorNdjsonResponse(input: {
+  errorCategory: string;
+  blockedReason: string;
+  serverCommitPath?: string | null;
+  rawResponseShape?: unknown;
+  plannerError?: Record<string, unknown> | null;
+  extra?: Record<string, unknown> | null;
+  routeDebug?: Record<string, unknown>;
+  headers?: Record<string, string>;
+}) {
+  const routeDebug = input.routeDebug ?? {};
+  logSessionRouteDebug({
+    stage: "route_authority_contract",
+    route_received_user_text: routeDebug.route_received_user_text ?? true,
+    planner_strategy: routeDebug.planner_strategy ?? "none",
+    planner_step_valid: routeDebug.planner_step_valid ?? "not_applicable",
+    planner_error_category:
+      input.errorCategory === "planner_validation_error" ? input.errorCategory : null,
+    response_brief_created: routeDebug.response_brief_created ?? false,
+    visible_authority_commit_attempted: routeDebug.visible_authority_commit_attempted ?? false,
+    server_authority_sentinel_attached: false,
+    ndjson_assistant_payload_sent: false,
+    ndjson_error_payload_sent: true,
+    error_category: input.errorCategory,
+    blocked_reason: input.blockedReason,
+    ...(routeDebug ?? {}),
+  });
+  const payload = createAuthorityErrorPayload({
+    errorCategory: input.errorCategory,
+    blockedReason: input.blockedReason,
+    serverCommitPath: input.serverCommitPath ?? "missing",
+    rawResponseShape: input.rawResponseShape,
+    plannerError: input.plannerError,
+    extra: {
+      route_received_user_text: true,
+      visible_authority_commit_attempted: false,
+      ndjson_error_payload_sent: true,
+      assistant_text_sent: false,
+      planner_timeout_ms: PLANNER_TIMEOUT_MS,
+      model_timeout_ms: MODEL_TIMEOUT_MS,
+      renderer_timeout_ms: RENDERER_TIMEOUT_MS,
+      route_total_timeout_ms: ROUTE_TOTAL_TIMEOUT_MS,
+      ...(input.extra ?? {}),
+    },
+  });
+  return new Response(`${JSON.stringify({ response: "", done: true, ...payload })}\n`, {
+    status: 200,
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store",
+      ...(input.headers ?? {}),
+    },
+  });
+}
+
+function hasRequiredVisibleAuthorityFields(trace: Record<string, unknown>): boolean {
+  return (
+    trace.authority_trace_present === true &&
+    trace.authority_trace_version === VISIBLE_OUTPUT_AUTHORITY_TRACE_VERSION &&
+    trace.server_authority_sentinel === SERVER_AUTHORITY_SENTINEL &&
+    typeof trace.server_commit_path === "string" &&
+    trace.server_commit_path.trim().length > 0 &&
+    typeof trace.final_visible_owner === "string" &&
+    trace.final_visible_owner.trim().length > 0 &&
+    typeof trace.final_visible_source === "string" &&
+    trace.final_visible_source.trim().length > 0 &&
+    trace.candidate_kind === "visible_assistant_prose" &&
+    trace.candidate_visible_safe === true &&
+    trace.visible_commit_allowed === true &&
+    trace.client_generated_reply_used === false &&
+    trace.assistant_output_quality !== "failed_fulfillment" &&
+    trace.assistant_output_quality !== "fallback_plan_leak" &&
+    trace.assistant_output_quality !== "generic_assistant_voice" &&
+    trace.assistant_output_context_eligible === true &&
+    trace.request_fulfilled === true
+  );
+}
+
+function authorizeStaticAssistantStatePayload(
+  text: string,
+  extraHeaders: Record<string, string>,
+  statePayload: ChatResponseStatePayload,
+):
+  | { ok: true; payload: ChatResponseStatePayload; authorityTrace: Record<string, unknown> }
+  | {
+      ok: false;
+      reason: string;
+      serverCommitPath: string | null;
+      rawResponseShape: Record<string, unknown>;
+    } {
+  if (!text.trim()) {
+    return { ok: true, payload: statePayload, authorityTrace: {} };
+  }
+  const authorityTrace = buildServerAuthorityTrace({
+    semanticTrace: statePayload.semanticTrace,
+    generationPath: extraHeaders["x-raven-generation-path"],
+    finalOutputSource: extraHeaders["x-raven-final-output-source"],
+    serverCommitPath: "route_authorized_visible_commit",
+  });
+  if (authorityTrace.client_generated_reply_used === true) {
+    return {
+      ok: false,
+      reason: "client_generated_reply_used",
+      serverCommitPath:
+        typeof authorityTrace.server_commit_path === "string"
+          ? authorityTrace.server_commit_path
+          : null,
+      rawResponseShape: {
+        text_present: true,
+        state_payload_keys: Object.keys(statePayload).sort(),
+        semantic_trace_keys:
+          statePayload.semanticTrace && typeof statePayload.semanticTrace === "object"
+            ? Object.keys(statePayload.semanticTrace as Record<string, unknown>).sort()
+            : [],
+      },
+    };
+  }
+  if (!hasRequiredVisibleAuthorityFields(authorityTrace)) {
+    return {
+      ok: false,
+      reason: "visible_authority_contract_incomplete",
+      serverCommitPath:
+        typeof authorityTrace.server_commit_path === "string"
+          ? authorityTrace.server_commit_path
+          : null,
+      rawResponseShape: {
+        text_present: true,
+        state_payload_keys: Object.keys(statePayload).sort(),
+        semantic_trace_keys:
+          statePayload.semanticTrace && typeof statePayload.semanticTrace === "object"
+            ? Object.keys(statePayload.semanticTrace as Record<string, unknown>).sort()
+            : [],
+        authority_trace_keys: Object.keys(authorityTrace).sort(),
+      },
+    };
+  }
+  return {
+    ok: true,
+    payload: {
+      ...statePayload,
+      semanticTrace: statePayload.semanticTrace,
+    },
+    authorityTrace,
+  };
 }
 
 function buildChatResponseStatePayload(input: {
@@ -1204,6 +1435,7 @@ async function buildPreparedMessages(
 }
 
 export async function POST(request: Request) {
+  const routeStartedAtMs = Date.now();
   const emergencyStop = await getEmergencyStopSnapshot();
   if (await shouldBlockChatRoute(emergencyStop.stopped)) {
     return NextResponse.json({ error: CHAT_ROUTE_BLOCKED_ERROR }, { status: 403 });
@@ -1832,9 +2064,7 @@ export async function POST(request: Request) {
   };
   setPromptDebugEntry(promptDebugEntry);
 
-  let upstreamResponse: Response;
-  try {
-    upstreamResponse = await fetch(`${validatedBaseUrl.normalizedBaseUrl}/api/chat`, {
+  const upstreamFetch = await fetchWithTimeout(`${validatedBaseUrl.normalizedBaseUrl}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -1843,23 +2073,69 @@ export async function POST(request: Request) {
         stream: false,
         options: samplingOptions,
       }),
+    }, planner.enabled ? PLANNER_TIMEOUT_MS : MODEL_TIMEOUT_MS);
+  if (!upstreamFetch.response) {
+    return createHandledAuthorityErrorNdjsonResponse({
+      errorCategory: upstreamFetch.timedOut ? "model_timeout" : "model_unavailable",
+      blockedReason: planner.enabled
+        ? upstreamFetch.timedOut
+          ? "planner_timeout"
+          : "planner_model_unavailable"
+        : upstreamFetch.timedOut
+          ? "model_timeout"
+          : "model_unavailable",
+      rawResponseShape: {
+        upstream_response_present: false,
+        timed_out: upstreamFetch.timedOut,
+        elapsed_ms: upstreamFetch.elapsedMs,
+        error: upstreamFetch.error,
+        planner_enabled: planner.enabled,
+      },
+      routeDebug: {
+        route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+        planner_strategy: planner.enabled ? "interpret_then_lead" : "none",
+        planner_step_valid: planner.enabled ? false : "not_applicable",
+        planner_error_category: planner.enabled ? "planner_validation_error" : null,
+        response_brief_created: false,
+        visible_authority_commit_attempted: false,
+        planner_timeout_ms: PLANNER_TIMEOUT_MS,
+        model_timeout_ms: MODEL_TIMEOUT_MS,
+        route_elapsed_ms: Date.now() - routeStartedAtMs,
+      },
+      extra: {
+        upstream_elapsed_ms: upstreamFetch.elapsedMs,
+        planner_timeout_ms: PLANNER_TIMEOUT_MS,
+        model_timeout_ms: MODEL_TIMEOUT_MS,
+        route_elapsed_ms: Date.now() - routeStartedAtMs,
+      },
     });
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to reach Ollama. Verify the base URL and that Ollama is running." },
-      { status: 502 },
-    );
   }
 
+  const upstreamResponse = upstreamFetch.response;
   if (!upstreamResponse.ok) {
     const details = await upstreamResponse.text();
-    return NextResponse.json(
-      {
-        error: "Ollama returned an error.",
+    return createHandledAuthorityErrorNdjsonResponse({
+      errorCategory: "model_unavailable",
+      blockedReason: planner.enabled ? "planner_model_unavailable" : "model_unavailable",
+      rawResponseShape: {
+        upstream_status: upstreamResponse.status,
         details: details.slice(0, 500),
+        planner_enabled: planner.enabled,
       },
-      { status: 502 },
-    );
+      routeDebug: {
+        route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+        planner_strategy: planner.enabled ? "interpret_then_lead" : "none",
+        planner_step_valid: planner.enabled ? false : "not_applicable",
+        planner_error_category: planner.enabled ? "planner_validation_error" : null,
+        response_brief_created: false,
+        visible_authority_commit_attempted: false,
+        route_elapsed_ms: Date.now() - routeStartedAtMs,
+      },
+      extra: {
+        upstream_status: upstreamResponse.status,
+        route_elapsed_ms: Date.now() - routeStartedAtMs,
+      },
+    });
   }
 
   if (planner.enabled) {
@@ -1879,19 +2155,39 @@ export async function POST(request: Request) {
       allowedCheckTypes,
     });
     if (!parsed.ok) {
-      return NextResponse.json({
-        step: createSafeFallbackStep(planner.stepIndex),
-        fallback: true,
-        error: parsed.error,
-        raw: rawPlannerText,
-        validation: {
-          accepted: [],
-          removed: [],
-          downgraded: true,
-          downgrade_reason: parsed.error,
-          clamp_notes: [],
-        } satisfies PlannerCheckValidationReport,
-      });
+      const missingFields =
+        parsed.missingFields && parsed.missingFields.length > 0
+          ? parsed.missingFields
+          : ["say", "onPassSay", "onFailSay"];
+      return createHandledAuthorityErrorNdjsonResponse({
+          errorCategory: "planner_validation_error",
+          blockedReason: "planner_step_missing_required_fields",
+          serverCommitPath: "missing",
+          rawResponseShape: {
+            planner_enabled: true,
+            raw_present: Boolean(rawPlannerText.trim()),
+            validation_error: parsed.error,
+            route_elapsed_ms: Date.now() - routeStartedAtMs,
+          },
+          plannerError: {
+            missing_fields: missingFields,
+            planner_path: "api_chat_planner",
+            strategy: "interpret_then_lead",
+          },
+          routeDebug: {
+            route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+            planner_strategy: "interpret_then_lead",
+            planner_step_valid: false,
+            planner_error_category: "planner_validation_error",
+            response_brief_created: false,
+            visible_authority_commit_attempted: false,
+            ndjson_error_payload_sent: true,
+            route_elapsed_ms: Date.now() - routeStartedAtMs,
+          },
+          extra: {
+            route_elapsed_ms: Date.now() - routeStartedAtMs,
+          },
+        });
     }
 
     const validated = validatePlannerStepAgainstCatalog(
@@ -1900,6 +2196,18 @@ export async function POST(request: Request) {
       capabilityCatalog,
     );
 
+    logSessionRouteDebug({
+      stage: "route_authority_contract",
+      route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+      planner_strategy: "interpret_then_lead",
+      planner_step_valid: true,
+      planner_error_category: null,
+      response_brief_created: false,
+      visible_authority_commit_attempted: false,
+      server_authority_sentinel_attached: false,
+      ndjson_assistant_payload_sent: false,
+      ndjson_error_payload_sent: false,
+    });
     return NextResponse.json({
       step: validated.step,
       fallback: false,
@@ -2057,13 +2365,36 @@ export async function POST(request: Request) {
   }
 
   if (!shaped.text) {
-    return NextResponse.json(
-      { error: "Ollama returned an empty assistant response." },
-      { status: 502 },
-    );
+    return createHandledAuthorityErrorNdjsonResponse({
+      errorCategory: "renderer_validation_error",
+      blockedReason: "empty_assistant_response",
+      rawResponseShape: {
+        raw_present: Boolean(rawAssistantText.trim()),
+        shape_reason: shaped.reason ?? null,
+        route_elapsed_ms: Date.now() - routeStartedAtMs,
+      },
+      routeDebug: {
+        route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+        planner_strategy: "none",
+        planner_step_valid: "not_applicable",
+        planner_error_category: null,
+        response_brief_created: false,
+        visible_authority_commit_attempted: false,
+        route_elapsed_ms: Date.now() - routeStartedAtMs,
+      },
+      extra: {
+        route_elapsed_ms: Date.now() - routeStartedAtMs,
+      },
+    });
   }
   let finalAssistantText = shaped.text;
   let finalOutputSource = "model";
+  const routeReplacementChain: Array<{
+    oldText: string;
+    newText: string;
+    reason: string;
+    sourcePath: string;
+  }> = [];
   const freshGreetingGuard = applyFreshGreetingGuard({
     text: finalAssistantText,
     lastUserMessage: lastUserMessage?.content ?? "",
@@ -2180,7 +2511,123 @@ export async function POST(request: Request) {
     activeInteraction: activeInteractionBefore,
     sourceTurnId: requestId,
   });
+  type RouteAssistantOutputQuality =
+    | "valid_model_reply"
+    | "valid_fallback_reply"
+    | "repaired_reply"
+    | "rejected_internal_leak"
+    | "fallback_plan_leak"
+    | "generic_assistant_voice"
+    | "failed_fulfillment"
+    | "unknown";
+  const ordinaryOrRelationalRender =
+    turnMeaning.current_domain_handler === "conversation" ||
+    turnMeaning.current_domain_handler === "relational_dynamics" ||
+    semanticMove.content_key === "greeting_open" ||
+    semanticMove.content_key === "current_status_answer" ||
+    semanticMove.content_key === "clarification_answer" ||
+    semanticMove.content_key === "conversation_continue" ||
+    semanticMove.content_key === "reciprocal_user_probe";
   let responseBriefValidation = validateReplyAgainstBrief(finalAssistantText, responseBrief);
+  let assistantOutputQuality: RouteAssistantOutputQuality =
+    finalOutputSource === "model" && responseBriefValidation.ok
+      ? "valid_model_reply"
+      : "unknown";
+  let assistantOutputContextEligible =
+    assistantOutputQuality === "valid_model_reply";
+  let llmRendererRetryUsed = false;
+  let llmRendererError: string | null = null;
+  const shouldRetryApprovedRenderer = ordinaryOrRelationalRender;
+  if (shouldRetryApprovedRenderer) {
+    llmRendererRetryUsed = true;
+    const rendererPrompt = buildResponseBriefPrompt(responseBrief, responseBriefValidation);
+    const rendererFetch = await fetchWithTimeout(`${validatedBaseUrl.normalizedBaseUrl}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: "system", content: SESSION_CONVERSATION_SYSTEM_MESSAGE },
+          { role: "user", content: rendererPrompt },
+        ],
+        stream: false,
+        options: samplingOptions,
+      }),
+    }, RENDERER_TIMEOUT_MS);
+    const rendererResponse = rendererFetch.response;
+    if (rendererResponse?.ok) {
+      const rendererBody = (await rendererResponse.json().catch(() => null)) as {
+        message?: { content?: unknown };
+        response?: unknown;
+      } | null;
+      const rendererText =
+        typeof rendererBody?.message?.content === "string"
+          ? rendererBody.message.content.trim()
+          : typeof rendererBody?.response === "string"
+            ? rendererBody.response.trim()
+            : "";
+      const rendererValidation = validateReplyAgainstBrief(rendererText, responseBrief);
+      if (rendererText && rendererValidation.ok) {
+        const oldText = finalAssistantText;
+        finalAssistantText = rendererText;
+        finalOutputSource = "llm_brief_realizer";
+        responseBriefValidation = rendererValidation;
+        assistantOutputQuality = "valid_model_reply";
+        assistantOutputContextEligible = true;
+        routeReplacementChain.push({
+          oldText,
+          newText: finalAssistantText,
+          reason: "response_brief_llm_renderer_retry",
+          sourcePath: "routeApprovedLlmRendererRetry",
+        });
+        baseResponseHeaders["x-raven-response-brief-renderer-retry"] = "pass";
+      } else {
+        llmRendererError = rendererText
+          ? `validation_failed:${rendererValidation.reason}`
+          : "empty_renderer_response";
+        baseResponseHeaders["x-raven-response-brief-renderer-retry"] =
+          `failed:${rendererValidation.reason}`;
+      }
+    } else {
+      llmRendererError = rendererFetch.timedOut ? "model_timeout" : "model_unavailable";
+      baseResponseHeaders["x-raven-response-brief-renderer-retry"] =
+        rendererFetch.timedOut ? "failed:model_timeout" : "failed:model_unavailable";
+    }
+  } else {
+    baseResponseHeaders["x-raven-response-brief-renderer-retry"] = "not_needed";
+  }
+  const softAcceptableConversationCandidate =
+    ordinaryOrRelationalRender &&
+    (finalOutputSource === "model" || finalOutputSource === "llm_brief_realizer") &&
+    !responseBriefValidation.ok &&
+    responseBriefValidation.failures.length > 0 &&
+    responseBriefValidation.failures.every((failure) => failure.startsWith("missing_must_address:")) &&
+    !/\b(?:answer_mode|requested_facet|ResponseBrief|nonvisible_|current_step_summary|Planner step|fallback plan)\b/i.test(
+      finalAssistantText,
+    ) &&
+    !visibleTextImpliesUnlimitedConsent(finalAssistantText);
+  if (responseBriefValidation.failures.includes("generic_assistant_voice")) {
+    assistantOutputQuality = "generic_assistant_voice";
+    assistantOutputContextEligible = false;
+  }
+  if (softAcceptableConversationCandidate) {
+    responseBriefValidation = {
+      ok: true,
+      reason: "conversation_model_candidate_soft_accept",
+      failures: [],
+    };
+    assistantOutputQuality = "valid_model_reply";
+    assistantOutputContextEligible = true;
+    routeReplacementChain.push({
+      oldText: finalAssistantText,
+      newText: finalAssistantText,
+      reason: "response_brief_soft_accept_conversational_model_candidate",
+      sourcePath: "routeResponseBriefSoftAccept",
+    });
+    baseResponseHeaders["x-raven-response-brief-soft-accept"] = "missing_must_address_only";
+  } else {
+    baseResponseHeaders["x-raven-response-brief-soft-accept"] = "pass";
+  }
   const modelPathNeedsBriefRepair =
     turnMeaning.current_domain_handler === "relational_dynamics" &&
     (!responseBriefValidation.ok ||
@@ -2188,13 +2635,33 @@ export async function POST(request: Request) {
         finalAssistantText,
       ));
   if (modelPathNeedsBriefRepair) {
-    const briefRepair = realizeResponseFromBrief({
-      brief: responseBrief,
-      llmCandidate: finalAssistantText,
-    });
-    finalAssistantText = briefRepair.text;
-    finalOutputSource = briefRepair.content_realizer;
-    responseBriefValidation = briefRepair.validation_result;
+    if (ordinaryOrRelationalRender && llmRendererRetryUsed) {
+      assistantOutputQuality = "failed_fulfillment";
+      assistantOutputContextEligible = false;
+      routeReplacementChain.push({
+        oldText: finalAssistantText,
+        newText: finalAssistantText,
+        reason: `response_brief_repair_blocked_after_llm_retry:${responseBriefValidation.reason}`,
+        sourcePath: "routeResponseBriefRepair",
+      });
+    } else {
+      const oldText = finalAssistantText;
+      const briefRepair = realizeResponseFromBrief({
+        brief: responseBrief,
+        llmCandidate: finalAssistantText,
+      });
+      finalAssistantText = briefRepair.text;
+      finalOutputSource = briefRepair.content_realizer;
+      responseBriefValidation = briefRepair.validation_result;
+      assistantOutputQuality = briefRepair.assistant_output_quality;
+      assistantOutputContextEligible = briefRepair.assistant_output_context_eligible;
+      routeReplacementChain.push({
+        oldText,
+        newText: finalAssistantText,
+        reason: "response_brief_repair",
+        sourcePath: "routeResponseBriefRepair",
+      });
+    }
     baseResponseHeaders["x-raven-response-brief-repair"] =
       responseBriefValidation.ok ? "repaired" : `failed:${responseBriefValidation.reason}`;
   } else {
@@ -2212,6 +2679,7 @@ export async function POST(request: Request) {
     repeatedAnswerSimilarity >= 0.58
   ) {
     repeatedAnswerDetected = true;
+    const oldText = finalAssistantText;
     const repaired = realizeResponseFromBrief({
       brief: {
         ...responseBrief,
@@ -2230,21 +2698,266 @@ export async function POST(request: Request) {
     finalAssistantText = repaired.text;
     finalOutputSource = repaired.content_realizer;
     responseBriefValidation = repaired.validation_result;
+    assistantOutputQuality = repaired.assistant_output_quality;
+    assistantOutputContextEligible = repaired.assistant_output_context_eligible;
     repetitionRepairUsed = true;
+    routeReplacementChain.push({
+      oldText,
+      newText: finalAssistantText,
+      reason: "repetition_repair_state_delta",
+      sourcePath: "routeResponseBriefRepetitionRepair",
+    });
     baseResponseHeaders["x-raven-repetition-repair"] = "state-delta";
   } else {
     baseResponseHeaders["x-raven-repetition-repair"] = "pass";
   }
+  let routeContentRealizer =
+    finalOutputSource === "llm_brief_realizer" ||
+    finalOutputSource === "deterministic_brief_fallback"
+      ? finalOutputSource
+      : finalOutputSource === "model" && responseBriefValidation.ok
+        ? "llm_brief_realizer"
+        : null;
+  let visibleAuthority = selectVisibleOutputOwner({
+    turnMeaning,
+    plannedMove: semanticMove,
+    activeInteraction: activeInteractionBefore,
+    candidateSource: finalOutputSource,
+    finalSource: finalOutputSource,
+    responseBriefId: responseBrief.brief_id,
+    contentRealizer: routeContentRealizer,
+    replacementChain: routeReplacementChain,
+    assistantOutputQuality,
+    assistantOutputContextEligible,
+    requestFulfilled: responseBriefValidation.ok && assistantOutputContextEligible,
+    candidates: [
+      recordVisibleCandidate("raw_model", rawAssistantText, "raw_model", {
+        selected: finalOutputSource === "model",
+      }),
+      recordVisibleCandidate(finalOutputSource, finalAssistantText, finalOutputSource === "deterministic_brief_fallback" ? "response_brief" : /fallback|guard|deterministic|scaffold|turnPlan/i.test(finalOutputSource) ? "legacy" : "response_brief", {
+        selected: true,
+        owner: routeContentRealizer === "llm_brief_realizer"
+          ? "approved_llm_renderer_from_response_brief"
+          : routeContentRealizer === "deterministic_brief_fallback"
+            ? "approved_response_brief_fallback"
+            : null,
+        visible_safe:
+          responseBriefValidation.ok &&
+          Boolean(routeContentRealizer) &&
+          assistantOutputContextEligible,
+        internal_source_type: routeContentRealizer ? "visible_safe" : undefined,
+      }),
+    ],
+  });
+  if (
+    visibleAuthority.final_visible_owner === "blocked" ||
+    visibleTextImpliesUnlimitedConsent(finalAssistantText)
+  ) {
+    const oldText = finalAssistantText;
+    if (ordinaryOrRelationalRender && llmRendererRetryUsed) {
+      assistantOutputQuality = "failed_fulfillment";
+      assistantOutputContextEligible = false;
+    } else {
+      const authorityRepair = realizeResponseFromBrief({ brief: responseBrief });
+      finalAssistantText = authorityRepair.text;
+      finalOutputSource = authorityRepair.content_realizer;
+      routeContentRealizer = authorityRepair.content_realizer;
+      responseBriefValidation = authorityRepair.validation_result;
+      assistantOutputQuality = authorityRepair.assistant_output_quality;
+      assistantOutputContextEligible = authorityRepair.assistant_output_context_eligible;
+    }
+    routeReplacementChain.push({
+      oldText,
+      newText: finalAssistantText,
+      reason: visibleTextImpliesUnlimitedConsent(oldText)
+        ? "unsafe_unlimited_consent_text"
+        : "visible_output_authority_legacy_emitter_blocked",
+      sourcePath: "routeVisibleOutputAuthority",
+    });
+    visibleAuthority = selectVisibleOutputOwner({
+      turnMeaning,
+      plannedMove: semanticMove,
+      activeInteraction: activeInteractionBefore,
+      candidateSource: "route_visible_output_authority",
+      finalSource: finalOutputSource,
+      responseBriefId: responseBrief.brief_id,
+      contentRealizer: routeContentRealizer,
+      replacementChain: routeReplacementChain,
+      assistantOutputQuality,
+      assistantOutputContextEligible,
+      requestFulfilled: responseBriefValidation.ok && assistantOutputContextEligible,
+      candidates: [
+        recordVisibleCandidate("raw_model", rawAssistantText, "raw_model"),
+        recordVisibleCandidate("route_visible_output_authority", finalAssistantText, "response_brief", {
+          selected: true,
+          owner: routeContentRealizer === "llm_brief_realizer"
+            ? "approved_llm_renderer_from_response_brief"
+            : "approved_response_brief_fallback",
+          visible_safe: responseBriefValidation.ok && assistantOutputContextEligible,
+          internal_source_type: "visible_safe",
+        }),
+      ],
+    });
+    baseResponseHeaders["x-raven-visible-output-authority"] = "repaired";
+  } else {
+    baseResponseHeaders["x-raven-visible-output-authority"] = visibleAuthority.final_visible_owner;
+  }
+  let visibleCommitDecision = commitVisibleOutput({
+    decision: visibleAuthority,
+    text: finalAssistantText,
+    candidate: visibleAuthority.final_visible_candidate,
+  });
+  if (!visibleCommitDecision.allow) {
+    const oldText = finalAssistantText;
+    if (ordinaryOrRelationalRender && llmRendererRetryUsed) {
+      assistantOutputQuality = "failed_fulfillment";
+      assistantOutputContextEligible = false;
+    } else {
+      const commitRepair = realizeResponseFromBrief({ brief: responseBrief });
+      finalAssistantText = commitRepair.text;
+      finalOutputSource = commitRepair.content_realizer;
+      routeContentRealizer = commitRepair.content_realizer;
+      responseBriefValidation = commitRepair.validation_result;
+      assistantOutputQuality = commitRepair.assistant_output_quality;
+      assistantOutputContextEligible = commitRepair.assistant_output_context_eligible;
+    }
+    routeReplacementChain.push({
+      oldText,
+      newText: finalAssistantText,
+      reason: `visible_commit_rejected_${visibleCommitDecision.reason}`,
+      sourcePath: "routeVisibleCommitAuthority",
+    });
+    visibleAuthority = selectVisibleOutputOwner({
+      turnMeaning,
+      plannedMove: semanticMove,
+      activeInteraction: activeInteractionBefore,
+      candidateSource: "route_visible_commit_authority",
+      finalSource: finalOutputSource,
+      responseBriefId: responseBrief.brief_id,
+      contentRealizer: routeContentRealizer,
+      replacementChain: routeReplacementChain,
+      assistantOutputQuality,
+      assistantOutputContextEligible,
+      requestFulfilled: responseBriefValidation.ok && assistantOutputContextEligible,
+      candidates: [
+        recordVisibleCandidate("raw_model", rawAssistantText, "raw_model"),
+        recordVisibleCandidate("route_visible_commit_authority", finalAssistantText, "response_brief", {
+          selected: true,
+          owner: routeContentRealizer === "llm_brief_realizer"
+            ? "approved_llm_renderer_from_response_brief"
+            : "approved_response_brief_fallback",
+          visible_safe: responseBriefValidation.ok && assistantOutputContextEligible,
+          internal_source_type: "visible_safe",
+        }),
+      ],
+    });
+    visibleCommitDecision = commitVisibleOutput({
+      decision: visibleAuthority,
+      text: finalAssistantText,
+      candidate: visibleAuthority.final_visible_candidate,
+    });
+  }
+  const finalRequestFulfilled =
+    assistantOutputQuality !== "failed_fulfillment" &&
+    assistantOutputQuality !== "fallback_plan_leak" &&
+    assistantOutputQuality !== "generic_assistant_voice" &&
+    assistantOutputContextEligible &&
+    responseBriefValidation.ok &&
+    visibleCommitDecision.allow;
+  if (!finalRequestFulfilled) {
+    const renderErrorCategory =
+      llmRendererError === "model_timeout"
+        ? "model_timeout"
+        : responseBriefValidation.failures.includes("generic_assistant_voice") ||
+            assistantOutputQuality === "generic_assistant_voice"
+          ? "renderer_validation_error"
+          : "no_valid_visible_reply";
+    const renderBlockedReason =
+      renderErrorCategory === "model_timeout"
+        ? "model_timeout"
+        : renderErrorCategory === "renderer_validation_error"
+          ? "generic_assistant_voice"
+          : "no_valid_visible_reply";
+    logSessionRouteDebug({
+      stage: "route_authority_contract",
+      route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+      planner_strategy: "none",
+      planner_step_valid: "not_applicable",
+      planner_error_category: null,
+      response_brief_created: true,
+      visible_authority_commit_attempted: true,
+      server_authority_sentinel_attached: false,
+      ndjson_assistant_payload_sent: false,
+      ndjson_error_payload_sent: true,
+      render_error_category: renderErrorCategory,
+      render_blocked_reason: renderBlockedReason,
+      model_reply_used: visibleAuthority.model_reply_used,
+      llm_renderer_used: visibleAuthority.llm_renderer_used,
+      approved_response_brief_fallback_used:
+        visibleAuthority.approved_response_brief_fallback_used,
+      assistant_output_quality: assistantOutputQuality,
+      assistant_output_context_eligible: assistantOutputContextEligible,
+      request_fulfilled: false,
+      visible_commit_reason: visibleCommitDecision.reason,
+      route_elapsed_ms: Date.now() - routeStartedAtMs,
+    });
+    return createHandledAuthorityErrorNdjsonResponse({
+        errorCategory: renderErrorCategory,
+        blockedReason: renderBlockedReason,
+        serverCommitPath: "missing",
+        rawResponseShape: {
+          response_brief_id: responseBrief.brief_id,
+          final_output_source: finalOutputSource,
+          response_brief_validation_reason: responseBriefValidation.reason,
+          visible_commit_reason: visibleCommitDecision.reason,
+          llm_renderer_retry_used: llmRendererRetryUsed,
+          llm_renderer_error: llmRendererError,
+          route_elapsed_ms: Date.now() - routeStartedAtMs,
+        },
+        extra: {
+          model_reply_used: visibleAuthority.model_reply_used,
+          llm_renderer_used: visibleAuthority.llm_renderer_used,
+          approved_response_brief_fallback_used:
+            visibleAuthority.approved_response_brief_fallback_used,
+          assistant_output_quality: assistantOutputQuality,
+          assistant_output_context_eligible: assistantOutputContextEligible,
+          request_fulfilled: false,
+          llm_renderer_error: llmRendererError,
+          replacement_chain: routeReplacementChain,
+          route_elapsed_ms: Date.now() - routeStartedAtMs,
+        },
+        routeDebug: {
+          route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+          planner_strategy: "none",
+          planner_step_valid: "not_applicable",
+          planner_error_category: null,
+          response_brief_created: true,
+          visible_authority_commit_attempted: true,
+          route_elapsed_ms: Date.now() - routeStartedAtMs,
+        },
+      });
+  }
+  const assistantOutputStateEligible =
+    assistantOutputQuality === "valid_model_reply" &&
+    assistantOutputContextEligible &&
+    responseBriefValidation.ok &&
+    visibleCommitDecision.allow &&
+    finalRequestFulfilled &&
+    !detectGenericAssistantVoice(finalAssistantText);
   const activeInteractionUpdate = updateActiveInteractionState({
     before: activeInteractionBefore,
     turnMeaning,
     responseBrief,
-    assistantText: finalAssistantText,
+    assistantText: assistantOutputStateEligible ? finalAssistantText : "",
     turnId: requestId,
   });
   const activeInteractionAfter =
     normalizeActiveInteractionState(activeInteractionUpdate.after) ?? activeInteractionBefore;
-  const previousResponseBriefAfter = summarizeResponseBrief(responseBrief, finalAssistantText);
+  assistantOutputContextEligible =
+    assistantOutputContextEligible && visibleCommitDecision.allow && responseBriefValidation.ok;
+  const previousResponseBriefAfter = assistantOutputStateEligible
+    ? summarizeResponseBrief(responseBrief, finalAssistantText)
+    : null;
   const activeInteractionRouting = routeTurnWithActiveInteraction({
     text: lastUserMessage?.content ?? "",
     activeInteraction: activeInteractionBefore,
@@ -2348,32 +3061,36 @@ export async function POST(request: Request) {
     responseStrategy,
   );
   return createStaticAssistantNdjsonResponse(finalAssistantText, {
-    ...baseResponseHeaders,
-    "x-raven-final-output-source": finalOutputSource,
-    "x-raven-post-processed":
-      shaped.reason !== "none" || postShapeCritic.reasons.length > 0 ? "1" : "0",
-    "x-raven-task-create-source": persisted.taskCreateSource,
-    "x-raven-task-create-kind": persisted.taskCreateKind,
-    "x-raven-task-origin-turn-id": turnId,
-    "x-raven-game-start-detected": rawGameStartInspection.detected ? "1" : "0",
-    "x-raven-game-start-raw-question-present": rawGameStartInspection.hasPlayablePrompt
-      ? "1"
-      : "0",
-    "x-raven-game-start-final-question-present": finalGameStartInspection.hasPlayablePrompt
-      ? "1"
-      : "0",
-    ...(createdTaskId
-      ? {
-          "x-raven-task-created": "1",
-          "x-raven-task-id": createdTaskId,
-        }
-      : {}),
-  }, buildChatResponseStatePayload({
+      ...baseResponseHeaders,
+      "x-raven-final-output-source": finalOutputSource,
+      "x-raven-post-processed":
+        shaped.reason !== "none" || postShapeCritic.reasons.length > 0 ? "1" : "0",
+      "x-raven-task-create-source": persisted.taskCreateSource,
+      "x-raven-task-create-kind": persisted.taskCreateKind,
+      "x-raven-task-origin-turn-id": turnId,
+      "x-raven-game-start-detected": rawGameStartInspection.detected ? "1" : "0",
+      "x-raven-game-start-raw-question-present": rawGameStartInspection.hasPlayablePrompt
+        ? "1"
+        : "0",
+      "x-raven-game-start-final-question-present": finalGameStartInspection.hasPlayablePrompt
+        ? "1"
+        : "0",
+      ...(createdTaskId
+        ? {
+            "x-raven-task-created": "1",
+            "x-raven-task-id": createdTaskId,
+          }
+        : {}),
+    }, buildChatResponseStatePayload({
     activeInteractionBefore,
     activeInteractionAfter,
     previousResponseBrief: previousResponseBriefAfter,
     owner: activeStateOwner,
     semanticTrace: {
+      authority_trace_present: true,
+      authority_trace_version: "visible-output-authority-v2",
+      server_commit_path: "app_api_chat_route_static_assistant_ndjson",
+      client_commit_path: null,
       active_interaction_before: activeInteractionBefore,
       active_interaction_after: activeInteractionAfter,
       active_interaction_transition: activeInteractionUpdate.transition,
@@ -2439,6 +3156,37 @@ export async function POST(request: Request) {
       ),
       response_brief: responseBrief,
       response_brief_id: responseBrief.brief_id,
+      assistant_output_quality: assistantOutputQuality,
+      assistant_output_context_eligible: assistantOutputContextEligible,
+      assistant_output_state_eligible: assistantOutputStateEligible,
+      request_fulfilled:
+        finalRequestFulfilled,
+      final_visible_source: visibleAuthority.final_visible_source,
+      final_visible_owner: visibleAuthority.final_visible_owner,
+      candidate_kind: visibleAuthority.candidate_kind,
+      candidate_visible_safe: visibleAuthority.candidate_visible_safe,
+      approved_response_brief_fallback_used:
+        visibleAuthority.approved_response_brief_fallback_used,
+      strict_relational_authority: visibleAuthority.strict_relational_authority,
+      all_visible_candidates: visibleAuthority.all_visible_candidates,
+      rejected_visible_candidates: visibleAuthority.rejected_visible_candidates,
+      replacement_chain: visibleAuthority.replacement_chain,
+      model_reply_used: visibleAuthority.model_reply_used,
+      response_brief_used: visibleAuthority.response_brief_used,
+      response_gate_replaced: visibleAuthority.response_gate_replaced,
+      client_generated_reply_used: visibleAuthority.client_generated_reply_used,
+      legacy_visible_emitter_used: visibleAuthority.legacy_visible_emitter_used,
+      legacy_visible_emitter_blocked: visibleAuthority.legacy_visible_emitter_blocked,
+      deterministic_bypass_used: visibleAuthority.deterministic_bypass_used,
+      deterministic_bypass_reason: visibleAuthority.deterministic_bypass_reason,
+      scene_scaffold_candidate_created: visibleAuthority.scene_scaffold_candidate_created,
+      scene_scaffold_candidate_used: visibleAuthority.scene_scaffold_candidate_used,
+      turn_plan_fallback_created: visibleAuthority.turn_plan_fallback_created,
+      turn_plan_fallback_used: visibleAuthority.turn_plan_fallback_used,
+      brief_realizer_used: visibleAuthority.brief_realizer_used,
+      llm_renderer_used: visibleAuthority.llm_renderer_used,
+      visible_commit_owner: visibleAuthority.visible_commit_owner,
+      visible_commit_allowed: visibleCommitDecision.allow,
       state_returned_to_server: Boolean(activeInteractionBefore?.active_interaction_id),
       state_persisted_to_client: true,
       active_interaction_route_considered:
@@ -2456,5 +3204,11 @@ export async function POST(request: Request) {
         activeInteractionRouting.conversation_mode_overridden_by_active_interaction,
       previous_response_brief_used: activeInteractionRouting.previous_response_brief_used,
     },
-  }));
+    }), {
+      route_received_user_text: Boolean(lastUserMessage?.content?.trim()),
+      planner_strategy: "none",
+      planner_step_valid: "not_applicable",
+      planner_error_category: null,
+      response_brief_created: Boolean(responseBrief.brief_id),
+    });
 }

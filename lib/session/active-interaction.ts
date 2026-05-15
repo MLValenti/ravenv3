@@ -31,6 +31,14 @@ export type ExpectedUserResponseType =
   | "correction"
   | "none";
 
+export type RoleNegotiationStatus =
+  | "none"
+  | "offered"
+  | "accepted"
+  | "modified"
+  | "rejected"
+  | "clarifying";
+
 export type ActiveInteractionInstruction = {
   instruction_id: string;
   plain_language_summary: string;
@@ -56,6 +64,7 @@ export type ActiveInteractionState = {
   known_boundaries: string[];
   known_equipment: string[];
   known_preferences: string[];
+  known_service_preferences: string[];
   known_experience_level: string | null;
   awaiting_user_input_type: ExpectedUserResponseType;
   last_assistant_instruction: ActiveInteractionInstruction | null;
@@ -76,6 +85,11 @@ export type ActiveInteractionState = {
   last_answered_slots: string[];
   pending_unaddressed_slots: string[];
   user_feedback_on_last_response: string | null;
+  role_options_offered: string[];
+  selected_user_role: string | null;
+  role_negotiation_status: RoleNegotiationStatus;
+  accepted_dynamic: string | null;
+  current_selected_task: string | null;
 };
 
 export type ActiveInteractionStateOwner = {
@@ -93,7 +107,9 @@ export type ActiveInteractionStateEnvelope = {
 
 export type ActiveInteractionTurnClassification = {
   speech_act:
+    | "clarification"
     | "service_request"
+    | "request_assistant_select_next_task"
     | "protocol_setup_request"
     | "user_preference_disclosure"
     | "user_confusion"
@@ -147,6 +163,14 @@ export type ActiveInteractionTurnClassification = {
   experience_level?: string | null;
   desired_role?: string | null;
   meta_feedback?: string | null;
+  repair_action?: string | null;
+  role_negotiation_status?: RoleNegotiationStatus | null;
+  assistant_selected_task_requested?: boolean;
+  selected_service_task?: string | null;
+  training_goals?: string[];
+  hard_limits?: string[];
+  boundary_preferences?: string[];
+  service_preferences?: string[];
 };
 
 export type ActiveInteractionRoutingDecision = {
@@ -248,6 +272,19 @@ function normalizeExpectedResponse(value: unknown): ExpectedUserResponseType {
   }
 }
 
+function normalizeRoleNegotiationStatus(value: unknown): RoleNegotiationStatus {
+  switch (value) {
+    case "offered":
+    case "accepted":
+    case "modified":
+    case "rejected":
+    case "clarifying":
+      return value;
+    default:
+      return "none";
+  }
+}
+
 export function normalizeActiveInteractionInstruction(
   value: unknown,
 ): ActiveInteractionInstruction | null {
@@ -293,6 +330,7 @@ export function normalizeActiveInteractionState(
     known_boundaries: normalizeStringList(raw.known_boundaries),
     known_equipment: normalizeStringList(raw.known_equipment),
     known_preferences: normalizeStringList(raw.known_preferences),
+    known_service_preferences: normalizeStringList(raw.known_service_preferences),
     known_experience_level: normalizeString(raw.known_experience_level),
     awaiting_user_input_type: normalizeExpectedResponse(raw.awaiting_user_input_type),
     last_assistant_instruction: normalizeActiveInteractionInstruction(raw.last_assistant_instruction),
@@ -322,6 +360,11 @@ export function normalizeActiveInteractionState(
     last_answered_slots: normalizeStringList(raw.last_answered_slots),
     pending_unaddressed_slots: normalizeStringList(raw.pending_unaddressed_slots),
     user_feedback_on_last_response: normalizeString(raw.user_feedback_on_last_response),
+    role_options_offered: normalizeStringList(raw.role_options_offered),
+    selected_user_role: normalizeString(raw.selected_user_role),
+    role_negotiation_status: normalizeRoleNegotiationStatus(raw.role_negotiation_status),
+    accepted_dynamic: normalizeString(raw.accepted_dynamic),
+    current_selected_task: normalizeString(raw.current_selected_task),
   };
 }
 
@@ -446,6 +489,7 @@ export function createActiveInteractionState(): ActiveInteractionState {
     known_boundaries: [],
     known_equipment: [],
     known_preferences: [],
+    known_service_preferences: [],
     known_experience_level: null,
     awaiting_user_input_type: "none",
     last_assistant_instruction: null,
@@ -466,6 +510,11 @@ export function createActiveInteractionState(): ActiveInteractionState {
     last_answered_slots: [],
     pending_unaddressed_slots: [],
     user_feedback_on_last_response: null,
+    role_options_offered: [],
+    selected_user_role: null,
+    role_negotiation_status: "none",
+    accepted_dynamic: null,
+    current_selected_task: null,
   };
 }
 
@@ -491,6 +540,103 @@ function hasExplicitGameRequest(normalized: string): boolean {
   );
 }
 
+function detectRoleNegotiationDelta(
+  normalized: string,
+  state: ActiveInteractionState | null | undefined,
+): {
+  status: RoleNegotiationStatus;
+  desiredRole: string | null;
+  summary: string;
+  pendingSlots: string[];
+} | null {
+  if (!isRelationalActiveInteraction(state)) {
+    return null;
+  }
+  const roleThreadActive =
+    state?.role_negotiation_status === "offered" ||
+    state?.awaiting_user_input_type === "rule_selection" ||
+    /\b(role|submissive|service submissive|pet|slave|servant|owned)\b/i.test(
+      [
+        state?.current_step_summary,
+        state?.last_assistant_instruction?.plain_language_summary,
+        state?.user_goal,
+        ...(state?.role_options_offered ?? []),
+      ].join(" "),
+    );
+  if (!roleThreadActive) {
+    return null;
+  }
+  if (
+    /\bwhat\b[^.?!]{0,80}\b(?:want|expect|role|think|mean)\b/i.test(normalized) ||
+    /\bi\s+want\b[^.?!]{0,120}\b(?:submissive|mistress|role|dynamic)\b/i.test(normalized)
+  ) {
+    return null;
+  }
+  const explicitRole =
+    /\bservice\s+(?:submissive|sub)\b/i.test(normalized)
+      ? "service_submissive"
+      : /\bsubmissive\b|\bsub\b/i.test(normalized)
+        ? "submissive"
+        : /\bslave\b/i.test(normalized)
+          ? "slave"
+          : /\bservant\b/i.test(normalized)
+            ? "servant"
+            : /\bpet\b/i.test(normalized)
+              ? "pet"
+              : /\bowned\b/i.test(normalized)
+                ? "owned_submissive"
+                : null;
+  const rejectsRole = /\b(?:no|not|instead|rather|change|different)\b/i.test(normalized);
+  const negatesNamedRole = explicitRole
+    ? new RegExp(`\\b(?:no|not)\\s+${explicitRole.replace(/\s+/g, "\\s+")}\\b`, "i").test(normalized)
+    : false;
+  const acceptsPending =
+    /^(?:yes|yes\s+\w+|ok|okay|sure|sounds\s+good|that\s+sounds\s+good|that\s+sounds\s+like\s+a\s+good\s+fit(?:\s+for\s+me)?|good\s+fit|fits|that\s+fits|i\s+agree|agreed|works|that\s+works)(?:[.!])?$/i.test(
+      normalized,
+    );
+  if (!explicitRole && !rejectsRole && !acceptsPending) {
+    return null;
+  }
+  if (negatesNamedRole) {
+    return {
+      status: "rejected",
+      desiredRole: null,
+      summary: `user rejected the ${explicitRole} role`,
+      pendingSlots: ["role", "boundary"],
+    };
+  }
+  if (explicitRole && rejectsRole) {
+    return {
+      status: "modified",
+      desiredRole: explicitRole,
+      summary: `user modified the role preference to ${explicitRole}`,
+      pendingSlots: ["boundary", "service_lane"],
+    };
+  }
+  if (explicitRole) {
+    return {
+      status: "accepted",
+      desiredRole: explicitRole,
+      summary: `user selected ${explicitRole} as the role`,
+      pendingSlots: ["boundary", "service_lane"],
+    };
+  }
+  if (rejectsRole) {
+    return {
+      status: "rejected",
+      desiredRole: null,
+      summary: "user rejected or softened the offered role",
+      pendingSlots: ["role", "boundary"],
+    };
+  }
+  return {
+    status: "accepted",
+    desiredRole: state?.selected_user_role ?? null,
+    summary: "user accepted the pending role negotiation step",
+    pendingSlots: ["boundary", "service_lane"],
+  };
+}
+
 function activeContinuityScore(normalized: string, state: ActiveInteractionState): number {
   let score = 0;
   if (/\b(?:tasks?|daily|every\s+day|rules?|protocol|training|service|serve|next|progress|ready|limits?|boundar(?:y|ies)|role|permission|approval|check[- ]?in|chastity|anal)\b/i.test(normalized)) {
@@ -498,14 +644,30 @@ function activeContinuityScore(normalized: string, state: ActiveInteractionState
   }
   if (
     state.awaiting_user_input_type !== "none" &&
-    /^(?:yes|yes\s+mistress|ok|okay|sounds\s+good|yes\s+please|i\s+agree|agreed)(?:[.!])?$/i.test(
+    /^(?:yes|yes\s+\w+|ok|okay|sure|sounds\s+good|that\s+sounds\s+good|yes\s+please|i\s+agree|agreed|works|that\s+works)(?:[.!])?$/i.test(
       normalized,
     )
   ) {
     score += 0.6;
   }
-  if (/\b(?:what\s+else|now\s+what|what\s+do\s+i\s+do|what\s+do\s+you\s+mean|what\s+are\s+you\s+asking\s+me\s+to\s+do|confused|understand|explain)\b/i.test(normalized)) {
+  if (/\b(?:what\s+else|what\s+now|now\s+what|what\s+do\s+i\s+do|what\s+do\s+you\s+mean|what\s+are\s+you\s+asking\s+me\s+to\s+do|confused|understand|explain|wait\s+what|huh|why)\b/i.test(normalized)) {
     score += 0.4;
+  }
+  if (
+    /\b(?:do\s+you\s+have\s+one|one\s+to\s+give|give\s+me\s+one|have\s+one\s+for\s+me)\b/i.test(normalized) &&
+    /\btask|service\b/i.test(
+      [
+        state.current_task_lane,
+        state.current_step_summary,
+        state.last_assistant_instruction?.plain_language_summary,
+        state.user_goal,
+      ].join(" "),
+    )
+  ) {
+    score += 0.55;
+  }
+  if (detectRoleNegotiationDelta(normalized, state)) {
+    score += 0.65;
   }
   if (/\b(?:repeating|already\s+said|not\s+what\s+i\s+asked|not\s+answering|say\s+it\s+differently)\b/i.test(normalized)) {
     score += 0.55;
@@ -617,6 +779,9 @@ export function classifyActiveInteractionTurn(
   ) {
     return null;
   }
+  if (/\byes\b[^.?!]{0,80}\bexplain(?:\s+it)?\b/i.test(normalized)) {
+    return null;
+  }
   if (/\b(?:not a game|task not a game|stop making it a game|no,\s*stay on this|stay on this|i mean service task)\b/i.test(normalized)) {
     return {
       speech_act: "correction_to_active_interaction",
@@ -633,6 +798,9 @@ export function classifyActiveInteractionTurn(
     };
   }
   if (
+    /\b(?:that\s+makes?\s+no\s+sense|what\s+do\s+you\s+mean\b[^.?!]{0,100}\bi\s+just\s+told\s+you|i\s+just\s+told\s+you|you\s+did\s+not\s+answer|you\s+didn'?t\s+answer|are\s+you\s+there)\b/i.test(
+      normalized,
+    ) ||
     /\b(?:why\s+are\s+you\s+repeating|you\s+already\s+said\s+that|stop\s+repeating|repeating\s+yourself|that\s+is\s+not\s+what\s+i\s+asked|you\s+are\s+not\s+answering\s+me|you\s+keep\s+saying\s+the\s+same|say\s+it\s+differently)\b/i.test(
       normalized,
     )
@@ -647,6 +815,7 @@ export function classifyActiveInteractionTurn(
       reason: "user gave feedback that the prior response repeated or missed the ask",
       safety_review_required: false,
       state_delta_type: "meta_feedback",
+      repair_action: "clarify_or_repair_previous_response",
       state_delta_summary: "user says Raven repeated or missed the requested answer",
       new_slots_added: ["user_feedback_on_last_response"],
       meta_feedback: normalized,
@@ -668,6 +837,28 @@ export function classifyActiveInteractionTurn(
       safety_review_required: true,
     };
   }
+  const roleDelta = detectRoleNegotiationDelta(normalized, state);
+  if (activeCompatible && roleDelta) {
+    return {
+      speech_act: "readiness_confirmation",
+      requested_facet: "active_readiness_confirmation",
+      answer_contract: "active_readiness_confirmation",
+      primary_subject: activeSubject,
+      requested_operation: roleDelta.status === "rejected" ? "clarify" : "answer",
+      confidence: roleDelta.status === "modified" ? 0.93 : 0.9,
+      reason: "user responded to the active role negotiation",
+      safety_review_required: false,
+      state_delta_type:
+        roleDelta.status === "accepted" || roleDelta.status === "modified"
+          ? "user_preference_delta"
+          : "correction_to_active_interaction",
+      state_delta_summary: roleDelta.summary,
+      new_slots_added: roleDelta.desiredRole ? ["desired_role"] : ["role_negotiation_feedback"],
+      desired_role: roleDelta.desiredRole,
+      pending_unaddressed_slots: roleDelta.pendingSlots,
+      role_negotiation_status: roleDelta.status,
+    };
+  }
   if (
     activeCompatible &&
     state?.awaiting_user_input_type !== "none" &&
@@ -687,7 +878,7 @@ export function classifyActiveInteractionTurn(
       state_delta_type: "user_preference_delta",
       state_delta_summary: "user selected service submissive as the starting role",
       new_slots_added: ["desired_role"],
-      desired_role: "service submissive",
+      desired_role: "service_submissive",
       pending_unaddressed_slots: ["boundary", "service_lane"],
     };
   }
@@ -724,9 +915,19 @@ export function classifyActiveInteractionTurn(
         : [],
     };
   }
-  if (/\b(?:i'?m\s+confused|im\s+confused|i\s+don'?t\s+understand|what\s+do\s+you\s+mean|what\s+are\s+you\s+asking\s+me\s+to\s+do|explain\s+that|explain\s+that\s+again|say\s+that\s+simpler|can\s+you\s+clarify|what\s+do\s+you\s+mean\s+by\s+(?:that\s+)?task|what\s+do\s+you\s+mean\s+by\s+daily\s+task)\b/i.test(normalized)) {
+  if (
+    /^(?:what|huh|why)\??$/.test(normalized) ||
+    /\b(?:wait\s+what|that\s+made\s+no\s+sense|i'?m\s+confused|im\s+confused|i\s+don'?t\s+understand|what\s+(?:do\s+you|does\s+that)\s+mean|what\s+are\s+you\s+asking\s+me\s+to\s+do|explain(?:\s+that|\s+it)?|explain\s+that\s+again|say\s+that\s+simpler|can\s+you\s+clarify|more\s+details?|what\s+do\s+you\s+mean\s+by\s+(?:that\s+)?task|what\s+do\s+you\s+mean\s+by\s+daily\s+task)\b/i.test(normalized)
+  ) {
     return {
-      speech_act: "user_confusion",
+      speech_act:
+        /\byes\b[^.?!]{0,60}\bexplain(?:\s+it)?\b/i.test(normalized)
+          ? "clarification"
+          : /\b(?:i'?m\s+confused|im\s+confused|i\s+don'?t\s+understand|that\s+made\s+no\s+sense|what\s+(?:do\s+you|does\s+that)\s+mean|explain\s+that|say\s+that\s+simpler|what\s+are\s+you\s+asking)\b/i.test(
+          normalized,
+        )
+            ? "user_confusion"
+            : "clarification",
       requested_facet: "clarification_recovery",
       answer_contract: "clarification_recovery",
       primary_subject: activeSubject,
@@ -738,10 +939,17 @@ export function classifyActiveInteractionTurn(
   }
   if (
     activeCompatible &&
-    /\b(?:daily\s+task|service\s+task|give\s+me\s+(?:a\s+)?task|what\s+should\s+my\s+daily\s+task\s+be|what\s+task\s+should\s+i\s+do|how\s+about\s+a\s+daily\s+task|something\s+to\s+do\s+for\s+you\s+today|first\s+task|tasks?)\b/i.test(normalized)
+    /\b(?:daily\s+task|service\s+task|give\s+me\s+(?:a\s+)?task|what\s+should\s+my\s+daily\s+task\s+be|what\s+task\s+should\s+i\s+do|how\s+about\s+a\s+daily\s+task|something\s+to\s+do\s+for\s+you\s+today|first\s+task|tasks?|do\s+you\s+have\s+one|one\s+to\s+give|give\s+me\s+one|have\s+one\s+for\s+me)\b/i.test(normalized)
   ) {
+    const assistantSelectionRequested =
+      /\b(?:you\s+pick|you\s+choose|pick\s+it|choose\s+it|do\s+you\s+have\s+one|give\s+me|first\s+task|what\s+task\s+should\s+i\s+do|what\s+should\s+i\s+do|task\s+for\s+me|i\s+want\s+tasks?)\b/i.test(
+        normalized,
+      ) ||
+      state?.selected_user_role !== null;
     return {
-      speech_act: "service_request",
+      speech_act: assistantSelectionRequested
+        ? "request_assistant_select_next_task"
+        : "service_request",
       requested_facet: "service_task",
       answer_contract: "service_task",
       primary_subject: /\bdaily|every\s+day\b/i.test(normalized) ? "daily service task" : "service task",
@@ -749,6 +957,15 @@ export function classifyActiveInteractionTurn(
       confidence: 0.93,
       reason: "active relational task request stays in service task lane",
       safety_review_required: true,
+      state_delta_type: "service_task_request",
+      state_delta_summary: assistantSelectionRequested
+        ? "user asked Raven to select the next service task"
+        : "user asked for a service task",
+      new_slots_added: ["service_task_request"],
+      assistant_selected_task_requested: assistantSelectionRequested,
+      selected_service_task: assistantSelectionRequested
+        ? "service check-in"
+        : null,
     };
   }
   if (
@@ -811,11 +1028,12 @@ export function classifyActiveInteractionTurn(
       state_delta_type: "training_goal_delta",
       state_delta_summary: "user added active training goals",
       new_slots_added: ["training_goals"],
+      training_goals: specificTrainingGoals,
       pending_unaddressed_slots:
         specificTrainingGoals.length > 1 ? specificTrainingGoals.slice(1) : [],
     };
   }
-  if (/\b(?:what\s+else|now\s+what|now\s+what\s+do\s+i\s+do|what\s+comes\s+next|what\s+should\s+i\s+do\s+next|first\s+instruction|what\s+is\s+your\s+first\s+instruction)\b/i.test(normalized)) {
+  if (/\b(?:what\s+else|what\s+now|now\s+what|(?:now\s+)?what\s+do\s+i\s+do(?:\s+now|\s+next)?|what\s+comes\s+next|what\s+should\s+i\s+do\s+next|first\s+instruction|what\s+is\s+your\s+first\s+instruction)\b/i.test(normalized)) {
     return {
       speech_act: "next_step_request",
       requested_facet: "active_next_step",
@@ -880,6 +1098,47 @@ function unique(values: Array<string | null | undefined>): string[] {
     output.push(cleaned);
   }
   return output;
+}
+
+function canonicalRoleId(value: string | null | undefined): string | null {
+  const normalized = normalizeLower(value);
+  if (!normalized) return null;
+  if (/\bservice\s+(?:sub|submissive)\b/.test(normalized)) return "service_submissive";
+  if (/\bsubmissive\b|\bsub\b/.test(normalized)) return "submissive";
+  if (/\bslave\b/.test(normalized)) return "slave";
+  if (/\bservant\b/.test(normalized)) return "servant";
+  if (/\bpet\b/.test(normalized)) return "pet";
+  if (/\bowned\b/.test(normalized)) return "owned_submissive";
+  return normalized.replace(/\s+/g, "_");
+}
+
+function extractBoundaryUpdates(normalized: string): string[] {
+  const updates: string[] = [];
+  const boundaryMatch = normalized.match(
+    /\b(?:my\s+)?(?:boundary|limit|hard\s+limit)\s+(?:is|are|=)\s+([^.!?]+)/i,
+  );
+  if (boundaryMatch?.[1]) {
+    updates.push(boundaryMatch[1]);
+  }
+  const noMatch = normalized.match(/\b(?:no|not|never|off[- ]?limits?|do\s+not\s+want|don'?t\s+want)\s+([^.!?]+)/i);
+  if (noMatch?.[1]) {
+    const value = noMatch[1].trim();
+    if (!/^(?:sense|idea|clue|answer)\b/i.test(value)) {
+      updates.push(value);
+    }
+  }
+  return unique(updates);
+}
+
+function extractServicePreferences(normalized: string): string[] {
+  return unique([
+    /\btasks?\b/.test(normalized) ? "tasks" : null,
+    /\brules?\b/.test(normalized) ? "rules" : null,
+    /\bpermission\b/.test(normalized) ? "permission" : null,
+    /\bapproval\b/.test(normalized) ? "approval" : null,
+    /\bcheck[- ]?in\b/.test(normalized) ? "check-in" : null,
+    /\baccountability\b/.test(normalized) ? "accountability" : null,
+  ]);
 }
 
 function interactionTypeForFacet(facet: string, currentDomain: string): ActiveInteractionType {
@@ -1113,6 +1372,17 @@ export function updateActiveInteractionState(input: {
     facet === "active_step_confusion" || facet === "clarification_recovery"
       ? input.turnMeaning.raw_text
       : before.last_user_confusion;
+  const roleStatus =
+    (input.turnMeaning.dynamic_slots?.role_negotiation_status as RoleNegotiationStatus | null) ??
+    (facet === "role_negotiation" ? "offered" : before.role_negotiation_status);
+  const selectedUserRole =
+    canonicalRoleId(input.turnMeaning.dynamic_slots?.desired_role) ??
+    before.selected_user_role;
+  const roleAccepted =
+    roleStatus === "accepted" || roleStatus === "modified";
+  const pendingSlots =
+    input.turnMeaning.dynamic_slots?.pending_unaddressed_slots ??
+    (roleAccepted ? ["boundary", "service_lane"] : []);
   const stop = facet === "pause_or_stop";
   const status = stop ? "paused" : askOverride?.status ?? statusForFacet(facet);
   const nextStepPolicy =
@@ -1145,6 +1415,7 @@ export function updateActiveInteractionState(input: {
     known_boundaries: unique([
       ...before.known_boundaries,
       input.turnMeaning.dynamic_slots?.boundary_or_safety_needed ? "boundary review needed" : null,
+      ...(input.turnMeaning.dynamic_slots?.boundary_preferences ?? []),
     ]),
     known_equipment: unique([
       ...before.known_equipment,
@@ -1155,6 +1426,12 @@ export function updateActiveInteractionState(input: {
       input.turnMeaning.dynamic_slots?.user_preference ?? null,
       input.turnMeaning.dynamic_slots?.service_style ?? null,
       input.turnMeaning.dynamic_slots?.desired_role ?? null,
+      ...(input.turnMeaning.dynamic_slots?.desired_service_lanes ?? []),
+    ]),
+    known_service_preferences: unique([
+      ...before.known_service_preferences,
+      ...(input.turnMeaning.dynamic_slots?.desired_service_lanes ?? []),
+      input.turnMeaning.dynamic_slots?.service_style ?? null,
     ]),
     known_experience_level:
       input.turnMeaning.dynamic_slots?.experience_level ?? before.known_experience_level,
@@ -1195,11 +1472,29 @@ export function updateActiveInteractionState(input: {
     ]),
     last_answer_signature: answerSignature(input.assistantText),
     last_answered_slots: input.responseBrief.must_address,
-    pending_unaddressed_slots: unique([
-      ...(input.turnMeaning.dynamic_slots?.pending_unaddressed_slots ?? []),
-    ]),
+    pending_unaddressed_slots: unique(pendingSlots),
     user_feedback_on_last_response:
       input.turnMeaning.dynamic_slots?.meta_feedback ?? before.user_feedback_on_last_response,
+    role_options_offered:
+      facet === "role_negotiation"
+        ? unique([
+            ...before.role_options_offered,
+            "submissive",
+            "service submissive",
+            "pet",
+          ])
+        : before.role_options_offered,
+    selected_user_role:
+      selectedUserRole,
+    role_negotiation_status: roleStatus,
+    accepted_dynamic: roleAccepted
+      ? selectedUserRole ?? before.accepted_dynamic ?? before.selected_user_role
+      : before.accepted_dynamic,
+    current_selected_task:
+      input.turnMeaning.dynamic_slots?.selected_service_task ??
+      (input.turnMeaning.dynamic_slots?.assistant_selected_task_requested
+        ? "service check-in"
+        : before.current_selected_task),
   };
   return {
     after,

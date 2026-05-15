@@ -50,6 +50,7 @@ export type RelationalDynamicSlots = {
   disclosed_object: string | null;
   disclosed_objects: string[];
   desired_role: string | null;
+  role_negotiation_status: string | null;
   proposed_raven_role: string | null;
   requested_direction: string | null;
   requested_protocol: string | null;
@@ -63,6 +64,7 @@ export type RelationalDynamicSlots = {
   new_slots_added: string[];
   pending_unaddressed_slots: string[];
   meta_feedback: string | null;
+  repair_action?: string | null;
   hard_limits: string[];
   boundary_preferences: string[];
   dynamic_goals: string[];
@@ -89,6 +91,8 @@ export type RelationalDynamicSlots = {
   safety_review_required: boolean;
   current_task_lane: string | null;
   daily_task_requested: boolean;
+  assistant_selected_task_requested: boolean;
+  selected_service_task: string | null;
   protocol_rules: string[];
   previous_response_brief_id: string | null;
   active_interaction_routing: {
@@ -185,6 +189,7 @@ export const EMPTY_RELATIONAL_DYNAMIC_SLOTS: RelationalDynamicSlots = {
   disclosed_object: null,
   disclosed_objects: [],
   desired_role: null,
+  role_negotiation_status: null,
   proposed_raven_role: null,
   requested_direction: null,
   requested_protocol: null,
@@ -224,6 +229,8 @@ export const EMPTY_RELATIONAL_DYNAMIC_SLOTS: RelationalDynamicSlots = {
   safety_review_required: false,
   current_task_lane: null,
   daily_task_requested: false,
+  assistant_selected_task_requested: false,
+  selected_service_task: null,
   protocol_rules: [],
   previous_response_brief_id: null,
   active_interaction_routing: null,

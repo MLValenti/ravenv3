@@ -58,6 +58,7 @@ import {
 } from "./raven-preferences.ts";
 import {
   buildResponseBrief,
+  containsInternalVisibleMetadata,
   realizeResponseFromBrief,
   summarizeResponseBrief,
   validateReplyAgainstBrief,
@@ -72,6 +73,12 @@ import {
   buildVisibleContractFallback,
   lintVisibleResponse,
 } from "./raven-embodiment.ts";
+import {
+  commitVisibleOutput,
+  recordVisibleCandidate,
+  selectVisibleOutputOwner,
+  visibleTextImpliesUnlimitedConsent,
+} from "./visible-output-authority.ts";
 
 export type ResponseGateInput = {
   text: string;
@@ -88,6 +95,8 @@ export type ResponseGateInput = {
   semanticCandidates?: unknown[] | null;
   previousResponseBrief?: PreviousResponseBriefSummary | null;
   activeInteraction?: ActiveInteractionState | null;
+  deterministicBypassUsed?: boolean;
+  deterministicBypassReason?: string | null;
   observationTrust?: {
     canDescribeVisuals: boolean;
     reason: string;
@@ -404,6 +413,12 @@ function finalVisibleBarrierResult(input: {
   }
   if (containsVisibleToolCommand(normalized)) {
     return { ok: false, reason: "visible_tool_or_device_command" };
+  }
+  if (containsInternalVisibleMetadata(input.text)) {
+    return { ok: false, reason: "internal_metadata_visible" };
+  }
+  if (visibleTextImpliesUnlimitedConsent(normalized)) {
+    return { ok: false, reason: "unsafe_unlimited_consent_text" };
   }
   if (/\b(raw repair instruction|repair instruction|repair turn|scaffold instruction)\b/i.test(normalized)) {
     return { ok: false, reason: "visible_repair_or_scaffold_instruction" };
@@ -2079,6 +2094,36 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
     const candidateSource = input.candidateSource ?? "unknown";
     const isLegacyCandidateSource =
       /scaffold|fallback|weak|deterministic|game|repair|turn_plan/i.test(candidateSource);
+    const visibleCandidates = [
+      recordVisibleCandidate(
+        candidateSource,
+        rawModelOutput,
+        isLegacyCandidateSource ? "legacy" : "raw_model",
+        {
+          selected: true,
+        },
+      ),
+    ];
+    const initialAuthority = selectVisibleOutputOwner({
+      turnMeaning,
+      plannedMove,
+      sceneState: input.sceneState,
+      activeInteraction: input.activeInteraction ?? null,
+      candidateSource,
+      finalSource: candidateSource,
+      responseBriefId: responseBrief.brief_id,
+      contentRealizer,
+      replacementChain,
+      candidates: visibleCandidates,
+      deterministicBypassUsed: input.deterministicBypassUsed,
+      deterministicBypassReason: input.deterministicBypassReason,
+    });
+    if (initialAuthority.final_visible_owner === "blocked") {
+      realizeFromBrief(
+        "visible_output_authority_legacy_emitter_blocked",
+        "visibleOutputAuthority",
+      );
+    }
     if (briefOwnedMove && hasStructuredVisibleContract) {
       const barrierBeforeContract = finalVisibleBarrierResult({
         text,
@@ -2273,17 +2318,120 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       repetitionRepairUsed = true;
       traceDecision(oldText, text, reason, "responseBriefRepetitionRepair");
     }
-    const finalOutput = normalize(text);
+    let finalOutput = normalize(text);
     responseBriefValidation = validateReplyAgainstBrief(finalOutput, responseBrief);
     if (!contentRealizer && responseBriefValidation.ok && input.candidateSource === "raw_model") {
       contentRealizer = "llm_brief_realizer";
     }
-    const previousBriefSummary = summarizeResponseBrief(responseBrief, finalOutput);
+    let authorityDecision = selectVisibleOutputOwner({
+      turnMeaning,
+      plannedMove,
+      sceneState: input.sceneState,
+      activeInteraction: input.activeInteraction ?? null,
+      candidateSource,
+      finalSource: contentRealizer ?? candidateSource,
+      responseBriefId: responseBrief.brief_id,
+      contentRealizer,
+      replacementChain,
+      candidates: [
+        ...visibleCandidates,
+        ...(contentRealizer
+          ? [
+              recordVisibleCandidate(
+                contentRealizer,
+                finalOutput,
+                "response_brief",
+                {
+                  selected: true,
+                  owner: contentRealizer === "llm_brief_realizer"
+                    ? "approved_llm_renderer_from_response_brief"
+                    : "approved_response_brief_fallback",
+                  visible_safe:
+                    responseBriefValidation.ok &&
+                    briefRealization.assistant_output_context_eligible,
+                  internal_source_type: "visible_safe",
+                },
+              ),
+            ]
+          : []),
+      ],
+      deterministicBypassUsed: input.deterministicBypassUsed,
+      deterministicBypassReason: input.deterministicBypassReason,
+    });
+    let visibleCommitDecision = commitVisibleOutput({
+      decision: authorityDecision,
+      text: finalOutput,
+      candidate: authorityDecision.final_visible_candidate,
+    });
+    if (
+      !visibleCommitDecision.allow &&
+      (briefOwnedMove || authorityDecision.strict_relational_authority)
+    ) {
+      const oldText = finalOutput;
+      realizeFromBrief(
+        `visible_commit_rejected_${visibleCommitDecision.reason}`,
+        "visibleOutputCommitAuthority",
+      );
+      finalOutput = normalize(text);
+      responseBriefValidation = validateReplyAgainstBrief(finalOutput, responseBrief);
+      contentRealizer = contentRealizer ?? briefRealization.content_realizer;
+      authorityDecision = selectVisibleOutputOwner({
+        turnMeaning,
+        plannedMove,
+        sceneState: input.sceneState,
+        activeInteraction: input.activeInteraction ?? null,
+        candidateSource,
+        finalSource: contentRealizer ?? "visible_commit_repair",
+        responseBriefId: responseBrief.brief_id,
+        contentRealizer,
+        replacementChain,
+        candidates: [
+          ...visibleCandidates,
+          recordVisibleCandidate(
+            "visible_commit_repair",
+            finalOutput,
+            "response_brief",
+            {
+              selected: true,
+              owner: contentRealizer === "llm_brief_realizer"
+                ? "approved_llm_renderer_from_response_brief"
+                : "approved_response_brief_fallback",
+              visible_safe:
+                responseBriefValidation.ok &&
+                briefRealization.assistant_output_context_eligible,
+              internal_source_type: "visible_safe",
+            },
+          ),
+        ],
+        deterministicBypassUsed: input.deterministicBypassUsed,
+        deterministicBypassReason: input.deterministicBypassReason,
+      });
+      visibleCommitDecision = commitVisibleOutput({
+        decision: authorityDecision,
+        text: finalOutput,
+        candidate: authorityDecision.final_visible_candidate,
+      });
+      if (normalize(oldText) !== finalOutput) {
+        traceDecision(
+          oldText,
+          finalOutput,
+          `visible_commit_rejected_${visibleCommitDecision.reason}`,
+          "visibleOutputCommitAuthority",
+        );
+      }
+    }
+    const outputContextEligible =
+      briefRealization.assistant_output_context_eligible &&
+      visibleCommitDecision.allow &&
+      responseBriefValidation.ok;
+    const previousBriefSummary = outputContextEligible
+      ? summarizeResponseBrief(responseBrief, finalOutput)
+      : null;
     const activeInteractionUpdate = updateActiveInteractionState({
       before: input.activeInteraction ?? null,
       turnMeaning,
       responseBrief,
-      assistantText: finalOutput,
+      assistantText: outputContextEligible ? finalOutput : "",
       turnId: input.commitOwnerId ?? null,
     });
     const finalMatchesRaw = finalOutput === normalize(rawModelOutput);
@@ -2298,6 +2446,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         reason.startsWith("response_brief_contract_repair_") ||
         reason.startsWith("visible_output_lint_") ||
         reason.startsWith("final_visible_barrier_") ||
+        reason === "visible_output_authority_legacy_emitter_blocked" ||
         reason === "semantic_authority_realized_from_plan" ||
         reason === "semantic_authority_realized_from_response_brief");
     const winningSourceFamily =
@@ -2306,6 +2455,9 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         : classifiedWinningSourceFamily;
     const answerContractValidation = validateAnswerContract(answerPlan, finalOutput);
     const semanticTrace = buildSemanticTurnTrace({
+      authorityTracePresent: true,
+      authorityTraceVersion: "visible-output-authority-v2",
+      serverCommitPath: "response_gate_finalize_current_result",
       turnMeaning,
       plannedMove,
       winningSubsystem: winningSourceFamily,
@@ -2320,7 +2472,7 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       scaffoldSource: /scaffold|game/i.test(candidateSource) ? candidateSource : null,
       deviceCommandChannelUsed: /\bdevice_action|device-channel|session\.action\.request\b/i.test(candidateSource),
       visibleTextContainsToolCommand: containsVisibleToolCommand(finalOutput),
-      finalVisibleSource: winningSourceFamily,
+      finalVisibleSource: authorityDecision.final_visible_source,
       commitOwnerId: input.commitOwnerId ?? null,
       previousSemanticPlanId,
       continuationAttachedToPlanId,
@@ -2348,6 +2500,9 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
       contentRealizer,
       validationResult: responseBriefValidation,
       validationFailures: responseBriefValidation.failures,
+      assistantOutputQuality: briefRealization.assistant_output_quality,
+      assistantOutputContextEligible: outputContextEligible,
+      requestFulfilled: outputContextEligible && responseBriefValidation.ok,
       reRealizationAttempts: briefReRealizationAttempts,
       repeatedAnswerDetected,
       repeatedAnswerSimilarity: similarity,
@@ -2360,7 +2515,31 @@ export function applyResponseGate(input: ResponseGateInput): ResponseGateResult 
         semanticOwnedMove &&
         turnMeaning.current_domain_handler !== "game" &&
         /game|scaffold/i.test(candidateSource),
-      legacyVisibleEmitterBlocked: semanticOwnedMove && isLegacyCandidateSource && !finalMatchesRaw,
+      legacyVisibleEmitterBlocked: authorityDecision.legacy_visible_emitter_blocked,
+      finalVisibleOwner: authorityDecision.final_visible_owner,
+      candidateKind: authorityDecision.candidate_kind,
+      candidateVisibleSafe: authorityDecision.candidate_visible_safe,
+      approvedResponseBriefFallbackUsed:
+        authorityDecision.approved_response_brief_fallback_used,
+      strictRelationalAuthority: authorityDecision.strict_relational_authority,
+      allVisibleCandidates: authorityDecision.all_visible_candidates,
+      rejectedVisibleCandidates: authorityDecision.rejected_visible_candidates,
+      replacementChain: authorityDecision.replacement_chain,
+      modelReplyUsed: authorityDecision.model_reply_used,
+      responseBriefUsed: authorityDecision.response_brief_used,
+      responseGateReplaced: authorityDecision.response_gate_replaced,
+      clientGeneratedReplyUsed: authorityDecision.client_generated_reply_used,
+      legacyVisibleEmitterUsed: authorityDecision.legacy_visible_emitter_used,
+      deterministicBypassUsed: authorityDecision.deterministic_bypass_used,
+      deterministicBypassReason: authorityDecision.deterministic_bypass_reason,
+      sceneScaffoldCandidateCreated: authorityDecision.scene_scaffold_candidate_created,
+      sceneScaffoldCandidateUsed: authorityDecision.scene_scaffold_candidate_used,
+      turnPlanFallbackCreated: authorityDecision.turn_plan_fallback_created,
+      turnPlanFallbackUsed: authorityDecision.turn_plan_fallback_used,
+      briefRealizerUsed: authorityDecision.brief_realizer_used,
+      llmRendererUsed: authorityDecision.llm_renderer_used,
+      visibleCommitOwner: authorityDecision.visible_commit_owner,
+      visibleCommitAllowed: visibleCommitDecision.allow,
       persistedResponseBriefSummary: previousBriefSummary,
       activeInteractionBefore: input.activeInteraction ?? null,
       activeInteractionAfter: activeInteractionUpdate.after,

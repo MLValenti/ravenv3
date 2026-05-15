@@ -417,6 +417,42 @@ test("conversation state ignores vague assistant task phrasing as a durable comm
   assert.equal(state.last_satisfied_request, "none");
 });
 
+test("conversation state ignores generated protocol instructions as commitments and open loops", () => {
+  let state = createConversationStateSnapshot("conversation-state-generated-protocol");
+
+  for (const text of [
+    "You will answer my questions directly and promptly.",
+    "Answer my next question directly.",
+    "Now let's proceed as planned.",
+  ]) {
+    state = noteConversationAssistantTurn(state, {
+      text,
+      ravenIntent: "respond",
+      nowMs: Date.now(),
+    });
+  }
+
+  assert.equal(state.recent_commitments_or_tasks.length, 0);
+  assert.equal(state.open_loops.length, 0);
+});
+
+test("assistant output marked state-ineligible does not update high priority conversation state", () => {
+  let state = createConversationStateSnapshot("conversation-state-ineligible-assistant");
+
+  state = noteConversationAssistantTurn(state, {
+    text: "Start by locking in your wake time. Report back once halfway.",
+    ravenIntent: "respond",
+    nowMs: 1,
+    stateEligible: false,
+  });
+
+  assert.equal(state.recent_commitments_or_tasks.length, 0);
+  assert.equal(state.open_loops.length, 0);
+  assert.equal(state.last_assistant_claim, "none");
+  assert.equal(state.last_satisfied_request, "none");
+  assert.equal(state.recent_window.length, 0);
+});
+
 test("conversation state normalization enforces fulfilled-versus-pending invariants", () => {
   const normalized = normalizeConversationStateSnapshot(
     {

@@ -140,6 +140,13 @@ import {
   shouldRecoverSkippedAssistantRender,
 } from "@/lib/session/live-turn-integrity";
 import {
+  extractAuthorityTraceFromAssistantPayload,
+  SERVER_AUTHORITY_SENTINEL,
+  summarizeAssistantPayloadShape,
+  validateServerAuthorizedRavenOutput,
+  VISIBLE_OUTPUT_AUTHORITY_TRACE_VERSION,
+} from "@/lib/session/client-visible-authority";
+import {
   chooseNextAskSlot,
   createSessionMemory,
   getSessionMemoryFocus,
@@ -441,6 +448,8 @@ type AssistantTraceMeta = {
   activeStateOwner?: ActiveInteractionStateOwner | null;
   statePersistence?: Record<string, unknown> | null;
   semanticTrace?: Record<string, unknown> | null;
+  authorityTrace?: Record<string, unknown> | null;
+  payloadShapeSummary?: Record<string, unknown> | null;
 };
 
 type SessionTurnDebugEntry = {
@@ -448,13 +457,128 @@ type SessionTurnDebugEntry = {
   sourceUserMessageId: number;
   userText: string;
   ravenOutputText: string;
+  authorityTrace: Record<string, unknown> | null;
+  blockedAssistantAppend: boolean;
+  blockedAppendReason: string | null;
+  blockedAppendStage: string | null;
+  blockedAppendPayloadSummary: string | null;
   assistantRenderAppendEvents: number;
   recoverSkippedAssistantRenderFired: boolean;
-  appendRavenOutputRunsForTurn: number;
+  authorizedAppendRunsForTurn: number;
   visibleAssistantStringsShownForTurn: number;
   createdAt: number;
   conversationMode: string | null;
 };
+
+function isAssistantTraceStateEligible(traceMeta: {
+  semanticTrace?: Record<string, unknown> | null;
+  authorityTrace?: Record<string, unknown> | null;
+} | null | undefined): boolean {
+  const trace = traceMeta?.authorityTrace ?? traceMeta?.semanticTrace ?? null;
+  if (!trace) {
+    return false;
+  }
+  if (trace.assistant_output_state_eligible === true) {
+    return true;
+  }
+  return (
+    trace.assistant_output_quality === "valid_model_reply" &&
+    trace.assistant_output_context_eligible === true &&
+    trace.request_fulfilled === true &&
+    trace.visible_commit_allowed === true
+  );
+}
+
+function defaultVisibleAuthorityDebugFields(
+  clientCommitPath = "not_committed",
+): Record<string, unknown> {
+  return {
+    authority_trace_present: false,
+    authority_trace_version: VISIBLE_OUTPUT_AUTHORITY_TRACE_VERSION,
+    server_authority_sentinel: null,
+    server_commit_path: "missing",
+    client_commit_path: clientCommitPath,
+    final_visible_owner: null,
+    final_visible_source: null,
+    candidate_kind: null,
+    candidate_visible_safe: null,
+    model_reply_used: null,
+    llm_renderer_used: null,
+    brief_realizer_used: null,
+    approved_response_brief_fallback_used: null,
+    response_brief_used: null,
+    response_brief_id: null,
+    legacy_visible_emitter_used: null,
+    legacy_visible_emitter_blocked: null,
+    deterministic_bypass_used: null,
+    client_generated_reply_used: null,
+    replacement_chain: [],
+    visible_commit_owner: null,
+    visible_commit_allowed: null,
+    strict_relational_authority: null,
+    "active_interaction.kind": null,
+    role_negotiation_status: null,
+    selected_user_role: null,
+    accepted_dynamic: null,
+    assistant_output_quality: null,
+    assistant_output_context_eligible: null,
+    assistant_output_state_eligible: null,
+    request_fulfilled: null,
+  };
+}
+
+function extractVisibleAuthorityDebugFields(
+  trace: Record<string, unknown> | null | undefined,
+  clientCommitPath = "server_response_append",
+): Record<string, unknown> {
+  const defaults = defaultVisibleAuthorityDebugFields(clientCommitPath);
+  if (!trace) {
+    return defaults;
+  }
+  const active = trace.active_interaction_after && typeof trace.active_interaction_after === "object"
+    ? trace.active_interaction_after as Record<string, unknown>
+    : trace.active_interaction_before && typeof trace.active_interaction_before === "object"
+      ? trace.active_interaction_before as Record<string, unknown>
+      : null;
+  return {
+    ...defaults,
+    authority_trace_present: trace.authority_trace_present ?? true,
+    authority_trace_version:
+      trace.authority_trace_version ?? VISIBLE_OUTPUT_AUTHORITY_TRACE_VERSION,
+    server_authority_sentinel: trace.server_authority_sentinel ?? null,
+    server_commit_path: trace.server_commit_path ?? null,
+    client_commit_path: trace.client_commit_path ?? clientCommitPath,
+    final_visible_owner: trace.final_visible_owner ?? null,
+    final_visible_source: trace.final_visible_source ?? null,
+    candidate_kind: trace.candidate_kind ?? null,
+    candidate_visible_safe: trace.candidate_visible_safe ?? null,
+    model_reply_used: trace.model_reply_used ?? null,
+    llm_renderer_used: trace.llm_renderer_used ?? null,
+    brief_realizer_used: trace.brief_realizer_used ?? null,
+    approved_response_brief_fallback_used:
+      trace.approved_response_brief_fallback_used ?? null,
+    response_brief_used: trace.response_brief_used ?? null,
+    response_brief_id: trace.response_brief_id ?? null,
+    legacy_visible_emitter_used: trace.legacy_visible_emitter_used ?? null,
+    legacy_visible_emitter_blocked: trace.legacy_visible_emitter_blocked ?? null,
+    deterministic_bypass_used: trace.deterministic_bypass_used ?? null,
+    client_generated_reply_used: trace.client_generated_reply_used ?? null,
+    replacement_chain: trace.replacement_chain ?? null,
+    visible_commit_owner: trace.visible_commit_owner ?? null,
+    visible_commit_allowed: trace.visible_commit_allowed ?? null,
+    strict_relational_authority: trace.strict_relational_authority ?? null,
+    "active_interaction.kind": active?.interaction_type ?? null,
+    role_negotiation_status: active?.role_negotiation_status ?? null,
+    selected_user_role: active?.selected_user_role ?? null,
+    accepted_dynamic: active?.accepted_dynamic ?? null,
+    assistant_output_quality: trace.assistant_output_quality ?? null,
+    assistant_output_context_eligible:
+      trace.assistant_output_context_eligible ?? null,
+    assistant_output_state_eligible:
+      trace.assistant_output_state_eligible ?? null,
+    request_fulfilled: trace.request_fulfilled ?? null,
+  };
+}
 
 function mapAssistantReplySourceToTurnResponseFamily(
   source: AssistantReplySource,
@@ -485,6 +609,9 @@ type AssistantResponseStatePayload = {
   activeStateOwner: ActiveInteractionStateOwner | null;
   statePersistence?: Record<string, unknown> | null;
   semanticTrace?: Record<string, unknown> | null;
+  authorityTrace?: Record<string, unknown> | null;
+  authorityError?: Record<string, unknown> | null;
+  payloadShapeSummary?: Record<string, unknown> | null;
 };
 
 type ConversationNode =
@@ -2472,6 +2599,71 @@ export default function SessionPage() {
     });
   }
 
+  function recordBlockedAssistantAppend(input: {
+    sourceUserMessageId: number;
+    reason: string;
+    stage: string;
+    authorityTrace?: Record<string, unknown> | null;
+    payloadSummary?: Record<string, unknown> | string | null;
+    text?: string;
+  }) {
+    const summary =
+      typeof input.payloadSummary === "string"
+        ? input.payloadSummary
+        : input.payloadSummary
+          ? JSON.stringify(input.payloadSummary).slice(0, 800)
+          : null;
+    const authorityDebug = extractVisibleAuthorityDebugFields(
+      input.authorityTrace,
+      "appendServerAuthorizedRavenOutput",
+    );
+    updateSessionTurnLog(input.sourceUserMessageId, (entry) =>
+      entry
+        ? {
+            ...entry,
+            ravenOutputText: "blocked by authority gate",
+            authorityTrace: authorityDebug,
+            blockedAssistantAppend: true,
+            blockedAppendReason: input.reason,
+            blockedAppendStage: input.stage,
+            blockedAppendPayloadSummary: summary,
+            assistantRenderAppendEvents: 0,
+            authorizedAppendRunsForTurn: 0,
+            visibleAssistantStringsShownForTurn: 0,
+          }
+        : {
+            turnId: `blocked-${input.sourceUserMessageId}`,
+            sourceUserMessageId: input.sourceUserMessageId,
+            userText: "",
+            ravenOutputText: "blocked by authority gate",
+            authorityTrace: authorityDebug,
+            blockedAssistantAppend: true,
+            blockedAppendReason: input.reason,
+            blockedAppendStage: input.stage,
+            blockedAppendPayloadSummary: summary,
+            assistantRenderAppendEvents: 0,
+            recoverSkippedAssistantRenderFired: false,
+            authorizedAppendRunsForTurn: 0,
+            visibleAssistantStringsShownForTurn: 0,
+            createdAt: now(),
+            conversationMode:
+              sessionMemoryRef.current.conversation_mode?.value ??
+              sceneStateRef.current.interaction_mode,
+          },
+    );
+    pushTurnTrace("turn.append.authority_blocked", {
+      user_message_id: input.sourceUserMessageId,
+      reason: input.reason,
+      stage: input.stage,
+      payload_summary: summary,
+      text_present: Boolean(input.text?.trim()),
+      at_ms: now(),
+    });
+    if (debugMode) {
+      setMessage(`Visible append blocked: ${input.reason}`);
+    }
+  }
+
   function describeSceneTransition(previous: SceneState, next: SceneState): string | null {
     const fields: string[] = [];
     if (previous.topic_type !== next.topic_type) {
@@ -3321,13 +3513,7 @@ export default function SessionPage() {
   );
 
   const appendSystemAssistantNote = useCallback((text: string) => {
-    setRavenLines((current) => trimToSize([...current, text], 20));
-    publishRuntimeEvent({
-      type: "raven.output",
-      timestamp: now(),
-      source: "session",
-      text,
-    });
+    setMessage(text);
   }, []);
 
   const dispatchDeviceAction = useCallback(
@@ -3537,8 +3723,7 @@ export default function SessionPage() {
     ],
   );
 
-  function appendCommittedAssistantOutput(input: {
-    text: string;
+  function commitAuthorizedRavenLine(input: {
     speechText: string;
     displayText: string;
     actionParsed: PreparedAssistantOutputChannels["actionParsed"];
@@ -3546,21 +3731,14 @@ export default function SessionPage() {
     anchorUserMessageId: number;
   }): boolean {
     const {
-      text,
       speechText,
       displayText,
       actionParsed,
       traceMeta,
       anchorUserMessageId,
     } = input;
-    if (displayText) {
-      setRavenLines((current) => trimToSize([...current, displayText], 20));
-      recentRavenOutputsRef.current = trimToSize(
-        [...recentRavenOutputsRef.current, speechText || displayText],
-        6,
-      );
-    }
-    if (speechText) {
+    const assistantStateEligible = isAssistantTraceStateEligible(traceMeta);
+    if (speechText && assistantStateEligible) {
       const nextConversationState = noteConversationAssistantTurn(conversationStateRef.current, {
         text: speechText,
         ravenIntent: lastDialogueActRef.current ?? "respond",
@@ -3608,6 +3786,18 @@ export default function SessionPage() {
       if (resolvesTopic) {
         topicAnchorRef.current = null;
       }
+    } else if (speechText) {
+      pushTurnTrace("turn.state_update.skipped", {
+        request_id: traceMeta?.requestId ?? "none",
+        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
+        user_message_id: anchorUserMessageId,
+        reason: "assistant_output_state_ineligible",
+        assistant_output_quality:
+          traceMeta?.authorityTrace?.assistant_output_quality ??
+          traceMeta?.semanticTrace?.assistant_output_quality ??
+          "unknown",
+        at_ms: now(),
+      });
     }
     if (actionParsed.ok) {
       pushFeed({
@@ -3634,12 +3824,14 @@ export default function SessionPage() {
         detail: JSON.stringify({ parsed_action: false, reason: actionParsed.error }),
       });
     }
-    if (speechText) {
+    if (speechText && assistantStateEligible) {
       recentDialogueRef.current = pushDialogueHistoryMessage(
         recentDialogueRef.current,
         "assistant",
         speechText,
       );
+    }
+    if (speechText) {
       publishRuntimeEvent({
         type: "raven.output",
         timestamp: now(),
@@ -3658,10 +3850,10 @@ export default function SessionPage() {
     if (speechText) {
       speakRavenText(speechText);
     }
-    return Boolean(displayText || speechText || text.trim() || actionParsed.ok);
+    return Boolean(displayText || speechText || actionParsed.ok);
   }
 
-  function prepareSessionVisibleOutput(
+  function prepareServerVisibleOutput(
     text: string,
     traceMeta?: AssistantTraceMeta | null,
   ): {
@@ -3671,18 +3863,6 @@ export default function SessionPage() {
     hasRenderableText: boolean;
   } {
     const outputChannels = prepareAssistantOutputChannels(text);
-    if (outputChannels.debug_trace.visible_scrubbed) {
-      pushTurnTrace("turn.output.scrubbed", {
-        request_id: traceMeta?.requestId ?? "none",
-        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
-        user_message_id: traceMeta?.sourceUserMessageId ?? turnGateRef.current.lastUserMessageId,
-        final_output_source: traceMeta?.finalOutputSource ?? "unknown",
-        blocked: outputChannels.debug_trace.visible_blocked,
-        before_text: outputChannels.debug_trace.raw_visible_reply.slice(0, 240),
-        after_text: outputChannels.visible_reply.slice(0, 240),
-        at_ms: now(),
-      });
-    }
     const actionDisplayText = outputChannels.debug_trace.device_action_display_text;
     if (actionDisplayText) {
       pushFeed({
@@ -3691,106 +3871,180 @@ export default function SessionPage() {
         detail: actionDisplayText,
       });
     }
-    // Mirror the server route's final internal-leak scrub right before the session client
-    // commits user-visible text, so local fallback paths cannot surface runtime labels.
-    const speechText = outputChannels.visible_reply;
+    const speechText = text.trim();
     const displayText = speechText;
     return {
       actionParsed: outputChannels.actionParsed,
       speechText,
       displayText,
-      hasRenderableText: outputChannels.hasRenderableText,
+      hasRenderableText: Boolean(speechText || outputChannels.device_actions.length > 0),
     };
   }
 
-  function appendRavenOutput(
-    text: string,
-    traceMeta?: AssistantTraceMeta | null,
-  ): {
+  function appendServerAuthorizedRavenOutput(input: {
+    text: string;
+    authorityTrace: Record<string, unknown> | null | undefined;
+    serverCommitPath?: string | null;
+    sourceUserMessageId?: number | null;
+    traceMeta?: AssistantTraceMeta | null;
+  }): {
     committed: boolean;
     reason: string;
     hasRenderableText: boolean;
-      renderedText: string;
+    renderedText: string;
   } {
-    const effectiveTrace = traceMeta ?? activeAssistantTraceRef.current;
-    const renderable = prepareSessionVisibleOutput(text, effectiveTrace);
-    const commitText = renderable.speechText || renderable.displayText;
+    const effectiveTrace = input.traceMeta ?? activeAssistantTraceRef.current;
     const anchorUserMessageId =
-      effectiveTrace && effectiveTrace.sourceUserMessageId > 0
-        ? effectiveTrace.sourceUserMessageId
-        : turnGateRef.current.lastUserMessageId;
+      typeof input.sourceUserMessageId === "number" && input.sourceUserMessageId > 0
+        ? input.sourceUserMessageId
+        : effectiveTrace && effectiveTrace.sourceUserMessageId > 0
+          ? effectiveTrace.sourceUserMessageId
+          : turnGateRef.current.lastUserMessageId;
+    const serverCommitPath =
+      input.serverCommitPath ??
+      (typeof input.authorityTrace?.server_commit_path === "string"
+        ? input.authorityTrace.server_commit_path
+        : null);
+    const authorization = validateServerAuthorizedRavenOutput({
+      text: input.text,
+      authorityTrace: input.authorityTrace,
+      serverCommitPath,
+      sourceUserMessageId: anchorUserMessageId,
+    });
+    updateSessionTurnLog(anchorUserMessageId, (entry) =>
+      entry
+        ? {
+            ...entry,
+            authorityTrace: extractVisibleAuthorityDebugFields(
+              input.authorityTrace,
+              "appendServerAuthorizedRavenOutput",
+            ),
+          }
+        : null,
+    );
+    if (!authorization.ok) {
+      recordBlockedAssistantAppend({
+        sourceUserMessageId: anchorUserMessageId,
+        reason: authorization.reason,
+        stage: "appendServerAuthorizedRavenOutput",
+        authorityTrace: input.authorityTrace,
+        payloadSummary: {
+          text_present: Boolean(input.text.trim()),
+          server_authority_sentinel:
+            input.authorityTrace?.server_authority_sentinel ?? "none",
+          authority_trace_present:
+            input.authorityTrace?.authority_trace_present ?? false,
+          server_commit_path: serverCommitPath ?? "missing",
+          candidate_kind: input.authorityTrace?.candidate_kind ?? "none",
+          visible_commit_allowed:
+            input.authorityTrace?.visible_commit_allowed ?? "none",
+        },
+        text: input.text,
+      });
+      return {
+        committed: false,
+        reason: `authority_blocked:${authorization.reason}`,
+        hasRenderableText: Boolean(input.text.trim()),
+        renderedText: "",
+      };
+    }
+
+    const traceMeta = effectiveTrace
+      ? {
+          ...effectiveTrace,
+          authorityTrace: authorization.authorityTrace,
+          semanticTrace: effectiveTrace.semanticTrace,
+        }
+      : null;
+    const renderable = prepareServerVisibleOutput(authorization.text, traceMeta);
+    const commitText = renderable.speechText || renderable.displayText;
     const hasRenderableText = renderable.hasRenderableText;
     updateSessionTurnLog(anchorUserMessageId, (entry) =>
       entry
         ? {
             ...entry,
-            appendRavenOutputRunsForTurn: entry.appendRavenOutputRunsForTurn + 1,
+            authorizedAppendRunsForTurn: entry.authorizedAppendRunsForTurn + 1,
           }
         : null,
     );
-    if (commitText && anchorUserMessageId > 0) {
-      const commitDecision = commitManagedVisibleAssistantTurn({
-        anchorUserMessageId,
-        requestId: effectiveTrace?.requestId ?? null,
-        renderedText: commitText,
-        turnIdEstimate: effectiveTrace?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
-        committedAtMs: now(),
-        generationPath: effectiveTrace?.generationPath ?? "local",
-      });
-      if (!commitDecision.allow) {
-        pushTurnTrace("turn.append.blocked", {
-          request_id: effectiveTrace?.requestId ?? "none",
-          session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
-          user_message_id: anchorUserMessageId,
-          step_id: effectiveTrace?.stepId ?? "none",
-          reason: commitDecision.reason,
-          source: effectiveTrace?.source ?? "scripted",
-          model_ran: effectiveTrace?.modelRan ?? false,
-          deterministic_rail: effectiveTrace?.deterministicRail ?? "none",
-          generation_path: effectiveTrace?.generationPath ?? "unknown",
-          at_ms: now(),
-        });
-        return {
-          committed: false,
-          reason: `commit_blocked:${commitDecision.reason}`,
-          hasRenderableText,
-          renderedText: renderable.speechText || renderable.displayText,
-        };
-      }
-      pushTurnTrace("turn.append.committed", {
-        request_id: effectiveTrace?.requestId ?? `anchored-${anchorUserMessageId}`,
-        session_id: effectiveTrace?.sessionId ?? turnGateRef.current.sessionId,
+    if (!commitText) {
+      return {
+        committed: false,
+        reason: "empty_renderable_text",
+        hasRenderableText,
+        renderedText: "",
+      };
+    }
+    const commitDecision = commitManagedVisibleAssistantTurn({
+      anchorUserMessageId,
+      requestId: traceMeta?.requestId ?? null,
+      renderedText: commitText,
+      turnIdEstimate: traceMeta?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
+      committedAtMs: now(),
+      generationPath: authorization.serverCommitPath,
+    });
+    if (!commitDecision.allow) {
+      pushTurnTrace("turn.append.blocked", {
+        request_id: traceMeta?.requestId ?? "none",
+        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
         user_message_id: anchorUserMessageId,
-        step_id: effectiveTrace?.stepId ?? "none",
-        source: effectiveTrace?.source ?? "scripted",
-        model_ran: effectiveTrace?.modelRan ?? false,
-        deterministic_rail: effectiveTrace?.deterministicRail ?? "none",
-        generation_path: effectiveTrace?.generationPath ?? "unknown",
-        final_output_source: effectiveTrace?.finalOutputSource ?? "unknown",
-        output_generator_count: effectiveTrace?.outputGeneratorCount ?? 1,
-        post_processed: effectiveTrace?.postProcessed ?? false,
-        turn_id_estimate: effectiveTrace?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
-        server_request_id: effectiveTrace?.serverRequestId ?? "none",
-        server_turn_id: effectiveTrace?.serverTurnId ?? "none",
-        committed_text: commitText,
+        step_id: traceMeta?.stepId ?? "none",
+        reason: commitDecision.reason,
+        generation_path: authorization.serverCommitPath,
         at_ms: now(),
       });
+      return {
+        committed: false,
+        reason: `commit_blocked:${commitDecision.reason}`,
+        hasRenderableText,
+        renderedText: commitText,
+      };
     }
-    const committed = appendCommittedAssistantOutput({
-        text: renderable.speechText || renderable.displayText,
-        speechText: renderable.speechText,
-        displayText: renderable.displayText,
-        actionParsed: renderable.actionParsed,
-        traceMeta: effectiveTrace,
-        anchorUserMessageId,
-      });
+    pushTurnTrace("turn.append.committed", {
+      request_id: traceMeta?.requestId ?? `anchored-${anchorUserMessageId}`,
+      session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
+      user_message_id: anchorUserMessageId,
+      step_id: traceMeta?.stepId ?? "none",
+      source: traceMeta?.source ?? "model",
+      model_ran: traceMeta?.modelRan ?? false,
+      deterministic_rail: traceMeta?.deterministicRail ?? "none",
+      generation_path: authorization.serverCommitPath,
+      final_output_source: traceMeta?.finalOutputSource ?? "unknown",
+      output_generator_count: traceMeta?.outputGeneratorCount ?? 1,
+      post_processed: traceMeta?.postProcessed ?? false,
+      turn_id_estimate: traceMeta?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
+      server_request_id: traceMeta?.serverRequestId ?? "none",
+      server_turn_id: traceMeta?.serverTurnId ?? "none",
+      committed_text: commitText,
+      at_ms: now(),
+    });
+    setRavenLines((current) => trimToSize([...current, renderable.displayText], 20));
+    recentRavenOutputsRef.current = trimToSize(
+      [...recentRavenOutputsRef.current, renderable.speechText || renderable.displayText],
+      6,
+    );
+    const committed = commitAuthorizedRavenLine({
+      speechText: renderable.speechText,
+      displayText: renderable.displayText,
+      actionParsed: renderable.actionParsed,
+      traceMeta,
+      anchorUserMessageId,
+    });
     if (committed) {
-      commitActiveInteractionFromTrace(effectiveTrace, anchorUserMessageId);
+      commitActiveInteractionFromTrace(traceMeta, anchorUserMessageId);
       updateSessionTurnLog(anchorUserMessageId, (entry) =>
         entry
           ? {
               ...entry,
               ravenOutputText: renderable.displayText || renderable.speechText,
+              authorityTrace: extractVisibleAuthorityDebugFields(
+                authorization.authorityTrace,
+                "appendServerAuthorizedRavenOutput",
+              ),
+              blockedAssistantAppend: false,
+              blockedAppendReason: null,
+              blockedAppendStage: null,
+              blockedAppendPayloadSummary: null,
               assistantRenderAppendEvents: entry.assistantRenderAppendEvents + 1,
               visibleAssistantStringsShownForTurn: entry.visibleAssistantStringsShownForTurn + 1,
               conversationMode:
@@ -3813,7 +4067,6 @@ export default function SessionPage() {
     traceMeta: AssistantTraceMeta | null,
     reason: string,
   ): boolean {
-    const renderable = prepareSessionVisibleOutput(text, traceMeta);
     const anchorUserMessageId =
       traceMeta && traceMeta.sourceUserMessageId > 0
         ? traceMeta.sourceUserMessageId
@@ -3826,73 +4079,26 @@ export default function SessionPage() {
           }
         : null,
     );
-    if (hasManagedVisibleAssistantCommit(anchorUserMessageId)) {
-      pushTurnTrace("turn.append.recovery_blocked", {
-        request_id: traceMeta?.requestId ?? "none",
-        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
-        user_message_id: anchorUserMessageId,
-        step_id: traceMeta?.stepId ?? "none",
-        reason: "visible_commit_already_present",
-        at_ms: now(),
-      });
-      return false;
-    }
-    const commitDecision = commitManagedVisibleAssistantTurn({
-      anchorUserMessageId,
-      requestId: traceMeta?.requestId ?? null,
-      renderedText: renderable.speechText || renderable.displayText,
-      turnIdEstimate: traceMeta?.turnIdEstimate ?? turnGateRef.current.lastAssistantTurnId + 1,
-      committedAtMs: now(),
-      generationPath: traceMeta?.generationPath ?? "recovery",
-      recovered: true,
-    });
-    if (!commitDecision.allow) {
-      pushTurnTrace("turn.append.recovery_blocked", {
-        request_id: traceMeta?.requestId ?? "none",
-        session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
-        user_message_id: anchorUserMessageId,
-        step_id: traceMeta?.stepId ?? "none",
-        reason: commitDecision.reason,
-        at_ms: now(),
-      });
-      return false;
-    }
-    pushTurnTrace("turn.append.recovered", {
+    pushTurnTrace("turn.append.recovery_attempt", {
       request_id: traceMeta?.requestId ?? "none",
       session_id: traceMeta?.sessionId ?? turnGateRef.current.sessionId,
       user_message_id: anchorUserMessageId,
       step_id: traceMeta?.stepId ?? "none",
       reason,
-      generation_path: traceMeta?.generationPath ?? "unknown",
-      final_output_source: traceMeta?.finalOutputSource ?? "unknown",
-      rendered_text: renderable.speechText || renderable.displayText,
       at_ms: now(),
     });
-    const recovered = appendCommittedAssistantOutput({
-      text: renderable.speechText || renderable.displayText,
-      speechText: renderable.speechText,
-      displayText: renderable.displayText,
-      actionParsed: renderable.actionParsed,
-      traceMeta,
-      anchorUserMessageId,
-    });
-    if (recovered) {
-      commitActiveInteractionFromTrace(traceMeta, anchorUserMessageId);
-      updateSessionTurnLog(anchorUserMessageId, (entry) =>
-        entry
-          ? {
-              ...entry,
-              ravenOutputText: renderable.displayText || renderable.speechText,
-              assistantRenderAppendEvents: entry.assistantRenderAppendEvents + 1,
-              visibleAssistantStringsShownForTurn: entry.visibleAssistantStringsShownForTurn + 1,
-              conversationMode:
-                sessionMemoryRef.current.conversation_mode?.value ??
-                sceneStateRef.current.interaction_mode,
-            }
+    return appendServerAuthorizedRavenOutput({
+      text,
+      authorityTrace: traceMeta?.authorityTrace ?? traceMeta?.semanticTrace,
+      serverCommitPath:
+        typeof traceMeta?.authorityTrace?.server_commit_path === "string"
+          ? traceMeta.authorityTrace.server_commit_path
+          : typeof traceMeta?.semanticTrace?.server_commit_path === "string"
+          ? traceMeta.semanticTrace.server_commit_path
           : null,
-      );
-    }
-    return recovered;
+      sourceUserMessageId: anchorUserMessageId,
+      traceMeta,
+    }).committed;
   }
 
   function handleEngineEvent(event: StepEngineEvent): boolean {
@@ -3922,11 +4128,25 @@ export default function SessionPage() {
     }
 
     if (event.type === "output") {
-      const appendResult = appendRavenOutput(event.text);
       const sourceUserMessageId =
         activeAssistantTraceRef.current?.sourceUserMessageId ?? turnGateRef.current.lastUserMessageId;
+      const appendResult = appendServerAuthorizedRavenOutput({
+        text: event.text,
+        authorityTrace:
+          activeAssistantTraceRef.current?.authorityTrace ??
+          activeAssistantTraceRef.current?.semanticTrace,
+        serverCommitPath:
+          typeof activeAssistantTraceRef.current?.authorityTrace?.server_commit_path === "string"
+            ? activeAssistantTraceRef.current.authorityTrace.server_commit_path
+            : typeof activeAssistantTraceRef.current?.semanticTrace?.server_commit_path === "string"
+              ? activeAssistantTraceRef.current.semanticTrace.server_commit_path
+            : null,
+        sourceUserMessageId,
+        traceMeta: activeAssistantTraceRef.current,
+      });
       const recovered =
         !appendResult.committed &&
+        !appendResult.reason.startsWith("authority_blocked:") &&
         shouldRecoverSkippedAssistantRender({
         appendCommitted: appendResult.committed,
         appendReason: appendResult.reason,
@@ -4187,9 +4407,15 @@ export default function SessionPage() {
       sourceUserMessageId: reducedUserTurn.next.turnGate.lastUserMessageId,
       userText: text,
       ravenOutputText: entry?.ravenOutputText ?? "",
+      authorityTrace:
+        entry?.authorityTrace ?? defaultVisibleAuthorityDebugFields("pending_server_response"),
+      blockedAssistantAppend: entry?.blockedAssistantAppend ?? false,
+      blockedAppendReason: entry?.blockedAppendReason ?? null,
+      blockedAppendStage: entry?.blockedAppendStage ?? null,
+      blockedAppendPayloadSummary: entry?.blockedAppendPayloadSummary ?? null,
       assistantRenderAppendEvents: entry?.assistantRenderAppendEvents ?? 0,
       recoverSkippedAssistantRenderFired: entry?.recoverSkippedAssistantRenderFired ?? false,
-      appendRavenOutputRunsForTurn: entry?.appendRavenOutputRunsForTurn ?? 0,
+      authorizedAppendRunsForTurn: entry?.authorizedAppendRunsForTurn ?? 0,
       visibleAssistantStringsShownForTurn: entry?.visibleAssistantStringsShownForTurn ?? 0,
       createdAt: entry?.createdAt ?? now(),
       conversationMode:
@@ -4320,11 +4546,26 @@ export default function SessionPage() {
     let activeStateOwner: ActiveInteractionStateOwner | null = null;
     let statePersistence: Record<string, unknown> | null = null;
     let semanticTrace: Record<string, unknown> | null = null;
+    let authorityTrace: Record<string, unknown> | null = null;
+    let authorityError: Record<string, unknown> | null = null;
+    let payloadShapeSummary: Record<string, unknown> | null = null;
 
-    const ingestParsedPayload = (parsed: { response?: unknown; activeInteraction?: unknown; previousResponseBrief?: unknown; activeStateOwner?: unknown; statePersistence?: unknown; semanticTrace?: unknown }) => {
+    const ingestParsedPayload = (parsed: {
+      response?: unknown;
+      type?: unknown;
+      error_category?: unknown;
+      blocked_reason?: unknown;
+      activeInteraction?: unknown;
+      previousResponseBrief?: unknown;
+      activeStateOwner?: unknown;
+      statePersistence?: unknown;
+      semanticTrace?: unknown;
+      authorityTrace?: unknown;
+    }) => {
       if (typeof parsed.response === "string") {
         fullText += parsed.response;
       }
+      payloadShapeSummary = summarizeAssistantPayloadShape(parsed) as unknown as Record<string, unknown>;
       activeInteraction = normalizeActiveInteractionState(parsed.activeInteraction) ?? activeInteraction;
       previousResponseBrief =
         normalizePreviousResponseBriefSummary(parsed.previousResponseBrief) ??
@@ -4338,6 +4579,10 @@ export default function SessionPage() {
       if (parsed.semanticTrace && typeof parsed.semanticTrace === "object") {
         semanticTrace = parsed.semanticTrace as Record<string, unknown>;
       }
+      if (parsed.type === "authority_error") {
+        authorityError = parsed as Record<string, unknown>;
+      }
+      authorityTrace = extractAuthorityTraceFromAssistantPayload(parsed) ?? authorityTrace;
     };
 
     while (true) {
@@ -4360,11 +4605,15 @@ export default function SessionPage() {
         try {
           ingestParsedPayload(JSON.parse(trimmed) as {
             response?: unknown;
+            type?: unknown;
+            error_category?: unknown;
+            blocked_reason?: unknown;
             activeInteraction?: unknown;
             previousResponseBrief?: unknown;
             activeStateOwner?: unknown;
             statePersistence?: unknown;
             semanticTrace?: unknown;
+            authorityTrace?: unknown;
           });
         } catch {
           // ignore malformed chunks
@@ -4377,17 +4626,24 @@ export default function SessionPage() {
       try {
         ingestParsedPayload(JSON.parse(buffer) as {
           response?: unknown;
+          type?: unknown;
+          error_category?: unknown;
+          blocked_reason?: unknown;
           activeInteraction?: unknown;
           previousResponseBrief?: unknown;
           activeStateOwner?: unknown;
           statePersistence?: unknown;
           semanticTrace?: unknown;
+          authorityTrace?: unknown;
         });
       } catch {
         // ignore malformed tail chunk
       }
     }
 
+    const parsedAuthorityTrace = authorityTrace as Record<string, unknown> | null;
+    const parsedSemanticTrace = semanticTrace as Record<string, unknown> | null;
+    const authorityErrorRecord = authorityError as Record<string, unknown> | null;
     pushTurnTrace("turn.model.response_payload", {
       request_id: requestId,
       session_id: turnGateRef.current.sessionId,
@@ -4395,7 +4651,24 @@ export default function SessionPage() {
       content_type: response.headers.get("content-type") ?? "unknown",
       raw_body: rawPayload.slice(0, 600),
       parsed_text: fullText.trim().slice(0, 400),
+      payload_shape: payloadShapeSummary,
+      authority_trace_present:
+        parsedAuthorityTrace?.authority_trace_present ??
+        parsedSemanticTrace?.authority_trace_present ??
+        false,
+      server_authority_sentinel:
+        parsedAuthorityTrace?.server_authority_sentinel ??
+        parsedSemanticTrace?.server_authority_sentinel ??
+        "none",
       parse_status: fullText.trim() ? "parsed" : "empty_after_parse",
+      authority_error_category:
+        typeof authorityErrorRecord?.["error_category"] === "string"
+          ? authorityErrorRecord["error_category"]
+          : "none",
+      blocked_reason:
+        typeof authorityErrorRecord?.["blocked_reason"] === "string"
+          ? authorityErrorRecord["blocked_reason"]
+          : "none",
       at_ms: now(),
     });
 
@@ -4406,6 +4679,9 @@ export default function SessionPage() {
       activeStateOwner,
       statePersistence,
       semanticTrace,
+      authorityTrace,
+      authorityError: authorityErrorRecord,
+      payloadShapeSummary,
     };
   }
 
@@ -4452,15 +4728,6 @@ export default function SessionPage() {
 
     const phase = phaseRef.current;
     const verifySummary = recentVerifySummariesRef.current.slice(-2).join(" | ") || "none";
-    const topicAnchor =
-      topicAnchorRef.current ??
-      (workingMemoryRef.current.current_topic !== "none"
-        ? workingMemoryRef.current.current_topic
-        : null) ??
-      getSessionMemoryFocus(sessionMemoryRef.current) ??
-      sceneStateRef.current.agreed_goal ??
-      lastUserResponseRef.current ??
-      "none";
     const chatMessages = buildClientChatMessages(
       recentDialogueRef.current,
       userText,
@@ -4538,6 +4805,30 @@ export default function SessionPage() {
     }).catch(() => null);
 
     if (!response?.ok) {
+      const errorPayload = response
+        ? ((await response.json().catch(() => null)) as Record<string, unknown> | null)
+        : null;
+      const errorCategory =
+        typeof errorPayload?.error_category === "string" ? errorPayload.error_category : null;
+      recordBlockedAssistantAppend({
+        sourceUserMessageId,
+        reason:
+          typeof errorPayload?.blocked_reason === "string"
+            ? errorPayload.blocked_reason
+            : response
+              ? `server_error_${response.status}`
+              : "server_response_missing",
+        stage:
+          errorCategory === "planner_validation_error"
+            ? "planner_validation_error"
+            : errorPayload?.type === "authority_error"
+              ? "server_authority_error"
+              : "api_chat_response",
+        authorityTrace: extractAuthorityTraceFromAssistantPayload(errorPayload),
+        payloadSummary: errorPayload
+          ? summarizeAssistantPayloadShape(errorPayload) as unknown as Record<string, unknown>
+          : { response_missing: true },
+      });
       finishManagedAssistantRequest("model", sourceUserMessageId, requestId);
       return null;
     }
@@ -4657,6 +4948,26 @@ export default function SessionPage() {
     const responsePayload = await readStreamedAssistantPayload(response, requestId, sourceUserMessageId);
     const text = responsePayload.text;
     finishManagedAssistantRequest("model", sourceUserMessageId, requestId);
+    if (responsePayload.authorityError) {
+      const errorCategory =
+        typeof responsePayload.authorityError.error_category === "string"
+          ? responsePayload.authorityError.error_category
+          : null;
+      recordBlockedAssistantAppend({
+        sourceUserMessageId,
+        reason:
+          typeof responsePayload.authorityError.blocked_reason === "string"
+            ? responsePayload.authorityError.blocked_reason
+            : errorCategory ?? "server_authority_error",
+        stage:
+          errorCategory === "planner_validation_error"
+            ? "planner_validation_error"
+            : errorCategory ?? "server_authority_error",
+        authorityTrace: extractAuthorityTraceFromAssistantPayload(responsePayload.authorityError),
+        payloadSummary: responsePayload.payloadShapeSummary ?? responsePayload.authorityError,
+      });
+      return null;
+    }
     if (text === SESSION_CHAT_NOOP_SENTINEL) {
       return {
         node: {
@@ -4683,6 +4994,8 @@ export default function SessionPage() {
           activeStateOwner: responsePayload.activeStateOwner,
           statePersistence: responsePayload.statePersistence,
           semanticTrace: responsePayload.semanticTrace,
+          authorityTrace: responsePayload.authorityTrace,
+          payloadShapeSummary: responsePayload.payloadShapeSummary,
           rawGameStartDetected,
           rawGameStartQuestionPresent,
           finalGameStartQuestionPresent,
@@ -4700,18 +5013,11 @@ export default function SessionPage() {
       });
       return null;
     }
-    const continuityFallback = buildTopicFallback(
-      dialogueAct,
-      userText,
-      workingMemoryRef.current,
-      sceneStateRef.current,
-    );
-    const stabilized = stabilizeTopicContinuity(text, topicAnchor, continuityFallback);
     return {
       node: {
         id: `respond-model-${sourceUserMessageId}`,
         type: "respond_step",
-        text: truncateWords(stabilized),
+        text,
         phase,
         sourceIntent: intent,
       },
@@ -4732,6 +5038,8 @@ export default function SessionPage() {
         activeStateOwner: responsePayload.activeStateOwner,
         statePersistence: responsePayload.statePersistence,
         semanticTrace: responsePayload.semanticTrace,
+        authorityTrace: responsePayload.authorityTrace,
+        payloadShapeSummary: responsePayload.payloadShapeSummary,
         rawGameStartDetected,
         rawGameStartQuestionPresent,
         finalGameStartQuestionPresent,
@@ -4845,20 +5153,25 @@ export default function SessionPage() {
         userText: pendingTurn.text,
         nowMs: timestamp,
       });
-      const projectedConversationState = noteConversationAssistantTurn(conversationStateRef.current, {
-        text: responseText,
-        ravenIntent: pendingTurn.dialogueAct,
-        nowMs: timestamp,
-      });
-      const projectedSceneState = reconcileSceneStateWithConversation(
-        noteSceneStateAssistantTurn(sceneStateRef.current, {
-          text: responseText,
-          commitment: responseText,
-        }),
-        projectedConversationState,
-      );
+      const assistantStateEligible = isAssistantTraceStateEligible(generated.trace);
+      const projectedConversationState = assistantStateEligible
+        ? noteConversationAssistantTurn(conversationStateRef.current, {
+            text: responseText,
+            ravenIntent: pendingTurn.dialogueAct,
+            nowMs: timestamp,
+          })
+        : conversationStateRef.current;
+      const projectedSceneState = assistantStateEligible
+        ? reconcileSceneStateWithConversation(
+            noteSceneStateAssistantTurn(sceneStateRef.current, {
+              text: responseText,
+              commitment: responseText,
+            }),
+            projectedConversationState,
+          )
+        : sceneStateRef.current;
       const projectedConversationMode = projectedSceneState.interaction_mode;
-      if (nextMemory.conversation_mode?.value !== projectedConversationMode) {
+      if (assistantStateEligible && nextMemory.conversation_mode?.value !== projectedConversationMode) {
         nextMemory = writeConversationMode(nextMemory, projectedConversationMode, timestamp, 0.96);
         memoryWritesAttempted = [
           ...memoryWritesAttempted,
@@ -4874,28 +5187,18 @@ export default function SessionPage() {
         );
       }
       const nextCommitmentState =
+        assistantStateEligible &&
         commitmentDecision.next.locked &&
         isResponseAlignedWithCommitment(commitmentDecision.next, responseText)
           ? createCommitmentState()
-          : commitmentDecision.next;
+          : assistantStateEligible
+            ? commitmentDecision.next
+            : commitmentRef.current;
       commitmentRef.current = nextCommitmentState;
 
-      const nextTurnId = turnGateRef.current.lastAssistantTurnId + 1;
       const selectedFamily = mapAssistantReplySourceToTurnResponseFamily(generated.trace.source);
-      const finalized = finalizeTurnResponse({
-        text: responseText,
-        userText: pendingTurn.text,
-        nextTurnId,
-        phase,
-        memory: nextMemory,
-        interactionMode: projectedSceneState.interaction_mode,
-        selectedFamily,
-        availableFamilies: [selectedFamily],
-        responseGateForced: false,
-        responseMode: pendingTurn.dialogueAct === "short_follow_up" ? "short_follow_up" : "default",
-      });
       const finalGameStartInspection = inspectGameStartContract(
-        finalized.text,
+        responseText,
         projectedSceneState.game_template_id,
       );
       pushTurnTrace("turn.response.selected", {
@@ -4928,10 +5231,10 @@ export default function SessionPage() {
         chat_switch_route_selected: false,
         short_follow_up_route_selected: pendingTurn.dialogueAct === "short_follow_up",
         task_or_persona_path: selectedFamily,
-        final_output_source: finalized.finalOutputSource,
+        final_output_source: generated.trace.finalOutputSource,
         output_generator_families: [selectedFamily],
-        more_than_one_output_generator_fired: finalized.multipleGeneratorsFired,
-        reflection_appended: finalized.reflectionAppended,
+        more_than_one_output_generator_fired: false,
+        reflection_appended: false,
         game_start_detected: finalGameStartInspection.detected,
         raw_game_start_detected: generated.trace.rawGameStartDetected ?? false,
         raw_game_start_question_present: generated.trace.rawGameStartQuestionPresent ?? false,
@@ -4941,19 +5244,29 @@ export default function SessionPage() {
           generated.trace.finalGameStartQuestionPresent ?? finalGameStartInspection.hasPlayablePrompt,
         final_mode_written: nextMemory.conversation_mode?.value ?? "none",
         forbidden_internal_string_blocked: false,
-        post_processing_modified_output:
-          truncateWords(responseText) !== truncateWords(finalized.text),
+        post_processing_modified_output: false,
         at_ms: now(),
       });
-      const text = truncateWords(finalized.text);
-      const commitment = deriveCommitment(commitmentAct, text, workingMemoryRef.current);
-      workingMemoryRef.current = noteWorkingMemoryAssistantTurn(workingMemoryRef.current, {
-        commitment: commitment.text,
-        topicResolved: commitment.topicResolved,
-      });
-      sessionTopicRef.current = workingMemoryRef.current.session_topic;
-      if (commitment.topicResolved) {
-        topicAnchorRef.current = null;
+      const text = responseText;
+      if (assistantStateEligible) {
+        const commitment = deriveCommitment(commitmentAct, text, workingMemoryRef.current);
+        workingMemoryRef.current = noteWorkingMemoryAssistantTurn(workingMemoryRef.current, {
+          commitment: commitment.text,
+          topicResolved: commitment.topicResolved,
+        });
+        sessionTopicRef.current = workingMemoryRef.current.session_topic;
+        if (commitment.topicResolved) {
+          topicAnchorRef.current = null;
+        }
+      } else {
+        pushTurnTrace("turn.state_projection.skipped", {
+          request_id: pendingTurn.requestId,
+          session_id: turnGateRef.current.sessionId,
+          user_message_id: pendingTurn.messageId,
+          reason: "assistant_output_state_ineligible",
+          final_output_source: generated.trace.finalOutputSource,
+          at_ms: now(),
+        });
       }
 
       return {
@@ -4966,7 +5279,6 @@ export default function SessionPage() {
         },
         trace: {
           ...generated.trace,
-          finalOutputSource: finalized.finalOutputSource,
           outputGeneratorCount: 1,
         },
       };
@@ -5702,8 +6014,20 @@ export default function SessionPage() {
       deterministic_rail: recovery.deterministicRail,
       at_ms: now(),
     });
-    appendRavenOutput(recovery.text);
+    const appendResult = appendServerAuthorizedRavenOutput({
+      text: recovery.text,
+      authorityTrace: activeAssistantTraceRef.current.semanticTrace,
+      serverCommitPath:
+        typeof activeAssistantTraceRef.current.semanticTrace?.server_commit_path === "string"
+          ? activeAssistantTraceRef.current.semanticTrace.server_commit_path
+          : null,
+      sourceUserMessageId: pendingTurn.messageId,
+      traceMeta: activeAssistantTraceRef.current,
+    });
     activeAssistantTraceRef.current = null;
+    if (!appendResult.committed) {
+      return false;
+    }
     const updatedContract = reduceAssistantEmission(currentContractState(), {
       stepId: `idle-recovery-${pendingTurn.messageId}`,
       content: recovery.text,
@@ -6015,6 +6339,13 @@ export default function SessionPage() {
       serverTurnId: prepared.trace.serverTurnId,
       finalOutputSource: prepared.trace.finalOutputSource,
       outputGeneratorCount: prepared.trace.outputGeneratorCount,
+      activeInteractionAfter: prepared.trace.activeInteractionAfter,
+      previousResponseBrief: prepared.trace.previousResponseBrief,
+      activeStateOwner: prepared.trace.activeStateOwner,
+      statePersistence: prepared.trace.statePersistence,
+      semanticTrace: prepared.trace.semanticTrace,
+      authorityTrace: prepared.trace.authorityTrace,
+      payloadShapeSummary: prepared.trace.payloadShapeSummary,
     };
     pushTurnTrace("turn.render.attempt", {
       request_id: pendingTurn.requestId,
@@ -6025,10 +6356,24 @@ export default function SessionPage() {
       final_output_source: prepared.trace.finalOutputSource,
       at_ms: now(),
     });
-    const appendResult = appendRavenOutput(promptText);
+    const appendResult = appendServerAuthorizedRavenOutput({
+      text: promptText,
+      authorityTrace:
+        activeAssistantTraceRef.current.authorityTrace ??
+        activeAssistantTraceRef.current.semanticTrace,
+      serverCommitPath:
+        typeof activeAssistantTraceRef.current.authorityTrace?.server_commit_path === "string"
+          ? activeAssistantTraceRef.current.authorityTrace.server_commit_path
+          : typeof activeAssistantTraceRef.current.semanticTrace?.server_commit_path === "string"
+            ? activeAssistantTraceRef.current.semanticTrace.server_commit_path
+          : null,
+      sourceUserMessageId: pendingTurn.messageId,
+      traceMeta: activeAssistantTraceRef.current,
+    });
     let recoveredRender = false;
     if (
       !appendResult.committed &&
+      !appendResult.reason.startsWith("authority_blocked:") &&
       shouldRecoverSkippedAssistantRender({
         appendCommitted: appendResult.committed,
         appendReason: appendResult.reason,
@@ -6501,6 +6846,10 @@ export default function SessionPage() {
                 activeInteractionAfter: prepared.trace.activeInteractionAfter ?? null,
                 previousResponseBrief: prepared.trace.previousResponseBrief ?? null,
                 activeStateOwner: prepared.trace.activeStateOwner ?? null,
+                statePersistence: prepared.trace.statePersistence ?? null,
+                semanticTrace: prepared.trace.semanticTrace ?? null,
+                authorityTrace: prepared.trace.authorityTrace ?? null,
+                payloadShapeSummary: prepared.trace.payloadShapeSummary ?? null,
               }
             : null;
         }
@@ -6737,13 +7086,37 @@ export default function SessionPage() {
       setLastPlanRaw(planned.raw ?? null);
       setLastPlanValidation(planned.validation ?? null);
 
+      if (planned.plannerError) {
+        setMessage(planned.reason ?? "Planner validation failed.");
+        logPlannerDebug({
+          stepIndex,
+          stepId: `dynamic-${stepIndex}`,
+          decision: "noop",
+          reason: planned.plannerError.blockedReason,
+        });
+        await sleepMs(250);
+        continue;
+      }
+
       if (planned.fallback) {
         setMessage(planned.reason ?? "Planner returned fallback. No output emitted.");
         logPlannerDebug({
           stepIndex,
-          stepId: planned.step.id,
+          stepId: planned.step?.id ?? `dynamic-${stepIndex}`,
           decision: "noop",
           reason: planned.reason ?? "planner_returned_fallback_step",
+        });
+        await sleepMs(250);
+        continue;
+      }
+
+      if (!planned.step) {
+        setMessage(planned.reason ?? "Planner returned no step.");
+        logPlannerDebug({
+          stepIndex,
+          stepId: `dynamic-${stepIndex}`,
+          decision: "noop",
+          reason: "planner_returned_no_step",
         });
         await sleepMs(250);
         continue;
@@ -8385,8 +8758,42 @@ export default function SessionPage() {
                 <p>conversation_mode: {entry.conversationMode ?? "none"}</p>
                 <p>user_text: {entry.userText || "none"}</p>
                 <p>raven_output: {entry.ravenOutputText || "none yet"}</p>
+                <p>blocked_assistant_append: {entry.blockedAssistantAppend ? "true" : "false"}</p>
+                <p>blocked_append_reason: {entry.blockedAppendReason ?? "none"}</p>
+                <p>blocked_append_stage: {entry.blockedAppendStage ?? "none"}</p>
+                <p>blocked_append_payload_summary: {entry.blockedAppendPayloadSummary ?? "none"}</p>
+                <p>authority_trace_present: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).authority_trace_present ?? "none")}</p>
+                <p>authority_trace_version: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).authority_trace_version ?? "none")}</p>
+                <p>server_authority_sentinel: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).server_authority_sentinel ?? "none")}</p>
+                <p>server_commit_path: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).server_commit_path ?? "none")}</p>
+                <p>client_commit_path: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).client_commit_path ?? "none")}</p>
+                <p>final_visible_owner: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).final_visible_owner ?? "none")}</p>
+                <p>final_visible_source: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).final_visible_source ?? "none")}</p>
+                <p>candidate_kind: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).candidate_kind ?? "none")}</p>
+                <p>candidate_visible_safe: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).candidate_visible_safe ?? "none")}</p>
+                <p>model_reply_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).model_reply_used ?? "none")}</p>
+                <p>llm_renderer_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).llm_renderer_used ?? "none")}</p>
+                <p>brief_realizer_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).brief_realizer_used ?? "none")}</p>
+                <p>approved_response_brief_fallback_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).approved_response_brief_fallback_used ?? "none")}</p>
+                <p>response_brief_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).response_brief_used ?? "none")}</p>
+                <p>response_brief_id: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).response_brief_id ?? "none")}</p>
+                <p>legacy_visible_emitter_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).legacy_visible_emitter_used ?? "none")}</p>
+                <p>legacy_visible_emitter_blocked: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).legacy_visible_emitter_blocked ?? "none")}</p>
+                <p>deterministic_bypass_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).deterministic_bypass_used ?? "none")}</p>
+                <p>client_generated_reply_used: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).client_generated_reply_used ?? "none")}</p>
+                <p>replacement_chain: {JSON.stringify((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).replacement_chain ?? [])}</p>
+                <p>visible_commit_owner: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).visible_commit_owner ?? "none")}</p>
+                <p>visible_commit_allowed: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).visible_commit_allowed ?? "none")}</p>
+                <p>strict_relational_authority: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).strict_relational_authority ?? "none")}</p>
+                <p>active_interaction.kind: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields())["active_interaction.kind"] ?? "none")}</p>
+                <p>role_negotiation_status: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).role_negotiation_status ?? "none")}</p>
+                <p>selected_user_role: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).selected_user_role ?? "none")}</p>
+                <p>accepted_dynamic: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).accepted_dynamic ?? "none")}</p>
+                <p>assistant_output_quality: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).assistant_output_quality ?? "none")}</p>
+                <p>assistant_output_context_eligible: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).assistant_output_context_eligible ?? "none")}</p>
+                <p>request_fulfilled: {String((entry.authorityTrace ?? defaultVisibleAuthorityDebugFields()).request_fulfilled ?? "none")}</p>
                 <p>assistant_render_count: {entry.assistantRenderAppendEvents}</p>
-                <p>append_runs: {entry.appendRavenOutputRunsForTurn}</p>
+                <p>append_runs: {entry.authorizedAppendRunsForTurn}</p>
                 <p>
                   recovery_render_fired:{" "}
                   {entry.recoverSkippedAssistantRenderFired ? "yes" : "no"}
